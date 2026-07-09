@@ -35,6 +35,7 @@
     <li><a data-toggle="tab" href="#primary-records">{{ lang._('Primary Zone Records') }}</a></li>
     <li><a data-toggle="tab" href="#secondary-domains">{{ lang._('Secondary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#forward-domains">{{ lang._('Forward Zones') }}</a></li>
+    <li><a data-toggle="tab" href="#forwarders">{{ lang._('DNS Forwarders') }}</a></li>
 </ul>
 
 <div class="tab-content content-box tab-content">
@@ -222,6 +223,77 @@
             <br /><br />
         </div>
     </div>
+    <div id="forwarders" class="tab-pane fade in">
+        <div class="col-md-12">
+            <div class="alert alert-info" role="alert">
+                {{ lang._('If you enter forwarders in both the DNS and DNS over TLS tables, BIND treats them as one combined pool.') }}
+            </div>
+        </div>
+        <div class="col-md-12">
+            <h2>{{ lang._('DNS') }}</h2>
+        </div>
+        <div id="dns-forwarders-area" class="table-responsive">
+            <table id="grid-dns-forwarders" class="table table-condensed table-hover table-striped" data-editAlert="ChangeMessageForwarders" data-editDialog="dialogEditBindDnsForwarder">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="ip" data-type="string" data-visible="true">{{ lang._('IP Address') }}</th>
+                        <th data-column-id="port" data-type="string" data-visible="true">{{ lang._('Port') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="5"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <hr/>
+        <div class="col-md-12">
+            <h2>{{ lang._('DNS over TLS') }}</h2>
+        </div>
+        <div id="dot-forwarders-area" class="table-responsive">
+            <table id="grid-dot-forwarders" class="table table-condensed table-hover table-striped" data-editAlert="ChangeMessageForwarders" data-editDialog="dialogEditBindDotForwarder">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="ip" data-type="string" data-visible="true">{{ lang._('IP Address') }}</th>
+                        <th data-column-id="port" data-type="string" data-visible="true">{{ lang._('Port') }}</th>
+                        <th data-column-id="tlshostname" data-type="string" data-visible="true">{{ lang._('TLS Hostname') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="6"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <hr/>
+        <div class="col-md-12">
+            <div id="ChangeMessageForwarders" class="alert alert-info" style="display: none" role="alert">
+                {{ lang._('After changing settings, please remember to apply them with the button below') }}
+            </div>
+            <button class="btn btn-primary" id="saveAct_forwarders" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_forwarders_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
 </div>
 
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindAcl,'id':'dialogEditBindAcl','label':lang._('Edit ACL')])}}
@@ -229,6 +301,8 @@
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindSecondaryDomain,'id':'dialogEditBindSecondaryDomain','label':lang._('Edit Secondary Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindForwardDomain,'id':'dialogEditBindForwardDomain','label':lang._('Edit Forward Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindRecord,'id':'dialogEditBindRecord','label':lang._('Edit Record')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindDnsForwarder,'id':'dialogEditBindDnsForwarder','label':lang._('Edit DNS Forwarder')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindDotForwarder,'id':'dialogEditBindDotForwarder','label':lang._('Edit DNS over TLS Forwarder')])}}
 
 <style>
     #zone-content {
@@ -478,6 +552,32 @@ $(document).ready(function() {
         if (ids.length > 0) {
             $("#grid-forward-domains").bootgrid('select', [ids[0].uuid]);
         }
+    });
+
+    $("#grid-dns-forwarders").UIBootgrid({
+        'search': '/api/bind/forwarder/search_dns_forwarder',
+        'get': '/api/bind/forwarder/get_dns_forwarder/',
+        'set': '/api/bind/forwarder/set_dns_forwarder/',
+        'add': '/api/bind/forwarder/add_dns_forwarder/',
+        'del': '/api/bind/forwarder/del_dns_forwarder/',
+        'toggle': '/api/bind/forwarder/toggle_dns_forwarder/'
+    });
+
+    $("#grid-dot-forwarders").UIBootgrid({
+        'search': '/api/bind/forwarder/search_dot_forwarder',
+        'get': '/api/bind/forwarder/get_dot_forwarder/',
+        'set': '/api/bind/forwarder/set_dot_forwarder/',
+        'add': '/api/bind/forwarder/add_dot_forwarder/',
+        'del': '/api/bind/forwarder/del_dot_forwarder/',
+        'toggle': '/api/bind/forwarder/toggle_dot_forwarder/'
+    });
+
+    $("#saveAct_forwarders").click(function() {
+        $("#saveAct_forwarders_progress").addClass("fa fa-spinner fa-pulse");
+        ajaxCall(url = "/api/bind/service/reconfigure", sendData = {}, callback = function(data, status) {
+            updateServiceControlUI('bind');
+            $("#saveAct_forwarders_progress").removeClass("fa fa-spinner fa-pulse");
+        });
     });
 
     $("#grid-primary-records").UIBootgrid({
