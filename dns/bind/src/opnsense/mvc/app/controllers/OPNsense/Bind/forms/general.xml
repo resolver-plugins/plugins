@@ -119,6 +119,12 @@
         <help>Define the ACLs where you allow which client are allowed to query this server.</help>
     </field>
     <field>
+        <id>general.forwarding</id>
+        <label>Forwarding Mode</label>
+        <type>dropdown</type>
+        <help>Set to "Forward Only" to prevent BIND from falling back to its own recursive resolution when forwarders are unreachable. If set to "Forward Only", configure forwarders on the DNS Forwarders tab.</help>
+    </field>
+    <field>
         <id>general.dnssecvalidation</id>
         <label>DNSSEC Validation</label>
         <type>dropdown</type>
