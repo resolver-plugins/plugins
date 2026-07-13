@@ -1,0 +1,46 @@
+<model>
+    <mount>//OPNsense/bind/watcher</mount>
+    <description>BIND DHCP lease watcher configuration</description>
+    <version>1.0.0</version>
+    <items>
+        <mappings>
+            <mapping type="ArrayField">
+                <enabled type="BooleanField">
+                    <Default>1</Default>
+                    <Required>Y</Required>
+                </enabled>
+                <dhcp_source type="OptionField">
+                    <Required>Y</Required>
+                    <Default>isc-dhcp</Default>
+                    <OptionValues>
+                        <isc-dhcp>ISC DHCP</isc-dhcp>
+                        <kea-dhcp4>Kea DHCPv4</kea-dhcp4>
+                        <kea-dhcp6>Kea DHCPv6</kea-dhcp6>
+                    </OptionValues>
+                </dhcp_source>
+                <hostname_suffix type="TextField">
+                    <Required>Y</Required>
+                    <Mask value="/^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}$/u"/>
+                </hostname_suffix>
+                <tsigkey type="ModelRelationField">
+                    <Required>Y</Required>
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Tsig</source>
+                            <items>keys.key</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </tsigkey>
+                <nsupdate_address type="NetworkField">
+                    <Required>Y</Required>
+                    <Default>127.0.0.1</Default>
+                    <NetMaskAllowed>N</NetMaskAllowed>
+                </nsupdate_address>
+                <nsupdate_port type="PortField">
+                    <Required>Y</Required>
+                </nsupdate_port>
+            </mapping>
+        </mappings>
+    </items>
+</model>

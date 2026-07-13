@@ -71,6 +71,7 @@ function bind_services()
             'start' => ['bind start'],
             'stop' => ['bind stop'],
         ],
+        'php' => ['stop' => ['bind_service_stop']],
         'pidfile' => '/var/run/named/pid',
         'name' => 'named',
     ];
@@ -90,12 +91,25 @@ function bind_xmlrpc_sync()
     return [$result];
 }
 
+function bind_service_stop()
+{
+    killbypid('/var/run/bind_dhcplease.pid');
+}
+
 function bind_configure_do($verbose)
 {
+    bind_service_stop();
+
+    if (!bind_enabled()) {
+        return;
+    }
+
     service_log('Starting BIND...', $verbose);
 
     configd_run('template reload OPNsense/Bind');
     configd_run('bind restart');
+
+    mwexecf('/usr/local/opnsense/scripts/OPNsense/Bind/dhcplease_watcher.py');
 
     service_log("done.\n", $verbose);
 }
@@ -104,11 +118,18 @@ function bind_configure_do($verbose)
  *  register syslog facilities
  * @return array
  */
+function bind_cron()
+{
+    $jobs = [];
+    $jobs[]['autocron'] = ['/usr/local/sbin/configctl -d bind dhcpwatcher', '*/5'];
+    return $jobs;
+}
+
 function bind_syslog()
 {
     $syslogconf = [];
 
-    $syslogconf['bind'] = ['facility' => ['named']];
+    $syslogconf['bind'] = ['facility' => ['named', 'bind-dhcplease']];
 
     return $syslogconf;
 }

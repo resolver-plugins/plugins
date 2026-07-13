@@ -1,0 +1,38 @@
+<form>
+    <field>
+        <id>mapping.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Enable or disable this watcher mapping.</help>
+    </field>
+    <field>
+        <id>mapping.dhcp_source</id>
+        <label>DHCP Source</label>
+        <type>dropdown</type>
+        <help>Select the DHCP server to watch for leases.</help>
+    </field>
+    <field>
+        <id>mapping.hostname_suffix</id>
+        <label>Hostname Suffix</label>
+        <type>text</type>
+        <help>Domain suffix for building FQDNs from DHCP hostnames (e.g., home.arpa). Must match an existing primary BIND zone. Reverse zones are not valid here.</help>
+    </field>
+    <field>
+        <id>mapping.tsigkey</id>
+        <label>TSIG Key</label>
+        <type>dropdown</type>
+        <help>TSIG key used to authenticate nsupdate operations against BIND.</help>
+    </field>
+    <field>
+        <id>mapping.nsupdate_address</id>
+        <label>nsupdate Server Address</label>
+        <type>text</type>
+        <help>IP address of the BIND server for nsupdate (default: 127.0.0.1).</help>
+    </field>
+    <field>
+        <id>mapping.nsupdate_port</id>
+        <label>nsupdate Server Port</label>
+        <type>text</type>
+        <help>Port of the BIND server for nsupdate. Uses the BIND general port if left empty.</help>
+    </field>
+</form>

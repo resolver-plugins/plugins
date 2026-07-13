@@ -31,6 +31,8 @@
     <li class="active"><a data-toggle="tab" href="#general">{{ lang._('General') }}</a></li>
     <li><a data-toggle="tab" href="#dnsbl">{{ lang._('DNSBL') }}</a></li>
     <li><a data-toggle="tab" href="#acls">{{ lang._('ACLs') }}</a></li>
+    <li><a data-toggle="tab" href="#tsig-keys">{{ lang._('TSIG Keys') }}</a></li>
+    <li><a data-toggle="tab" href="#dhcp-watcher">{{ lang._('DHCP Watcher') }}</a></li>
     <li><a data-toggle="tab" href="#primary-domains">{{ lang._('Primary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#primary-records">{{ lang._('Primary Zone Records') }}</a></li>
     <li><a data-toggle="tab" href="#secondary-domains">{{ lang._('Secondary Zones') }}</a></li>
@@ -83,6 +85,76 @@
         <div class="col-md-12">
             <hr />
             <button class="btn btn-primary" id="saveAct_acl" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_acl_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
+    <div id="tsig-keys" class="tab-pane fade in">
+        <span id="keygen_div" style="display:none" class="pull-right">
+            <button id="keygen" type="button" class="btn btn-secondary" title="{{ lang._('Generate a random base64 key.') }}" data-toggle="tooltip">
+              <i class="fa fa-fw fa-gear"></i>
+            </button>
+        </span>
+        <div id="tsig-keys-area" class="table-responsive">
+            <table id="grid-tsig-keys" class="table table-condensed table-hover table-striped" data-editDialog="dialogEditBindTsig">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="name" data-type="string" data-visible="true">{{ lang._('Name') }}</th>
+                        <th data-column-id="algorithm" data-type="string" data-visible="true">{{ lang._('Algorithm') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="5"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="col-md-12">
+            <hr />
+            <button class="btn btn-primary" id="saveAct_tsig" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_tsig_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
+    <div id="dhcp-watcher" class="tab-pane fade in">
+        <div id="dhcp-watcher-area" class="table-responsive">
+            <table id="grid-dhcp-watcher" class="table table-condensed table-hover table-striped" data-editDialog="dialogEditBindWatcher">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="dhcp_source" data-type="string" data-visible="true">{{ lang._('DHCP Source') }}</th>
+                        <th data-column-id="hostname_suffix" data-type="string" data-visible="true">{{ lang._('Hostname Suffix') }}</th>
+                        <th data-column-id="tsigkey" data-type="string" data-visible="true">{{ lang._('TSIG Key') }}</th>
+                        <th data-column-id="nsupdate_address" data-type="string" data-visible="true">{{ lang._('Server Address') }}</th>
+                        <th data-column-id="nsupdate_port" data-type="string" data-visible="true">{{ lang._('Server Port') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="5"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="col-md-12">
+            <hr />
+            <button class="btn btn-primary" id="saveAct_watcher" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_watcher_progress"></i></button>
             <br /><br />
         </div>
     </div>
@@ -303,6 +375,8 @@
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindRecord,'id':'dialogEditBindRecord','label':lang._('Edit Record')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindDnsForwarder,'id':'dialogEditBindDnsForwarder','label':lang._('Edit DNS Forwarder')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindDotForwarder,'id':'dialogEditBindDotForwarder','label':lang._('Edit DNS over TLS Forwarder')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindTsig,'id':'dialogEditBindTsig','label':lang._('Edit TSIG Key')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindWatcher,'id':'dialogEditBindWatcher','label':lang._('Edit DHCP Watcher Mapping')])}}
 
 <style>
     #zone-content {
@@ -467,6 +541,24 @@ $(document).ready(function() {
         'toggle': '/api/bind/acl/toggle_acl/'
     });
 
+    $("#grid-tsig-keys").UIBootgrid({
+        'search': '/api/bind/tsig/search_key',
+        'get': '/api/bind/tsig/get_key/',
+        'set': '/api/bind/tsig/set_key/',
+        'add': '/api/bind/tsig/add_key/',
+        'del': '/api/bind/tsig/del_key/',
+        'toggle': '/api/bind/tsig/toggle_key/'
+    });
+
+    $("#grid-dhcp-watcher").UIBootgrid({
+        'search': '/api/bind/watcher/search_mapping',
+        'get': '/api/bind/watcher/get_mapping/',
+        'set': '/api/bind/watcher/set_mapping/',
+        'add': '/api/bind/watcher/add_mapping/',
+        'del': '/api/bind/watcher/del_mapping/',
+        'toggle': '/api/bind/watcher/toggle_mapping/'
+    });
+
     $("#grid-primary-domains").UIBootgrid({
         'search': '/api/bind/domain/search_primary_domain',
         'get': '/api/bind/domain/get_domain/',
@@ -627,6 +719,26 @@ $(document).ready(function() {
         });
     });
 
+    $("#saveAct_tsig").click(function() {
+        saveFormToEndpoint(url = "/api/bind/tsig/set", formid = 'frm_general_settings', callback_ok = function() {
+            $("#saveAct_tsig_progress").addClass("fa fa-spinner fa-pulse");
+            ajaxCall(url = "/api/bind/service/reconfigure", sendData = {}, callback = function(data, status) {
+                updateServiceControlUI('bind');
+                $("#saveAct_tsig_progress").removeClass("fa fa-spinner fa-pulse");
+            });
+        });
+    });
+
+    $("#saveAct_watcher").click(function() {
+        saveFormToEndpoint(url = "/api/bind/watcher/set", formid = 'frm_general_settings', callback_ok = function() {
+            $("#saveAct_watcher_progress").addClass("fa fa-spinner fa-pulse");
+            ajaxCall(url = "/api/bind/service/reconfigure", sendData = {}, callback = function(data, status) {
+                updateServiceControlUI('bind');
+                $("#saveAct_watcher_progress").removeClass("fa fa-spinner fa-pulse");
+            });
+        });
+    });
+
     $(".saveAct_domain").click(function() {
         $(".saveAct_domain_progress").addClass("fa fa-spinner fa-pulse");
         ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
@@ -649,6 +761,16 @@ $(document).ready(function() {
     }
     $('.nav-tabs a').on('shown.bs.tab', function(e) {
         history.pushState(null, null, e.target.hash);
+    });
+
+    // move "Generate Key" button into the TSIG dialog's secret field label
+    $("#control_label_key\\.secret").append($("#keygen_div").detach().show());
+    $("#keygen").click(function(){
+        ajaxGet("/api/bind/tsig/generate/", {}, function(data, status){
+            if (data && data.secret) {
+                $("#key\\.secret").val(data.secret).trigger('change');
+            }
+        });
     });
 });
 </script>
