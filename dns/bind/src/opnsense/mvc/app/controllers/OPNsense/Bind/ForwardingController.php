@@ -28,12 +28,13 @@
 
 namespace OPNsense\Bind;
 
-class GeneralController extends \OPNsense\Base\IndexController
+class ForwardingController extends \OPNsense\Base\IndexController
 {
     public function indexAction()
     {
-        $this->view->generalForm = $this->getForm("general");
-        $this->view->dnsblForm = $this->getForm("dnsbl");
-        $this->view->pick('OPNsense/Bind/general');
+        $this->view->formDialogEditBindDnsForwarder = $this->getForm("dialogEditBindDnsForwarder");
+        $this->view->formDialogEditBindDotForwarder = $this->getForm("dialogEditBindDotForwarder");
+        $this->view->formDialogEditBindWatcher = $this->getForm("dialogEditBindWatcher");
+        $this->view->pick('OPNsense/Bind/forwarding');
     }
 }
