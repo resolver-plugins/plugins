@@ -1,0 +1,6 @@
+<form>
+    <field><id>key.enabled</id><label>Enabled</label><type>checkbox</type><help>Enable or disable this key.</help></field>
+    <field><id>key.name</id><label>Name</label><type>text</type><help>This name must match the key configured for the watcher.</help></field>
+    <field><id>key.algorithm</id><label>Algorithm</label><type>dropdown</type><help>Set the authentication algorithm.</help></field>
+    <field><id>key.secret</id><label>Secret</label><type>text</type><help>The base64-encoded key secret.</help></field>
+</form>
