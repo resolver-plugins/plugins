@@ -4,6 +4,7 @@
       <General VisibleName="General Settings" order="10" url="/ui/bind/general/index"/>
       <TSIGKeys VisibleName="TSIG Keys" order="20" url="/ui/bind/tsig/index"/>
       <ReverseDNS VisibleName="Reverse DNS" order="22" cssClass="fa fa-exchange" url="/ui/bind/reverse_zones/index"/>
+      <DHCPWatcher VisibleName="DHCP Watcher" order="25" url="/ui/bind/watcher/index"/>
       <LogFiles VisibleName="Log Files" order="30" url="/ui/bind/logs"/>
     </BIND>
   </Services>
