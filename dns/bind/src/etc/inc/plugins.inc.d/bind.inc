@@ -71,6 +71,7 @@ function bind_services()
             'start' => ['bind start'],
             'stop' => ['bind stop'],
         ],
+        'php' => ['stop' => ['bind_service_stop']],
         'pidfile' => '/var/run/named/pid',
         'name' => 'named',
     ];
@@ -92,12 +93,23 @@ function bind_xmlrpc_sync()
 
 function bind_configure_do($verbose)
 {
+    if (!bind_enabled()) {
+        configd_run('bind stop');
+        return;
+    }
+
     service_log('Starting BIND...', $verbose);
 
+    configd_run('bind stop');
     configd_run('template reload OPNsense/Bind');
-    configd_run('bind restart');
+    configd_run('bind start');
 
     service_log("done.\n", $verbose);
+}
+
+function bind_service_stop()
+{
+    killbypid('/var/run/bind_dhcplease.pid');
 }
 
 /**
@@ -108,7 +120,7 @@ function bind_syslog()
 {
     $syslogconf = [];
 
-    $syslogconf['bind'] = ['facility' => ['named']];
+    $syslogconf['bind'] = ['facility' => ['named', 'bind-dhcplease']];
 
     return $syslogconf;
 }
