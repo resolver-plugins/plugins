@@ -28,7 +28,6 @@ def test_workflow_is_manual_pinned_26_1_and_26_7_artifact_build():
     assert 'jobs:\n  build-26-1:' in workflow
     assert '\n  build-26-7:' in workflow
     assert workflow.count('\n  build-') == 2
-    assert 'release: "15.1"' not in workflow
     assert 'pkg install -y git' not in workflow
     assert 'pkg install -y python3 py311-pytest' not in workflow
     job_26_1, job_26_7 = workflow.split('\n  build-26-7:', 1)
@@ -38,12 +37,13 @@ def test_workflow_is_manual_pinned_26_1_and_26_7_artifact_build():
         assert 'timeout-minutes: 45' in job
         assert 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803' in job
         assert 'vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d' in job
-        assert 'release: "14.3"' in job
         assert 'arch: x86_64' in job
         assert 'disable-cache: true' in job
         assert 'copyback: true' in job
         assert 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' in job
         assert 'retention-days: 7' in job
+    assert 'release: "14.3"' in job_26_1
+    assert 'release: "15.1"' in job_26_7
     assert (
         "SOURCE_COMMIT='${{ github.sha }}' "
         'tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1'

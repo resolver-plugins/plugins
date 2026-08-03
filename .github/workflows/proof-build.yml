@@ -38,7 +38,7 @@ jobs:
       - name: Build in FreeBSD 14.3
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         with:
-          release: "14.3"
+          release: "15.1"
           arch: x86_64
           usesh: true
           disable-cache: true
