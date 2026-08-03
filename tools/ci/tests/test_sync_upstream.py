@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 
@@ -9,6 +10,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PLANNER = REPOSITORY_ROOT / 'tools/ci/sync_upstream.py'
 METADATA_PATH = '.resolver-plugins/upstream.json'
 OVERLAY_MANIFEST = '.resolver-plugins/overlay-paths.txt'
+CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
 
 
 def git(directory: pathlib.Path, *arguments: str) -> str:
@@ -37,7 +39,8 @@ def metadata(series: str, upstream_commit: str, freebsd_release: str = '14.3') -
             'upstream_branch': f'stable/{series}',
             'upstream_commit': upstream_commit,
             'freebsd_release': freebsd_release,
-            'core_archive_url': f'https://example.invalid/{upstream_commit}.tar.gz',
+            'core_commit': CORE_COMMIT,
+            'core_archive_url': f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz',
             'core_archive_sha256': 'fixture-sha256',
         }
     )
@@ -137,7 +140,12 @@ def plan(repositories, release_notes_directory: pathlib.Path | None = None) -> d
     return json.loads(result.stdout)
 
 
-def apply(repositories, decision: dict, tmp_path: pathlib.Path) -> subprocess.CompletedProcess:
+def apply(
+    repositories,
+    decision: dict,
+    tmp_path: pathlib.Path,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     plan_path = tmp_path / 'plan.json'
     plan_path.write_text(json.dumps(decision))
     return subprocess.run(
@@ -145,12 +153,14 @@ def apply(repositories, decision: dict, tmp_path: pathlib.Path) -> subprocess.Co
             'python3', str(PLANNER), 'apply',
             '--repository', str(repositories['repository']),
             '--plan', str(plan_path),
-            '--core-archive-url', 'https://example.invalid/core-archive.tar.gz',
+            '--core-commit', CORE_COMMIT,
+            '--core-archive-url', f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz',
             '--core-archive-sha256', 'immutable-fixture-sha256',
         ],
         text=True,
         capture_output=True,
         check=False,
+        env={**os.environ, **(environment or {})},
     )
 
 
@@ -312,9 +322,41 @@ def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_me
         'upstream_branch': 'stable/26.7',
         'upstream_commit': repositories['stable_26_7'],
         'freebsd_release': '14.3',
-        'core_archive_url': 'https://example.invalid/core-archive.tar.gz',
+        'core_commit': CORE_COMMIT,
+        'core_archive_url': f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz',
         'core_archive_sha256': 'immutable-fixture-sha256',
     }
+
+
+def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
+    repositories, tmp_path
+):
+    decision = plan(repositories)
+    first = apply(
+        repositories,
+        decision,
+        tmp_path,
+        {
+            'GIT_AUTHOR_DATE': '2001-01-01T00:00:00+00:00',
+            'GIT_COMMITTER_DATE': '2001-01-01T00:00:00+00:00',
+        },
+    )
+    assert first.returncode == 0, first.stderr
+    first_commit = git(repositories['repository'], 'rev-parse', decision['target_release'])
+    git(repositories['repository'], 'branch', '-D', decision['target_release'])
+
+    second = apply(
+        repositories,
+        decision,
+        tmp_path,
+        {
+            'GIT_AUTHOR_DATE': '2030-01-01T00:00:00+00:00',
+            'GIT_COMMITTER_DATE': '2030-01-01T00:00:00+00:00',
+        },
+    )
+
+    assert second.returncode == 0, second.stderr
+    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == first_commit
 
 
 def test_apply_bootstrap_review_creates_pristine_release_and_overlay_sync_branch(

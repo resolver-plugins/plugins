@@ -18,6 +18,8 @@ jobs:
       freebsd_release: ${{ steps.metadata.outputs.freebsd_release }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
       - name: Read release branch profile
         id: metadata
         shell: bash
@@ -38,6 +40,7 @@ jobs:
               'upstream_branch',
               'upstream_commit',
               'freebsd_release',
+              'core_commit',
               'core_archive_url',
               'core_archive_sha256',
           )
@@ -60,6 +63,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
       - name: Build in declared FreeBSD release
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         with:

@@ -18,20 +18,35 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Fetch release and upstream inputs
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
             '+refs/heads/release/bind-rp/*:refs/heads/release/bind-rp/*' \
-            '+refs/heads/sync/bind/*:refs/heads/sync/bind/*' \
-            '+refs/heads/sync/bootstrap/*:refs/heads/sync/bootstrap/*'
+            '+refs/heads/sync/bind/*:refs/remotes/origin/sync/bind/*' \
+            '+refs/heads/sync/bootstrap/*:refs/remotes/origin/sync/bootstrap/*'
           git remote add upstream https://github.com/opnsense/plugins.git
           git fetch --no-tags upstream \
             '+refs/heads/stable/*:refs/remotes/upstream/stable/*'
           git clone --depth 1 https://github.com/opnsense/changelog.git \
             "$RUNNER_TEMP/opnsense-changelog"
+      - name: Recover an interrupted review publication
+        id: recovery
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}
+        run: |
+          set -euo pipefail
+          python3 tools/ci/publish_upstream.py recover \
+            --repository . \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --reviewer "$RP_SYNC_REVIEWER" \
+            --output "$GITHUB_OUTPUT"
       - name: Plan reconciliation
+        if: steps.recovery.outputs.handled != 'true'
         id: plan
         shell: bash
         run: |
@@ -67,7 +82,7 @@ jobs:
                   print(f'{field}={value if value is not None else ""}', file=output)
           PY
       - name: Apply non-noop plan locally
-        if: steps.plan.outputs.action != 'noop'
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
         shell: bash
         run: |
           set -euo pipefail
@@ -92,61 +107,28 @@ jobs:
           python3 tools/ci/sync_upstream.py apply \
             --repository . \
             --plan "$RUNNER_TEMP/plan.json" \
+            --core-commit "$core_commit" \
             --core-archive-url "$core_archive_url" \
             --core-archive-sha256 "$core_archive_sha256"
-      - name: Publish validated plan branches
-        if: steps.plan.outputs.action != 'noop'
-        shell: bash
-        run: |
-          set -euo pipefail
-          action='${{ steps.plan.outputs.action }}'
-          target_release='${{ steps.plan.outputs.target_release }}'
-          sync_branch='${{ steps.plan.outputs.sync_branch }}'
-          case "$action" in
-            bootstrap-build)
-              git push origin "refs/heads/$target_release:refs/heads/$target_release"
-              ;;
-            bootstrap-review)
-              git push origin "refs/heads/$target_release:refs/heads/$target_release"
-              git push origin "refs/heads/$sync_branch:refs/heads/$sync_branch"
-              ;;
-            update-review)
-              git push origin "refs/heads/$sync_branch:refs/heads/$sync_branch"
-              ;;
-            *)
-              echo "refusing to publish unknown plan action: $action" >&2
-              exit 1
-              ;;
-          esac
-      - name: Open owner review pull request
-        if: steps.plan.outputs.action == 'bootstrap-review' || steps.plan.outputs.action == 'update-review'
+      - name: Publish validated plan state
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}
         run: |
           set -euo pipefail
-          test -n "$RP_SYNC_REVIEWER"
-          source_release='${{ steps.plan.outputs.source_release }}'
-          target_release='${{ steps.plan.outputs.target_release }}'
-          sync_branch='${{ steps.plan.outputs.sync_branch }}'
-          upstream_commit='${{ steps.plan.outputs.upstream_commit }}'
-          source_commit=$(git show "$source_release:.resolver-plugins/upstream.json" | \
-            python3 -c 'import json, sys; print(json.load(sys.stdin)["upstream_commit"])')
-          comparison_url="https://github.com/opnsense/plugins/compare/$source_commit...$upstream_commit"
-          gh pr create \
-            --repo "$GITHUB_REPOSITORY" \
-            --base "$target_release" \
-            --head "$sync_branch" \
-            --assignee "$RP_SYNC_REVIEWER" \
-            --title "Review upstream BIND synchronization for ${{ steps.plan.outputs.series }}" \
-            --body "Review the upstream BIND delta before merging. Upstream comparison: $comparison_url"
+          python3 tools/ci/publish_upstream.py publish \
+            --repository . \
+            --plan "$RUNNER_TEMP/plan.json" \
+            --github-repository "$GITHUB_REPOSITORY" \
+            --reviewer "$RP_SYNC_REVIEWER"
       - name: Check out bootstrap release
-        if: steps.plan.outputs.action == 'bootstrap-build'
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action == 'bootstrap-build'
         shell: bash
         run: git checkout '${{ steps.plan.outputs.target_release }}'
       - name: Build bootstrap in planner-selected FreeBSD release
-        if: steps.plan.outputs.action == 'bootstrap-build'
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action == 'bootstrap-build'
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         with:
           release: ${{ steps.plan.outputs.freebsd_release }}
@@ -160,7 +142,7 @@ jobs:
               SOURCE_COMMIT="$(git rev-parse HEAD)" \
               tools/ci/build-os-bind-rp.sh "$series" "artifacts/$series"
       - name: Upload bootstrap artifact
-        if: steps.plan.outputs.action == 'bootstrap-build'
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action == 'bootstrap-build'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: os-bind-rp-${{ steps.plan.outputs.series }}

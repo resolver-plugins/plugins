@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ REQUIRED_METADATA_FIELDS = (
     'upstream_branch',
     'upstream_commit',
     'freebsd_release',
+    'core_commit',
     'core_archive_url',
     'core_archive_sha256',
 )
@@ -246,18 +248,34 @@ def plan(arguments: argparse.Namespace) -> dict:
     )
 
 
-def git_result(repository: Path, *arguments: str, input_data: bytes | None = None) -> subprocess.CompletedProcess:
+def git_result(
+    repository: Path,
+    *arguments: str,
+    input_data: bytes | None = None,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run Git, keeping binary patch input intact when provided."""
     return subprocess.run(
         ['git', '-C', str(repository), *arguments],
         input=input_data,
         capture_output=True,
         check=False,
+        env=environment,
     )
 
 
-def require_git(repository: Path, *arguments: str, input_data: bytes | None = None) -> str:
-    result = git_result(repository, *arguments, input_data=input_data)
+def require_git(
+    repository: Path,
+    *arguments: str,
+    input_data: bytes | None = None,
+    environment: dict[str, str] | None = None,
+) -> str:
+    result = git_result(
+        repository,
+        *arguments,
+        input_data=input_data,
+        environment=environment,
+    )
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip() or 'Git command failed')
     return result.stdout.decode().strip()
@@ -374,13 +392,19 @@ def validate_apply_plan(repository: Path, plan_data: dict[str, Any]) -> tuple[st
     return action, source_release, sync_branch
 
 
-def metadata_for(plan_data: dict[str, Any], core_archive_url: str, core_archive_sha256: str) -> str:
+def metadata_for(
+    plan_data: dict[str, Any],
+    core_commit: str,
+    core_archive_url: str,
+    core_archive_sha256: str,
+) -> str:
     return json.dumps(
         {
             'series': plan_data['series'],
             'upstream_branch': f"stable/{plan_data['series']}",
             'upstream_commit': plan_data['upstream_commit'],
             'freebsd_release': plan_data['freebsd_release'],
+            'core_commit': core_commit,
             'core_archive_url': core_archive_url,
             'core_archive_sha256': core_archive_sha256,
         },
@@ -395,7 +419,21 @@ def commit_worktree(worktree: Path, paths: list[str], metadata: str, message: st
     metadata_file.write_text(metadata, encoding='utf-8')
     require_git(worktree, 'add', '--all', '--', METADATA_PATH, *paths)
     if git_result(worktree, 'diff', '--cached', '--quiet').returncode:
-        require_git(worktree, 'commit', '-m', message)
+        parent_timestamp = require_git(worktree, 'show', '-s', '--format=%ct', 'HEAD')
+        commit_environment = os.environ.copy()
+        commit_environment.update(
+            {
+                'GIT_AUTHOR_DATE': f'@{parent_timestamp} +0000',
+                'GIT_COMMITTER_DATE': f'@{parent_timestamp} +0000',
+            }
+        )
+        require_git(
+            worktree,
+            'commit',
+            '-m',
+            message,
+            environment=commit_environment,
+        )
 
 
 def with_worktree(repository: Path, revision: str, callback, *, detached: bool = False) -> None:
@@ -423,7 +461,15 @@ def apply(arguments: argparse.Namespace) -> None:
         raise ValueError('repository does not exist')
     require_clean_checkout(repository)
     plan_data = read_apply_plan(arguments.plan)
-    if not arguments.core_archive_url or not arguments.core_archive_sha256:
+    if not re.fullmatch(r'[0-9a-f]{40}', arguments.core_commit or ''):
+        raise ValueError('missing immutable core archive metadata')
+    expected_core_archive_url = (
+        f'https://github.com/opnsense/core/archive/{arguments.core_commit}.tar.gz'
+    )
+    if (
+        arguments.core_archive_url != expected_core_archive_url
+        or not arguments.core_archive_sha256
+    ):
         raise ValueError('missing immutable core archive metadata')
     action, source_release, sync_branch = validate_apply_plan(repository, plan_data)
     metadata = source_metadata(repository, source_release)
@@ -441,7 +487,12 @@ def apply(arguments: argparse.Namespace) -> None:
             raise ValueError('overlay patch does not apply')
 
     with_worktree(repository, base, check_patch, detached=True)
-    new_metadata = metadata_for(plan_data, arguments.core_archive_url, arguments.core_archive_sha256)
+    new_metadata = metadata_for(
+        plan_data,
+        arguments.core_commit,
+        arguments.core_archive_url,
+        arguments.core_archive_sha256,
+    )
 
     if action == 'update-review':
         require_git(repository, 'branch', sync_branch, plan_data['upstream_commit'])
@@ -486,6 +537,7 @@ def main() -> None:
     apply_parser = commands.add_parser('apply')
     apply_parser.add_argument('--repository', required=True)
     apply_parser.add_argument('--plan', required=True)
+    apply_parser.add_argument('--core-commit', required=True)
     apply_parser.add_argument('--core-archive-url', required=True)
     apply_parser.add_argument('--core-archive-sha256', required=True)
     arguments = parser.parse_args()

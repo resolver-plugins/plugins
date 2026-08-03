@@ -27,6 +27,7 @@ required_fields = (
     'upstream_branch',
     'upstream_commit',
     'freebsd_release',
+    'core_commit',
     'core_archive_url',
     'core_archive_sha256',
 )
@@ -47,7 +48,7 @@ if metadata['series'] != series:
     )
 if metadata['core_archive_url'] != (
     'https://github.com/opnsense/core/archive/'
-    f'{metadata["upstream_commit"]}.tar.gz'
+    f'{metadata["core_commit"]}.tar.gz'
 ):
     raise SystemExit('upstream metadata core archive URL is not immutable')
 print(metadata[field])
@@ -57,9 +58,11 @@ PY
 if [ -n "${RP_UPSTREAM_METADATA:-}" ]
 then
     upstream_commit=$(metadata_field upstream_commit) || fail 'invalid upstream metadata'
+    core_commit=$(metadata_field core_commit) || fail 'invalid upstream metadata'
     freebsd_release=$(metadata_field freebsd_release) || fail 'invalid upstream metadata'
 else
     upstream_commit=unknown
+    core_commit=unknown
     case "$series" in
         26.1) freebsd_release=14.3 ;;
         26.7) freebsd_release=15 ;;
@@ -105,6 +108,7 @@ cp "$package" "$artifact_directory/"
     printf 'opnsense=%s\n' "$opnsense_version"
     printf 'opnsense_core_archive_sha256=%s\n' "$opnsense_core_archive_sha256"
     printf 'upstream_commit=%s\n' "$upstream_commit"
+    printf 'core_commit=%s\n' "$core_commit"
     printf 'freebsd_release=%s\n' "$freebsd_release"
     printf 'source_commit=%s\n' "${SOURCE_COMMIT:-unknown}"
 } > "$artifact_directory/build-metadata.txt"

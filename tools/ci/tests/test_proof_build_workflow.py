@@ -35,6 +35,7 @@ def test_workflow_reads_and_validates_branch_metadata_before_building():
     assert metadata_index < vm_index
     assert re.search(r'json\.loads?\(', workflow)
     assert "metadata['series']" in workflow
+    assert "'core_commit'" in workflow
     assert "metadata['freebsd_release']" in workflow
     assert 'release/bind-rp/' in workflow
     assert 'needs.profile.outputs.series' in workflow
@@ -55,6 +56,7 @@ def test_workflow_uses_only_sha_pinned_actions_and_expiring_artifacts():
     workflow = workflow_text()
     references = action_references(workflow)
 
+    assert workflow.count('persist-credentials: false') == 2
     assert references
     assert all(PINNED_ACTION.fullmatch(reference) for reference in references)
     assert 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803' in references

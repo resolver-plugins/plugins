@@ -28,16 +28,6 @@ def action_references(workflow: str) -> list[str]:
     return re.findall(r'^\s+(?:-\s+)?uses:\s+([^\s#]+)', workflow, re.MULTILINE)
 
 
-def case_arm(workflow: str, action: str) -> str:
-    match = re.search(
-        rf'^\s+{re.escape(action)}\)\s*$\n(?P<body>.*?)^\s+;;\s*$',
-        workflow,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert match, f'missing case arm for {action}'
-    return match.group('body')
-
-
 def test_workflow_runs_daily_and_manually_with_exact_permissions():
     workflow = workflow_text()
     cron_expressions = re.findall(
@@ -77,33 +67,31 @@ def test_workflow_resolves_and_hashes_immutable_core_archive_before_apply():
     assert 'refs/heads/stable/$series' in workflow
     assert 'curl --fail --location' in workflow
     assert resolve_index < download_index < hash_index < apply_index
+    assert '--core-commit "$core_commit"' in workflow
     assert '--core-archive-url "$core_archive_url"' in workflow
     assert '--core-archive-sha256 "$core_archive_sha256"' in workflow
 
 
-def test_workflow_publishes_only_validated_plan_branches_and_review_prs():
+def test_workflow_uses_api_only_credentials_for_recovery_and_publication():
     workflow = workflow_text()
-    bootstrap_build = case_arm(workflow, 'bootstrap-build')
-    bootstrap_review = case_arm(workflow, 'bootstrap-review')
-    update_review = case_arm(workflow, 'update-review')
+    vm_index = workflow.index('vmactions/freebsd-vm@')
 
-    target_push = 'git push origin "refs/heads/$target_release:refs/heads/$target_release"'
-    sync_push = 'git push origin "refs/heads/$sync_branch:refs/heads/$sync_branch"'
-    assert target_push in bootstrap_build
-    assert sync_push not in bootstrap_build
-    assert target_push in bootstrap_review
-    assert sync_push in bootstrap_review
-    assert target_push not in update_review
-    assert sync_push in update_review
-    assert workflow.count(target_push) == 2
-    assert workflow.count(sync_push) == 2
-    assert 'gh pr create' in workflow
-    assert '--base "$target_release"' in workflow
-    assert '--head "$sync_branch"' in workflow
-    assert '--assignee "$RP_SYNC_REVIEWER"' in workflow
-    assert 'RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}' in workflow
-    assert 'https://github.com/opnsense/plugins/compare/$source_commit...$upstream_commit' in workflow
-    assert workflow.count('GH_TOKEN: ${{ github.token }}') == 1
+    assert 'persist-credentials: false' in workflow
+    assert 'git push' not in workflow
+    assert workflow.count('GH_TOKEN: ${{ github.token }}') == 2
+    assert workflow.rindex('GH_TOKEN: ${{ github.token }}') < vm_index
+    assert workflow.count('RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}') == 2
+
+
+def test_workflow_recovers_partial_review_state_before_planning_and_uses_api_publisher():
+    workflow = workflow_text()
+    recover_index = workflow.index('tools/ci/publish_upstream.py recover')
+    plan_index = workflow.index('tools/ci/sync_upstream.py plan')
+    apply_index = workflow.index('tools/ci/sync_upstream.py apply')
+    publish_index = workflow.index('tools/ci/publish_upstream.py publish')
+
+    assert recover_index < plan_index < apply_index < publish_index
+    assert "steps.recovery.outputs.handled != 'true'" in workflow
 
 
 def test_bootstrap_build_uses_the_planner_profile_and_expires():
