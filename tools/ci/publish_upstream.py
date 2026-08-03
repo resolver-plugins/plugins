@@ -53,6 +53,83 @@ def metadata_at(repository: Path, revision: str) -> dict[str, str]:
     return metadata
 
 
+def valid_release_metadata(
+    metadata: dict[str, str],
+    series: str,
+    upstream_commit: str,
+) -> bool:
+    required = (
+        'series',
+        'upstream_branch',
+        'upstream_commit',
+        'freebsd_release',
+        'core_commit',
+        'core_archive_url',
+        'core_archive_sha256',
+    )
+    if any(
+        not isinstance(metadata.get(field), str) or not metadata[field]
+        for field in required
+    ):
+        return False
+    core_commit = metadata['core_commit']
+    return (
+        metadata['series'] == series
+        and metadata['upstream_branch'] == f'stable/{series}'
+        and metadata['upstream_commit'] == upstream_commit
+        and re.fullmatch(r'[0-9a-f]{40}', upstream_commit) is not None
+        and re.fullmatch(r'[0-9a-f]{40}', core_commit) is not None
+        and metadata['core_archive_url']
+        == f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz'
+        and re.fullmatch(r'[0-9a-f]{64}', metadata['core_archive_sha256']) is not None
+    )
+
+
+def valid_sync_only_bootstrap(
+    repository: Path,
+    sync_commit: str,
+    target_commit: str,
+    series: str,
+    sync_metadata: dict[str, str],
+    target_metadata: dict[str, str],
+) -> bool:
+    upstream_commit = sync_metadata['upstream_commit']
+    if (
+        sync_metadata != target_metadata
+        or not valid_release_metadata(target_metadata, series, upstream_commit)
+    ):
+        return False
+    try:
+        current_upstream = local_git(
+            repository,
+            'rev-parse',
+            f'refs/remotes/upstream/stable/{series}^{{commit}}',
+        )
+        sync_parents = local_git(
+            repository, 'rev-list', '--parents', '-n', '1', sync_commit
+        ).split()
+        target_parents = local_git(
+            repository, 'rev-list', '--parents', '-n', '1', target_commit
+        ).split()
+        changed_paths = local_git(
+            repository,
+            'diff-tree',
+            '--no-commit-id',
+            '--name-only',
+            '-r',
+            upstream_commit,
+            target_commit,
+        ).splitlines()
+    except ValueError:
+        return False
+    return (
+        current_upstream == upstream_commit
+        and sync_parents == [sync_commit, target_commit]
+        and target_parents == [target_commit, upstream_commit]
+        and changed_paths == [METADATA_PATH]
+    )
+
+
 def api_date(identity: str) -> dict[str, str]:
     match = IDENTITY_PATTERN.fullmatch(identity)
     if not match:
@@ -420,7 +497,7 @@ def series_key(series: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
-def recovery_candidates(repository: Path) -> list[dict[str, str]]:
+def recovery_candidates(repository: Path) -> list[dict[str, Any]]:
     output = local_git(
         repository,
         'for-each-ref',
@@ -439,10 +516,23 @@ def recovery_candidates(repository: Path) -> list[dict[str, str]]:
         kind, series, abbreviation = match.groups()
         target = f'release/bind-rp/{series}'
         try:
+            sync_metadata = metadata_at(repository, sync_commit)
+        except ValueError:
+            continue
+        try:
             target_commit = local_git(
                 repository, 'rev-parse', f'refs/remotes/origin/{target}^{{commit}}'
             )
-            sync_metadata = metadata_at(repository, sync_commit)
+            base_missing = False
+        except ValueError:
+            if kind != 'bootstrap':
+                continue
+            try:
+                target_commit = local_git(repository, 'rev-parse', f'{sync_commit}^')
+            except ValueError:
+                continue
+            base_missing = True
+        try:
             target_metadata = metadata_at(repository, target_commit)
         except ValueError:
             continue
@@ -462,6 +552,15 @@ def recovery_candidates(repository: Path) -> list[dict[str, str]]:
             )
             if parent != target_commit or source_series is None:
                 continue
+            if base_missing and not valid_sync_only_bootstrap(
+                repository,
+                sync_commit,
+                target_commit,
+                series,
+                sync_metadata,
+                target_metadata,
+            ):
+                continue
             source_commit = metadata_at(
                 repository, f'release/bind-rp/{source_series}'
             )['upstream_commit']
@@ -476,6 +575,7 @@ def recovery_candidates(repository: Path) -> list[dict[str, str]]:
                 'base_commit': target_commit,
                 'source_commit': source_commit,
                 'upstream_commit': upstream_commit,
+                'base_missing': base_missing,
             }
         )
     return candidates
@@ -489,6 +589,9 @@ def recover_pending_reviews(
 ) -> bool:
     pending = []
     for candidate in recovery_candidates(local_repository):
+        if candidate['base_missing']:
+            pending.append(candidate)
+            continue
         pulls = github.pulls_for(
             github_repository, candidate['head'], candidate['base']
         )
@@ -506,12 +609,20 @@ def recover_pending_reviews(
             candidate['head'],
             candidate['head_commit'],
         )
-        ensure_existing_ref(
-            github,
-            github_repository,
-            candidate['base'],
-            candidate['base_commit'],
-        )
+        if candidate['base_missing']:
+            ensure_ref(
+                github,
+                github_repository,
+                candidate['base'],
+                candidate['base_commit'],
+            )
+        else:
+            ensure_existing_ref(
+                github,
+                github_repository,
+                candidate['base'],
+                candidate['base_commit'],
+            )
         title, body = review_text(
             candidate['series'],
             candidate['source_commit'],
