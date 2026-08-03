@@ -11,7 +11,12 @@ fail() {
 
 series=$1
 case "$series" in
-    26.1|26.7) ;;
+    26.1)
+        expected_archive_sha256=95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e
+        ;;
+    26.7)
+        expected_archive_sha256=2706f4a078b60db164fb1f0a98f5e89ead7c3b77aee35e6d9ff77b65338d29e3
+        ;;
     *) fail "unsupported OPNsense series: $series" ;;
 esac
 
@@ -25,6 +30,20 @@ checkout_directory="$temporary_directory/core"
 trap 'rm -rf "$temporary_directory"' EXIT HUP INT TERM
 
 "$fetch_command" -q -o "$archive_path" "$archive_url"
+if [ -n "${SHA256_COMMAND:-}" ]
+then
+    archive_sha256=$("$SHA256_COMMAND" "$archive_path")
+elif command -v sha256 >/dev/null 2>&1
+then
+    archive_sha256=$(sha256 -q "$archive_path")
+elif command -v sha256sum >/dev/null 2>&1
+then
+    archive_sha256=$(sha256sum "$archive_path" | awk '{print $1}')
+else
+    fail 'no SHA-256 command is available'
+fi
+[ "$archive_sha256" = "$expected_archive_sha256" ] || \
+    fail "OPNsense core archive does not match the pinned SHA-256 for $series"
 mkdir -p "$checkout_directory"
 tar -xzf "$archive_path" -C "$checkout_directory"
 set -- "$checkout_directory"/*
@@ -66,12 +85,4 @@ done
 set -- "$fingerprint_directory/trusted"/*
 [ -f "$1" ] || fail 'no trusted OPNsense fingerprint was installed'
 
-if command -v sha256 >/dev/null 2>&1
-then
-    sha256 -q "$archive_path"
-elif command -v sha256sum >/dev/null 2>&1
-then
-    sha256sum "$archive_path" | awk '{print $1}'
-else
-    fail 'no SHA-256 command is available'
-fi
+printf '%s\n' "$archive_sha256"

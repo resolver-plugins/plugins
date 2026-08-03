@@ -7,6 +7,9 @@ import tarfile
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 BUILD_SCRIPT = REPOSITORY_ROOT / 'tools/ci/build-os-bind-rp.sh'
+OPNSENSE_26_1_ARCHIVE_SHA256 = (
+    '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
+)
 
 
 def create_core_archive(path: pathlib.Path) -> None:
@@ -47,6 +50,10 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
         REPOSITORY_ROOT / 'tools/ci/tests/fetch-opnsense-core-fixture.sh'
     )
     environment['FETCH_ARCHIVE'] = str(core_archive)
+    environment['SHA256_COMMAND'] = str(
+        REPOSITORY_ROOT / 'tools/ci/tests/sha256-fixture.sh'
+    )
+    environment['SHA256_VALUE'] = OPNSENSE_26_1_ARCHIVE_SHA256
     environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
     environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
     package_call_log = tmp_path / 'pkg-calls.log'
