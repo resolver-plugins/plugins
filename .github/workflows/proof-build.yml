@@ -30,12 +30,8 @@ jobs:
           usesh: true
           disable-cache: true
           copyback: true
-          prepare: |
-            pkg update -f
-            pkg install -y git python3 py311-pytest
           run: |
-            python3 -m pytest -q dns/bind/src/opnsense/scripts/OPNsense/Bind/tests tools/ci/tests
-            tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1
+            SOURCE_COMMIT='${{ github.sha }}' tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1
       - name: Upload 26.1 proof artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -57,12 +53,8 @@ jobs:
           usesh: true
           disable-cache: true
           copyback: true
-          prepare: |
-            pkg update -f
-            pkg install -y git python3 py311-pytest
           run: |
-            python3 -m pytest -q dns/bind/src/opnsense/scripts/OPNsense/Bind/tests tools/ci/tests
-            tools/ci/build-os-bind-rp.sh 26.7 artifacts/26.7
+            SOURCE_COMMIT='${{ github.sha }}' tools/ci/build-os-bind-rp.sh 26.7 artifacts/26.7
       - name: Upload 26.7 proof artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -1,13 +1,37 @@
+import io
 import os
 import pathlib
 import subprocess
+import tarfile
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 BUILD_SCRIPT = REPOSITORY_ROOT / 'tools/ci/build-os-bind-rp.sh'
 
 
+def create_core_archive(path: pathlib.Path) -> None:
+    files = {
+        'core-stable-26.1/src/etc/pkg/repos/OPNsense.conf.shadow.in': (
+            'OPNsense: {\n'
+            '  url: "%%CORE_PACKAGESITE%%/${ABI}/%%CORE_ABI%%/latest",\n'
+            '  signature_type: "fingerprints",\n'
+            '  enabled: yes\n'
+            '}\n'
+        ),
+        'core-stable-26.1/src/etc/pkg/fingerprints/OPNsense/trusted/'
+        'pkg.opnsense.org.fixture': 'function: "sha256"\nfingerprint: "fixture"\n',
+    }
+    with tarfile.open(path, 'w:gz') as archive:
+        for name, contents in files.items():
+            entry = tarfile.TarInfo(name)
+            payload = contents.encode()
+            entry.size = len(payload)
+            archive.addfile(entry, io.BytesIO(payload))
+
+
 def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
+    core_archive = tmp_path / 'opnsense-core-26.1.tar.gz'
+    create_core_archive(core_archive)
     environment = os.environ.copy()
     environment['MAKE_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/make-package-fixture.sh'
@@ -18,11 +42,15 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     environment['PKG_SWITCH_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/pkg-switch-fixture.sh'
     )
-    environment['GIT_COMMAND'] = str(
-        REPOSITORY_ROOT / 'tools/ci/tests/git-opnsense-core-fixture.sh'
+    environment['GIT_COMMAND'] = '/usr/bin/false'
+    environment['FETCH_COMMAND'] = str(
+        REPOSITORY_ROOT / 'tools/ci/tests/fetch-opnsense-core-fixture.sh'
     )
+    environment['FETCH_ARCHIVE'] = str(core_archive)
     environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
     environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
+    package_call_log = tmp_path / 'pkg-calls.log'
+    environment['PKG_CALL_LOG'] = str(package_call_log)
 
     assert BUILD_SCRIPT.is_file(), 'non-publishing build wrapper is missing'
     result = subprocess.run(
@@ -43,4 +71,9 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert 'bind920=9.20.24\n' in metadata
     assert 'opnsense=26.1.11_10\n' in metadata
     assert 'switch_test=passed\n' in metadata
-    assert 'opnsense_core_commit=fixture-opnsense-core-commit\n' in metadata
+    assert 'opnsense_core_archive_sha256=' in metadata
+    assert 'source_commit=unknown\n' in metadata
+    package_calls = package_call_log.read_text().splitlines()
+    assert 'update -f' in package_calls
+    assert 'install -y git' in package_calls
+    assert 'install -y bind920' in package_calls

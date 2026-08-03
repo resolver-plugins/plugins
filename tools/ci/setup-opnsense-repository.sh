@@ -15,28 +15,40 @@ case "$series" in
     *) fail "unsupported OPNsense series: $series" ;;
 esac
 
-git_command=${GIT_COMMAND:-git}
 repository_directory=${PKG_REPOS_DIR:-/usr/local/etc/pkg/repos}
 fingerprint_directory=${PKG_FINGERPRINTS_DIR:-/usr/local/etc/pkg/fingerprints/OPNsense}
-checkout_directory=$(mktemp -d)
-trap 'rm -rf "$checkout_directory"' 0
+fetch_command=${FETCH_COMMAND:-fetch}
+archive_url=${OPNSENSE_CORE_ARCHIVE_URL:-https://github.com/opnsense/core/archive/refs/heads/stable/$series.tar.gz}
+temporary_directory=$(mktemp -d)
+archive_path="$temporary_directory/core.tar.gz"
+checkout_directory="$temporary_directory/core"
+trap 'rm -rf "$temporary_directory"' EXIT HUP INT TERM
 
-"$git_command" clone -q --depth 1 --branch "stable/$series" \
-    https://github.com/opnsense/core.git "$checkout_directory"
+"$fetch_command" -q -o "$archive_path" "$archive_url"
+mkdir -p "$checkout_directory"
+tar -xzf "$archive_path" -C "$checkout_directory"
+set -- "$checkout_directory"/*
+[ "$#" -eq 1 ] || fail 'OPNsense core archive has an unexpected layout'
+core_directory=$1
 
-repository_source="$checkout_directory/src/etc/pkg/repos/OPNsense.conf"
-fingerprints_source="$checkout_directory/src/etc/pkg/fingerprints/OPNsense"
-[ -f "$repository_source" ] || fail 'OPNsense repository configuration is missing'
+repository_template="$core_directory/src/etc/pkg/repos/OPNsense.conf.shadow.in"
+fingerprints_source="$core_directory/src/etc/pkg/fingerprints/OPNsense"
+[ -f "$repository_template" ] || fail 'OPNsense repository template is missing'
 [ -d "$fingerprints_source/trusted" ] || fail 'OPNsense trusted fingerprints are missing'
 
-expected_url='https://pkg.opnsense.org/${ABI}/'"$series"'/latest'
-grep -Fq "$expected_url" "$repository_source" || \
+repository_source="$temporary_directory/OPNsense.conf"
+sed \
+    -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|g' \
+    -e "s|%%CORE_ABI%%|$series|g" \
+    "$repository_template" > "$repository_source"
+grep -Fq "https://pkg.opnsense.org/\${ABI}/$series/latest" "$repository_source" || \
     fail "OPNsense repository configuration does not target $series"
 grep -Fq 'signature_type: "fingerprints"' "$repository_source" || \
     fail 'OPNsense repository configuration does not require fingerprints'
 
 mkdir -p "$repository_directory" "$fingerprint_directory"
 install -m 0644 "$repository_source" "$repository_directory/OPNsense.conf"
+printf '%s\n' 'FreeBSD: {' '  enabled: no' '}' > "$repository_directory/FreeBSD.conf"
 
 for group in trusted revoked
 do
@@ -54,4 +66,12 @@ done
 set -- "$fingerprint_directory/trusted"/*
 [ -f "$1" ] || fail 'no trusted OPNsense fingerprint was installed'
 
-"$git_command" -C "$checkout_directory" rev-parse HEAD
+if command -v sha256 >/dev/null 2>&1
+then
+    sha256 -q "$archive_path"
+elif command -v sha256sum >/dev/null 2>&1
+then
+    sha256sum "$archive_path" | awk '{print $1}'
+else
+    fail 'no SHA-256 command is available'
+fi

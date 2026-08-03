@@ -21,5 +21,7 @@ def test_proof_workflow_is_manual_pinned_and_non_publishing():
     assert 'release: "14.3"' in workflow
     assert 'release: "15.1"' in workflow
     assert 'disable-cache: true' in workflow
-    assert 'tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1' in workflow
-    assert 'tools/ci/build-os-bind-rp.sh 26.7 artifacts/26.7' in workflow
+    assert 'pkg install -y git' not in workflow
+    assert 'pkg install -y python3 py311-pytest' not in workflow
+    assert "SOURCE_COMMIT='${{ github.sha }}' tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1" in workflow
+    assert "SOURCE_COMMIT='${{ github.sha }}' tools/ci/build-os-bind-rp.sh 26.7 artifacts/26.7" in workflow

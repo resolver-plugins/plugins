@@ -20,6 +20,12 @@ last_argument() {
 }
 
 case "$action" in
+    register)
+        [ "$1" = '-t' ] && [ "$2" = '-M' ] && [ -f "$3" ] || exit 2
+        case "$(cat "$3")" in
+            *'"name":"os-bind"'*) touch "$state_directory/os-bind" ;;
+        esac
+        ;;
     add)
         package=$(last_argument "$@")
         case "$(basename "$package")" in
@@ -36,6 +42,9 @@ case "$action" in
                 ;;
             os-bind-*.pkg)
                 touch "$state_directory/os-bind"
+                ;;
+            bind920-*.pkg)
+                touch "$state_directory/bind920"
                 ;;
             *) exit 2 ;;
         esac

@@ -24,7 +24,9 @@ make_command=${MAKE_COMMAND:-make}
 switch_directory=$(mktemp -d)
 trap 'rm -rf "$switch_directory"' EXIT HUP INT TERM
 
-opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series")
+opnsense_core_archive_sha256=$("$script_directory/setup-opnsense-repository.sh" "$series")
+"$pkg_command" update -f
+"$pkg_command" install -y git
 "$pkg_command" install -y bind920
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || \
     fail 'bind920 is not installed after package setup'
@@ -46,13 +48,22 @@ set -- "$repository_root"/dns/bind/work/pkg/os-bind-rp-*.pkg
 package=$1
 
 "$script_directory/check-os-bind-rp-package.sh" "$package"
-"$pkg_command" fetch -y -r OPNsense -o "$switch_directory" os-bind
+"$pkg_command" fetch -y -r OPNsense -o "$switch_directory" os-bind bind920 opnsense
 set -- "$switch_directory"/All/os-bind-*.pkg
 [ -f "$1" ] || fail 'official os-bind package fetch did not produce a package'
 [ "$#" -eq 1 ] || fail 'official os-bind package fetch produced more than one package'
 official_package=$1
+set -- "$switch_directory"/All/bind920-*.pkg
+[ -f "$1" ] || fail 'bind920 package fetch did not produce a package'
+[ "$#" -eq 1 ] || fail 'bind920 package fetch produced more than one package'
+bind_package=$1
+set -- "$switch_directory"/All/opnsense-*.pkg
+[ -f "$1" ] || fail 'opnsense package fetch did not produce a package'
+[ "$#" -eq 1 ] || fail 'opnsense package fetch produced more than one package'
+core_package=$1
 PKG_COMMAND="$switch_pkg_command" \
-    "$script_directory/test-os-bind-rp-switch.sh" "$official_package" "$package"
+    "$script_directory/test-os-bind-rp-switch.sh" \
+    "$official_package" "$bind_package" "$core_package" "$package"
 
 mkdir -p "$artifact_directory"
 cp "$package" "$artifact_directory/"
@@ -63,6 +74,6 @@ cp "$package" "$artifact_directory/"
     printf 'bind920=%s\n' "$bind_version"
     printf 'opnsense=%s\n' "$opnsense_version"
     printf 'switch_test=passed\n'
-    printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
-    printf 'source_commit=%s\n' "$(git -C "$repository_root" rev-parse HEAD)"
+    printf 'opnsense_core_archive_sha256=%s\n' "$opnsense_core_archive_sha256"
+    printf 'source_commit=%s\n' "${SOURCE_COMMIT:-unknown}"
 } > "$artifact_directory/build-metadata.txt"
