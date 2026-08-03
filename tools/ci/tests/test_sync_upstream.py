@@ -8,6 +8,7 @@ import pytest
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PLANNER = REPOSITORY_ROOT / 'tools/ci/sync_upstream.py'
 METADATA_PATH = '.resolver-plugins/upstream.json'
+OVERLAY_MANIFEST = '.resolver-plugins/overlay-paths.txt'
 
 
 def git(directory: pathlib.Path, *arguments: str) -> str:
@@ -71,7 +72,12 @@ def repositories(tmp_path):
     git(source, 'checkout', '-B', 'release/bind-rp/26.1', initial)
     commit(
         source,
-        {METADATA_PATH: metadata('26.1', initial)},
+        {
+            METADATA_PATH: metadata('26.1', initial),
+            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\n',
+            'tools/resolver-overlay.txt': 'resolver overlay\n',
+            'tools/not-an-overlay.txt': 'must not copy\n',
+        },
         'release 26.1 metadata',
     )
     git(source, 'push', 'origin', 'release/bind-rp/26.1')
@@ -99,7 +105,12 @@ def add_release(
     git(repository, 'checkout', '-B', release, upstream_commit)
     commit(
         repository,
-        {METADATA_PATH: metadata(series, upstream_commit, freebsd_release)},
+        {
+            METADATA_PATH: metadata(series, upstream_commit, freebsd_release),
+            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\n',
+            'tools/resolver-overlay.txt': 'resolver overlay\n',
+            'tools/not-an-overlay.txt': 'must not copy\n',
+        },
         f'release {series} metadata',
     )
     git(repository, 'checkout', 'master')
@@ -124,6 +135,23 @@ def plan(repositories, release_notes_directory: pathlib.Path | None = None) -> d
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def apply(repositories, decision: dict, tmp_path: pathlib.Path) -> subprocess.CompletedProcess:
+    plan_path = tmp_path / 'plan.json'
+    plan_path.write_text(json.dumps(decision))
+    return subprocess.run(
+        [
+            'python3', str(PLANNER), 'apply',
+            '--repository', str(repositories['repository']),
+            '--plan', str(plan_path),
+            '--core-archive-url', 'https://example.invalid/core-archive.tar.gz',
+            '--core-archive-sha256', 'immutable-fixture-sha256',
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def assert_plan_shape(decision: dict) -> None:
@@ -256,3 +284,65 @@ def test_historical_release_note_does_not_override_inherited_profile(repositorie
     decision = plan(repositories, notes)
 
     assert decision['freebsd_release'] == '14.3'
+
+
+def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_metadata(
+    repositories, tmp_path
+):
+    decision = plan(repositories)
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    target = decision['target_release']
+    assert git(repositories['repository'], 'show', f'{target}:tools/resolver-overlay.txt') == 'resolver overlay'
+    with pytest.raises(subprocess.CalledProcessError):
+        git(repositories['repository'], 'show', f'{target}:tools/not-an-overlay.txt')
+    target_metadata = json.loads(git(repositories['repository'], 'show', f'{target}:{METADATA_PATH}'))
+    assert target_metadata == {
+        'series': '26.7',
+        'upstream_branch': 'stable/26.7',
+        'upstream_commit': repositories['stable_26_7'],
+        'freebsd_release': '14.3',
+        'core_archive_url': 'https://example.invalid/core-archive.tar.gz',
+        'core_archive_sha256': 'immutable-fixture-sha256',
+    }
+
+
+def test_apply_bootstrap_review_creates_pristine_release_and_overlay_sync_branch(
+    repositories, tmp_path
+):
+    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
+    decision = plan(repositories)
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert git(repositories['repository'], 'show', f'{decision["target_release"]}:dns/bind/bind.conf') == 'bind-v2'
+    with pytest.raises(subprocess.CalledProcessError):
+        git(repositories['repository'], 'show', f'{decision["target_release"]}:tools/resolver-overlay.txt')
+    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
+
+
+def test_apply_update_review_creates_only_overlay_sync_branch(repositories, tmp_path):
+    add_release(repositories, '26.7', repositories['initial'])
+    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
+    decision = plan(repositories)
+    source_sha = git(repositories['repository'], 'rev-parse', decision['target_release'])
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == source_sha
+    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
+
+
+def test_apply_refuses_existing_target_release_without_changing_it(repositories, tmp_path):
+    decision = plan(repositories)
+    git(repositories['repository'], 'branch', decision['target_release'], repositories['initial'])
+    target_sha = git(repositories['repository'], 'rev-parse', decision['target_release'])
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == target_sha
