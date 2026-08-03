@@ -76,7 +76,13 @@ def release_refs(repository: Path, release_prefix: str) -> dict[str, str]:
     return releases
 
 
-def load_metadata(repository: Path, release: str, metadata_path: str) -> dict:
+def load_metadata(
+    repository: Path,
+    release: str,
+    metadata_path: str,
+    source_series: str,
+    upstream: str,
+) -> dict:
     try:
         metadata = json.loads(run_git(repository, 'show', f'{release}:{metadata_path}'))
     except (subprocess.CalledProcessError, json.JSONDecodeError):
@@ -85,6 +91,16 @@ def load_metadata(repository: Path, release: str, metadata_path: str) -> dict:
         raise ValueError('missing or invalid source metadata')
     if any(not isinstance(metadata.get(field), str) or not metadata[field] for field in REQUIRED_METADATA_FIELDS):
         raise ValueError('missing or invalid source metadata')
+    expected_branch = f'stable/{source_series}'
+    if metadata['series'] != source_series or metadata['upstream_branch'] != expected_branch:
+        raise ValueError('missing or invalid source metadata')
+    run_git(
+        repository,
+        'merge-base',
+        '--is-ancestor',
+        metadata['upstream_commit'],
+        f'{upstream}/{expected_branch}',
+    )
     return metadata
 
 
@@ -161,9 +177,13 @@ def plan(arguments: argparse.Namespace) -> dict:
     source_release = f'{arguments.release_prefix}{latest_release}'
     source_upstream_commit = stable.get(latest_release)
     try:
-        metadata = load_metadata(repository, source_release, arguments.metadata_path)
-        if metadata['series'] != latest_release:
-            raise ValueError('missing or invalid source metadata')
+        metadata = load_metadata(
+            repository,
+            source_release,
+            arguments.metadata_path,
+            latest_release,
+            arguments.upstream,
+        )
         source_bind_tree = bind_tree(repository, metadata['upstream_commit'])
     except (ValueError, subprocess.CalledProcessError):
         return decision(

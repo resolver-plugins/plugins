@@ -203,6 +203,41 @@ def test_missing_source_metadata_blocks_planning(repositories):
     assert decision['reason'] == 'missing or invalid source metadata'
 
 
+def test_mismatched_metadata_upstream_branch_blocks_planning(repositories):
+    repository = repositories['repository']
+    git(repository, 'checkout', 'release/bind-rp/26.1')
+    invalid_metadata = json.loads(metadata('26.1', repositories['initial']))
+    invalid_metadata['upstream_branch'] = 'stable/26.7'
+    commit(
+        repository,
+        {METADATA_PATH: json.dumps(invalid_metadata)},
+        'record mismatched upstream branch',
+    )
+    git(repository, 'checkout', 'master')
+
+    decision = plan(repositories)
+
+    assert decision['action'] == 'blocked'
+    assert decision['reason'] == 'missing or invalid source metadata'
+
+
+def test_metadata_commit_outside_recorded_upstream_branch_blocks_planning(repositories):
+    repository = repositories['repository']
+    git(repository, 'checkout', 'release/bind-rp/26.1')
+    invalid_metadata = json.loads(metadata('26.1', repositories['stable_26_7']))
+    commit(
+        repository,
+        {METADATA_PATH: json.dumps(invalid_metadata)},
+        'record commit outside stable 26.1',
+    )
+    git(repository, 'checkout', 'master')
+
+    decision = plan(repositories)
+
+    assert decision['action'] == 'blocked'
+    assert decision['reason'] == 'missing or invalid source metadata'
+
+
 def test_release_note_freebsd_declaration_overrides_source_profile(repositories, tmp_path):
     notes = tmp_path / 'notes'
     notes.mkdir()
