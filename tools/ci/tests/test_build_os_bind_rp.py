@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import pathlib
 import subprocess
@@ -10,6 +11,25 @@ BUILD_SCRIPT = REPOSITORY_ROOT / 'tools/ci/build-os-bind-rp.sh'
 OPNSENSE_26_1_ARCHIVE_SHA256 = (
     '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
 )
+UPSTREAM_COMMIT = '6f3937f938377464534ebebde66cc13d84186542'
+FREEBSD_RELEASE = '14.3'
+
+
+def write_upstream_metadata(path: pathlib.Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                'series': '26.1',
+                'upstream_branch': 'stable/26.1',
+                'upstream_commit': UPSTREAM_COMMIT,
+                'freebsd_release': FREEBSD_RELEASE,
+                'core_archive_url': (
+                    f'https://github.com/opnsense/core/archive/{UPSTREAM_COMMIT}.tar.gz'
+                ),
+                'core_archive_sha256': OPNSENSE_26_1_ARCHIVE_SHA256,
+            }
+        )
+    )
 
 
 def create_core_archive(path: pathlib.Path) -> None:
@@ -53,6 +73,9 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     environment['SHA256_VALUE'] = OPNSENSE_26_1_ARCHIVE_SHA256
     environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
     environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
+    metadata_path = tmp_path / 'upstream.json'
+    write_upstream_metadata(metadata_path)
+    environment['RP_UPSTREAM_METADATA'] = str(metadata_path)
     package_call_log = tmp_path / 'pkg-calls.log'
     environment['PKG_CALL_LOG'] = str(package_call_log)
 
@@ -76,6 +99,8 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert 'opnsense=26.1.11_10\n' in metadata
     assert 'switch_test=' not in metadata
     assert 'opnsense_core_archive_sha256=' in metadata
+    assert f'upstream_commit={UPSTREAM_COMMIT}\n' in metadata
+    assert f'freebsd_release={FREEBSD_RELEASE}\n' in metadata
     assert 'source_commit=unknown\n' in metadata
     package_calls = package_call_log.read_text().splitlines()
     assert 'update -f' in package_calls
