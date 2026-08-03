@@ -317,7 +317,12 @@ def overlay_paths(repository: Path, source_release: str) -> list[str]:
         raise ValueError('missing or invalid overlay manifest')
     for path in paths:
         parts = Path(path).parts
-        if not path or path.startswith('/') or any(part in ('.', '..') for part in parts):
+        if (
+            not path
+            or path.startswith(('/', ':', '!', '^'))
+            or any(character in path for character in '*?[')
+            or any(part in ('.', '..') for part in parts)
+        ):
             raise ValueError('missing or invalid overlay manifest')
     return paths
 
@@ -338,6 +343,8 @@ def validate_apply_plan(repository: Path, plan_data: dict[str, Any]) -> tuple[st
         raise ValueError('missing or invalid plan')
     if require_git(repository, 'rev-parse', f'{upstream_commit}^{{commit}}') != upstream_commit:
         raise ValueError('missing or invalid plan')
+    if require_git(repository, 'rev-parse', f'{upstream_ref}^{{commit}}') != upstream_commit:
+        raise ValueError('upstream ref does not match plan commit')
     if not ref_exists(repository, source_release):
         raise ValueError('missing source release')
     metadata = source_metadata(repository, source_release)

@@ -154,6 +154,14 @@ def apply(repositories, decision: dict, tmp_path: pathlib.Path) -> subprocess.Co
     )
 
 
+def assert_ref_absent(repository: pathlib.Path, reference: str) -> None:
+    result = subprocess.run(
+        ['git', '-C', repository, 'show-ref', '--verify', '--quiet', f'refs/heads/{reference}'],
+        check=False,
+    )
+    assert result.returncode == 1
+
+
 def assert_plan_shape(decision: dict) -> None:
     assert set(decision) == {
         'action',
@@ -346,3 +354,91 @@ def test_apply_refuses_existing_target_release_without_changing_it(repositories,
 
     assert result.returncode != 0
     assert git(repositories['repository'], 'rev-parse', decision['target_release']) == target_sha
+
+
+def test_apply_rejects_plan_commit_that_does_not_match_the_upstream_ref(repositories, tmp_path):
+    decision = plan(repositories)
+    decision['upstream_commit'] = repositories['initial']
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repositories['repository'], decision['target_release'])
+
+
+def test_apply_rejects_pathspec_magic_in_the_overlay_manifest(repositories, tmp_path):
+    repository = repositories['repository']
+    decision = plan(repositories)
+    git(repository, 'checkout', 'release/bind-rp/26.1')
+    commit(repository, {OVERLAY_MANIFEST: ':(glob)tools/**\n'}, 'add glob overlay manifest entry')
+    git(repository, 'checkout', 'master')
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repository, decision['target_release'])
+
+
+def test_apply_refuses_dirty_checkout_before_creating_a_target_branch(repositories, tmp_path):
+    decision = plan(repositories)
+    dirty_file = repositories['repository'] / 'dirty'
+    dirty_file.write_text('dirty\n')
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repositories['repository'], decision['target_release'])
+
+
+def test_apply_refuses_an_unknown_action_before_creating_a_target_branch(repositories, tmp_path):
+    decision = plan(repositories)
+    decision['action'] = 'unexpected'
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repositories['repository'], decision['target_release'])
+
+
+def test_apply_refuses_a_duplicate_sync_branch_before_creating_the_target(repositories, tmp_path):
+    repository = repositories['repository']
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
+    decision = plan(repositories)
+    git(repository, 'branch', decision['sync_branch'], repositories['initial'])
+    sync_sha = git(repository, 'rev-parse', decision['sync_branch'])
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert git(repository, 'rev-parse', decision['sync_branch']) == sync_sha
+    assert_ref_absent(repository, decision['target_release'])
+
+
+def test_apply_refuses_missing_freebsd_profile_before_creating_a_target_branch(repositories, tmp_path):
+    decision = plan(repositories)
+    decision['freebsd_release'] = ''
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repositories['repository'], decision['target_release'])
+
+
+def test_apply_refuses_an_overlay_that_fails_preflight(repositories, tmp_path):
+    repository = repositories['repository']
+    decision = plan(repositories)
+    git(repository, 'checkout', 'release/bind-rp/26.1')
+    commit(
+        repository,
+        {
+            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\nREADME\n',
+            'README': 'overlay-specific README\n',
+        },
+        'make overlay conflict with target upstream',
+    )
+    git(repository, 'checkout', 'master')
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode != 0
+    assert_ref_absent(repository, decision['target_release'])
