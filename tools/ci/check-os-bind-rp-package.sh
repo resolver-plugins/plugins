@@ -14,7 +14,8 @@ package=$1
 
 manifest=$(tar -xOf "$package" +MANIFEST) || fail "cannot read +MANIFEST from: $package"
 
-if printf '%s\n' "$manifest" | grep -Eq '^[[:space:]]*"conflicts"[[:space:]]*:|^[[:space:]]*conflicts:'
+if printf '%s\n' "$manifest" | grep -Fqx 'conflicts: [ "os-bind" ]' || \
+    printf '%s\n' "$manifest" | grep -Eq '"conflicts"[[:space:]]*:[^}]*"os-bind"'
 then
     fail 'package manifest must not declare an os-bind conflict'
 fi

@@ -19,7 +19,10 @@ esac
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_directory/../.." && pwd)
 pkg_command=${PKG_COMMAND:-pkg}
+switch_pkg_command=${PKG_SWITCH_COMMAND:-pkg-static}
 make_command=${MAKE_COMMAND:-make}
+switch_directory=$(mktemp -d)
+trap 'rm -rf "$switch_directory"' EXIT HUP INT TERM
 
 opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series")
 "$pkg_command" install -y bind920
@@ -43,6 +46,13 @@ set -- "$repository_root"/dns/bind/work/pkg/os-bind-rp-*.pkg
 package=$1
 
 "$script_directory/check-os-bind-rp-package.sh" "$package"
+"$pkg_command" fetch -y -r OPNsense -o "$switch_directory" os-bind
+set -- "$switch_directory"/All/os-bind-*.pkg
+[ -f "$1" ] || fail 'official os-bind package fetch did not produce a package'
+[ "$#" -eq 1 ] || fail 'official os-bind package fetch produced more than one package'
+official_package=$1
+PKG_COMMAND="$switch_pkg_command" \
+    "$script_directory/test-os-bind-rp-switch.sh" "$official_package" "$package"
 
 mkdir -p "$artifact_directory"
 cp "$package" "$artifact_directory/"
@@ -52,6 +62,7 @@ cp "$package" "$artifact_directory/"
     printf 'pkg_abi=%s\n' "$("$pkg_command" config ABI)"
     printf 'bind920=%s\n' "$bind_version"
     printf 'opnsense=%s\n' "$opnsense_version"
+    printf 'switch_test=passed\n'
     printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
     printf 'source_commit=%s\n' "$(git -C "$repository_root" rev-parse HEAD)"
 } > "$artifact_directory/build-metadata.txt"

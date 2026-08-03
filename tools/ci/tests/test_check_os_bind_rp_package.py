@@ -118,6 +118,39 @@ def test_rejects_manifest_that_retains_an_official_plugin_conflict(tmp_path):
     assert 'must not declare an os-bind conflict' in result.stderr
 
 
+def test_accepts_manifest_with_an_unrelated_package_conflict(tmp_path):
+    package = tmp_path / 'os-bind-rp-1.36_1.pkg'
+    create_package(
+        package,
+        '\n'.join(
+            [
+                'name: os-bind-rp',
+                'version: "1.36_1"',
+                'conflicts: [ "os-unbound" ]',
+                'deps: {',
+                '  bind920: { version: "9.20.24", origin: "dns/bind920" }',
+                '  opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }',
+                '}',
+                '',
+            ]
+        ),
+    )
+    environment = os.environ.copy()
+    environment['PKG_COMMAND'] = str(
+        REPOSITORY_ROOT / 'tools/ci/tests/pkg-version-equal.sh'
+    )
+
+    result = subprocess.run(
+        [CHECK_SCRIPT, str(package)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_rejects_manifest_with_opnsense_below_required_core_version(tmp_path):
     package = tmp_path / 'os-bind-rp-1.36_1.pkg'
     create_package(
