@@ -44,6 +44,8 @@ def test_workflow_is_manual_pinned_26_1_and_26_7_artifact_build():
         assert 'retention-days: 7' in job
     assert 'release: "14.3"' in job_26_1
     assert 'release: "15.1"' in job_26_7
+    assert 'name: Build in FreeBSD 14.3' in job_26_1
+    assert 'name: Build in FreeBSD 15.1' in job_26_7
     assert (
         "SOURCE_COMMIT='${{ github.sha }}' "
         'tools/ci/build-os-bind-rp.sh 26.1 artifacts/26.1'
