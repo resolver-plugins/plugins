@@ -42,7 +42,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     environment['PKG_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/pkg-build-fixture.sh'
     )
-    environment['GIT_COMMAND'] = '/usr/bin/false'
+    environment['GIT_CONFIG_GLOBAL'] = str(tmp_path / 'gitconfig')
     environment['FETCH_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/fetch-opnsense-core-fixture.sh'
     )
@@ -82,3 +82,12 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert 'install -y git' in package_calls
     assert 'install -y bind920' in package_calls
     assert not any(call.startswith('fetch ') for call in package_calls)
+    safe_directories = subprocess.run(
+        ['git', 'config', '--global', '--get-all', 'safe.directory'],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+    assert safe_directories.returncode == 0, safe_directories.stderr
+    assert REPOSITORY_ROOT.as_posix() in safe_directories.stdout.splitlines()

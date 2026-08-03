@@ -24,6 +24,7 @@ make_command=${MAKE_COMMAND:-make}
 opnsense_core_archive_sha256=$("$script_directory/setup-opnsense-repository.sh" "$series")
 "$pkg_command" update -f
 "$pkg_command" install -y git
+git config --global --add safe.directory "$repository_root"
 "$pkg_command" install -y bind920
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || \
     fail 'bind920 is not installed after package setup'
