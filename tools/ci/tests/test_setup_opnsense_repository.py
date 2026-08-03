@@ -13,8 +13,9 @@ OPNSENSE_26_1_ARCHIVE_SHA256 = (
     '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
 )
 UPSTREAM_COMMIT = '6f3937f938377464534ebebde66cc13d84186542'
+CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
 CORE_ARCHIVE_URL = (
-    f'https://github.com/opnsense/core/archive/{UPSTREAM_COMMIT}.tar.gz'
+    f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz'
 )
 
 
@@ -26,6 +27,7 @@ def write_upstream_metadata(path: pathlib.Path, archive_sha256: str) -> None:
                 'upstream_branch': 'stable/26.1',
                 'upstream_commit': UPSTREAM_COMMIT,
                 'freebsd_release': '14.3',
+                'core_commit': CORE_COMMIT,
                 'core_archive_url': CORE_ARCHIVE_URL,
                 'core_archive_sha256': archive_sha256,
             }

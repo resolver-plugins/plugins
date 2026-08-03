@@ -12,6 +12,7 @@ OPNSENSE_26_1_ARCHIVE_SHA256 = (
     '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
 )
 UPSTREAM_COMMIT = '6f3937f938377464534ebebde66cc13d84186542'
+CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
 FREEBSD_RELEASE = '14.3'
 
 
@@ -23,8 +24,9 @@ def write_upstream_metadata(path: pathlib.Path) -> None:
                 'upstream_branch': 'stable/26.1',
                 'upstream_commit': UPSTREAM_COMMIT,
                 'freebsd_release': FREEBSD_RELEASE,
+                'core_commit': CORE_COMMIT,
                 'core_archive_url': (
-                    f'https://github.com/opnsense/core/archive/{UPSTREAM_COMMIT}.tar.gz'
+                    f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz'
                 ),
                 'core_archive_sha256': OPNSENSE_26_1_ARCHIVE_SHA256,
             }
@@ -100,6 +102,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert 'switch_test=' not in metadata
     assert 'opnsense_core_archive_sha256=' in metadata
     assert f'upstream_commit={UPSTREAM_COMMIT}\n' in metadata
+    assert f'core_commit={CORE_COMMIT}\n' in metadata
     assert f'freebsd_release={FREEBSD_RELEASE}\n' in metadata
     assert 'source_commit=unknown\n' in metadata
     package_calls = package_call_log.read_text().splitlines()

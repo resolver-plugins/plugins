@@ -31,6 +31,7 @@ required_fields = (
     'upstream_branch',
     'upstream_commit',
     'freebsd_release',
+    'core_commit',
     'core_archive_url',
     'core_archive_sha256',
 )
@@ -51,7 +52,7 @@ if metadata['series'] != series:
     )
 if metadata['core_archive_url'] != (
     'https://github.com/opnsense/core/archive/'
-    f'{metadata["upstream_commit"]}.tar.gz'
+    f'{metadata["core_commit"]}.tar.gz'
 ):
     raise SystemExit('upstream metadata core archive URL is not immutable')
 print(metadata[field])
