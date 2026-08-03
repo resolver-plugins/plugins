@@ -42,9 +42,6 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     environment['PKG_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/pkg-build-fixture.sh'
     )
-    environment['PKG_SWITCH_COMMAND'] = str(
-        REPOSITORY_ROOT / 'tools/ci/tests/pkg-switch-fixture.sh'
-    )
     environment['GIT_COMMAND'] = '/usr/bin/false'
     environment['FETCH_COMMAND'] = str(
         REPOSITORY_ROOT / 'tools/ci/tests/fetch-opnsense-core-fixture.sh'
@@ -77,10 +74,11 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert 'pkg_abi=FreeBSD:14:amd64\n' in metadata
     assert 'bind920=9.20.24\n' in metadata
     assert 'opnsense=26.1.11_10\n' in metadata
-    assert 'switch_test=passed\n' in metadata
+    assert 'switch_test=' not in metadata
     assert 'opnsense_core_archive_sha256=' in metadata
     assert 'source_commit=unknown\n' in metadata
     package_calls = package_call_log.read_text().splitlines()
     assert 'update -f' in package_calls
     assert 'install -y git' in package_calls
     assert 'install -y bind920' in package_calls
+    assert not any(call.startswith('fetch ') for call in package_calls)
