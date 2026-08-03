@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import subprocess
@@ -16,7 +17,7 @@ def create_package(path: pathlib.Path, manifest: str) -> None:
         package.add(manifest_path, arcname='+MANIFEST')
 
 
-def test_accepts_manifest_with_required_identity_conflict_and_bind_version(tmp_path):
+def test_accepts_manifest_with_core_version_floor_and_no_official_conflict(tmp_path):
     package = tmp_path / 'os-bind-rp-1.36_1.pkg'
     create_package(
         package,
@@ -24,9 +25,9 @@ def test_accepts_manifest_with_required_identity_conflict_and_bind_version(tmp_p
             [
                 'name: os-bind-rp',
                 'version: "1.36_1"',
-                'conflicts: [ "os-bind" ]',
                 'deps: {',
-                '  bind920: { version: "9.20.26", origin: "dns/bind920" }',
+                '  bind920: { version: "9.20.24", origin: "dns/bind920" }',
+                '  opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }',
                 '}',
                 '',
             ]
@@ -49,7 +50,45 @@ def test_accepts_manifest_with_required_identity_conflict_and_bind_version(tmp_p
     assert result.returncode == 0, result.stderr
 
 
-def test_rejects_manifest_with_bind_below_dot_minimum(tmp_path):
+def test_accepts_compact_json_manifest_from_pkg_create(tmp_path):
+    package = tmp_path / 'os-bind-rp-1.36_1.pkg'
+    create_package(
+        package,
+        json.dumps(
+            {
+                'name': 'os-bind-rp',
+                'version': '1.36_1',
+                'deps': {
+                    'bind920': {
+                        'version': '9.20.24',
+                        'origin': 'dns/bind920',
+                    },
+                    'opnsense': {
+                        'version': '26.1.11_10',
+                        'origin': 'opnsense/opnsense',
+                    },
+                },
+            },
+            separators=(',', ':'),
+        ),
+    )
+    environment = os.environ.copy()
+    environment['PKG_COMMAND'] = str(
+        REPOSITORY_ROOT / 'tools/ci/tests/pkg-version-equal.sh'
+    )
+
+    result = subprocess.run(
+        [CHECK_SCRIPT, str(package)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_rejects_manifest_that_retains_an_official_plugin_conflict(tmp_path):
     package = tmp_path / 'os-bind-rp-1.36_1.pkg'
     create_package(
         package,
@@ -59,7 +98,37 @@ def test_rejects_manifest_with_bind_below_dot_minimum(tmp_path):
                 'version: "1.36_1"',
                 'conflicts: [ "os-bind" ]',
                 'deps: {',
-                '  bind920: { version: "9.20.25", origin: "dns/bind920" }',
+                '  bind920: { version: "9.20.24", origin: "dns/bind920" }',
+                '  opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }',
+                '}',
+                '',
+            ]
+        ),
+    )
+    environment = os.environ.copy()
+    result = subprocess.run(
+        [CHECK_SCRIPT, str(package)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert result.returncode != 0
+    assert 'must not declare an os-bind conflict' in result.stderr
+
+
+def test_rejects_manifest_with_opnsense_below_required_core_version(tmp_path):
+    package = tmp_path / 'os-bind-rp-1.36_1.pkg'
+    create_package(
+        package,
+        '\n'.join(
+            [
+                'name: os-bind-rp',
+                'version: "1.36_1"',
+                'deps: {',
+                '  bind920: { version: "9.20.24", origin: "dns/bind920" }',
+                '  opnsense: { version: "26.1.11_9", origin: "opnsense/opnsense" }',
                 '}',
                 '',
             ]
@@ -79,4 +148,4 @@ def test_rejects_manifest_with_bind_below_dot_minimum(tmp_path):
     )
 
     assert result.returncode != 0
-    assert 'below the required 9.20.26' in result.stderr
+    assert 'below the required 26.1.11_10' in result.stderr

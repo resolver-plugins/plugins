@@ -25,13 +25,16 @@ opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series
 "$pkg_command" install -y bind920
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || \
     fail 'bind920 is not installed after package setup'
-comparison=$("$pkg_command" version -t "$bind_version" 9.20.26) || \
-    fail "cannot compare bind920 version: $bind_version"
+opnsense_version=$("$pkg_command" rquery -r OPNsense -e '%n = opnsense' '%v') || \
+    fail 'OPNsense core package is not available after package setup'
+comparison=$("$pkg_command" version -t "$opnsense_version" 26.1.11_10) || \
+    fail "cannot compare OPNsense version: $opnsense_version"
 case "$comparison" in
     '='|'>') ;;
-    *) fail "bind920 $bind_version is below the required 9.20.26" ;;
+    *) fail "OPNsense $opnsense_version is below the required 26.1.11_10" ;;
 esac
 
+"$make_command" -C "$repository_root/dns/bind" clean
 "$make_command" -C "$repository_root/dns/bind" package
 
 set -- "$repository_root"/dns/bind/work/pkg/os-bind-rp-*.pkg
@@ -48,6 +51,7 @@ cp "$package" "$artifact_directory/"
     printf 'uname=%s\n' "$(uname -a)"
     printf 'pkg_abi=%s\n' "$("$pkg_command" config ABI)"
     printf 'bind920=%s\n' "$bind_version"
+    printf 'opnsense=%s\n' "$opnsense_version"
     printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
     printf 'source_commit=%s\n' "$(git -C "$repository_root" rev-parse HEAD)"
 } > "$artifact_directory/build-metadata.txt"

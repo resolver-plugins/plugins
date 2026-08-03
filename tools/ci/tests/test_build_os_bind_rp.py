@@ -32,10 +32,11 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / 'os-bind-rp-1.36_1.pkg').is_file()
+    assert (tmp_path / 'os-bind-rp-1.36_3.pkg').is_file()
     assert (tmp_path / 'repos' / 'OPNsense.conf').is_file()
     metadata = (tmp_path / 'build-metadata.txt').read_text()
     assert 'series=26.1\n' in metadata
     assert 'pkg_abi=FreeBSD:14:amd64\n' in metadata
-    assert 'bind920=9.20.26\n' in metadata
+    assert 'bind920=9.20.24\n' in metadata
+    assert 'opnsense=26.1.11_10\n' in metadata
     assert 'opnsense_core_commit=fixture-opnsense-core-commit\n' in metadata
