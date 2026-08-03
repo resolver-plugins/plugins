@@ -21,6 +21,7 @@ repository_root=$(CDPATH= cd -- "$script_directory/../.." && pwd)
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
 
+opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series")
 "$pkg_command" install -y bind920
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || \
     fail 'bind920 is not installed after package setup'
@@ -47,5 +48,6 @@ cp "$package" "$artifact_directory/"
     printf 'uname=%s\n' "$(uname -a)"
     printf 'pkg_abi=%s\n' "$("$pkg_command" config ABI)"
     printf 'bind920=%s\n' "$bind_version"
+    printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
     printf 'source_commit=%s\n' "$(git -C "$repository_root" rev-parse HEAD)"
 } > "$artifact_directory/build-metadata.txt"
