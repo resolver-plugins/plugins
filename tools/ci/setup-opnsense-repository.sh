@@ -20,10 +20,57 @@ case "$series" in
     *) fail "unsupported OPNsense series: $series" ;;
 esac
 
+metadata_field() {
+    python3 - "$RP_UPSTREAM_METADATA" "$series" "$1" <<'PY'
+import json
+import sys
+
+metadata_path, series, field = sys.argv[1:]
+required_fields = (
+    'series',
+    'upstream_branch',
+    'upstream_commit',
+    'freebsd_release',
+    'core_commit',
+    'core_archive_url',
+    'core_archive_sha256',
+)
+try:
+    with open(metadata_path, encoding='utf-8') as metadata_file:
+        metadata = json.load(metadata_file)
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f'cannot read upstream metadata: {error}')
+
+if not isinstance(metadata, dict):
+    raise SystemExit('upstream metadata must be a JSON object')
+for required_field in required_fields:
+    if not isinstance(metadata.get(required_field), str) or not metadata[required_field]:
+        raise SystemExit(f'upstream metadata has an invalid {required_field}')
+if metadata['series'] != series:
+    raise SystemExit(
+        f'upstream metadata series {metadata["series"]} does not match {series}'
+    )
+if metadata['core_archive_url'] != (
+    'https://github.com/opnsense/core/archive/'
+    f'{metadata["core_commit"]}.tar.gz'
+):
+    raise SystemExit('upstream metadata core archive URL is not immutable')
+print(metadata[field])
+PY
+}
+
+if [ -n "${RP_UPSTREAM_METADATA:-}" ]
+then
+    expected_archive_sha256=$(metadata_field core_archive_sha256) || \
+        fail 'invalid upstream metadata'
+    archive_url=$(metadata_field core_archive_url) || fail 'invalid upstream metadata'
+else
+    archive_url=${OPNSENSE_CORE_ARCHIVE_URL:-https://github.com/opnsense/core/archive/refs/heads/stable/$series.tar.gz}
+fi
+
 repository_directory=${PKG_REPOS_DIR:-/usr/local/etc/pkg/repos}
 fingerprint_directory=${PKG_FINGERPRINTS_DIR:-/usr/local/etc/pkg/fingerprints/OPNsense}
 fetch_command=${FETCH_COMMAND:-fetch}
-archive_url=${OPNSENSE_CORE_ARCHIVE_URL:-https://github.com/opnsense/core/archive/refs/heads/stable/$series.tar.gz}
 temporary_directory=$(mktemp -d)
 archive_path="$temporary_directory/core.tar.gz"
 checkout_directory="$temporary_directory/core"
