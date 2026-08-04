@@ -133,9 +133,6 @@ manifest: check
 	@echo "prefix: \"${LOCALBASE}\""
 	@echo "licenselogic: \"single\""
 	@echo "licenses: [ \"${PLUGIN_LICENSE}\" ]"
-.if defined(PLUGIN_PACKAGE_CONFLICT)
-	@echo "conflicts: [ \"${PLUGIN_PACKAGE_CONFLICT}\" ]"
-.endif
 .if defined(PLUGIN_NO_ABI)
 	@echo "arch: \"${OSABIPREFIX:tl}:*:*\""
 	@echo "abi: \"${OSABIPREFIX}:*:*\""

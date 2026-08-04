@@ -30,7 +30,7 @@ PLUGIN_ROOT = pathlib.Path(__file__).resolve().parents[8]
 
 
 class TestPackageManifest(unittest.TestCase):
-    def test_extended_bind_manifest_replaces_official_bind(self):
+    def test_extended_bind_uses_the_framework_conflict_set(self):
         result = subprocess.run(
             ['bmake', '-C', 'dns/bind', 'manifest'],
             cwd=PLUGIN_ROOT,
@@ -41,9 +41,12 @@ class TestPackageManifest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('name: os-bind-rp\n', result.stdout)
-        self.assertIn('version: "1.36_4"\n', result.stdout)
-        self.assertIn('conflicts: [ "os-bind" ]\n', result.stdout)
+        self.assertIn('version: "1.36_5"\n', result.stdout)
+        self.assertNotIn('conflicts:', result.stdout)
         self.assertIn(
             'opnsense: { version: 26.1.11_10, origin: opnsense/opnsense }\n',
             result.stdout,
         )
+
+        makefile = (PLUGIN_ROOT / 'dns' / 'bind' / 'Makefile').read_text()
+        self.assertIn('PLUGIN_CONFLICTS=\tbind\n', makefile)
