@@ -328,6 +328,31 @@ def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_me
     }
 
 
+def test_apply_bootstrap_build_accepts_source_metadata_from_divergent_source_stable_branch(
+    repositories, tmp_path
+):
+    repository = repositories['repository']
+    git(repository, 'checkout', '-B', 'source-stable-26.1', repositories['initial'])
+    source_upstream_commit = commit(
+        repository, {'README': 'source stable 26.1\n'}, 'source stable 26.1'
+    )
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', source_upstream_commit)
+    git(repository, 'checkout', 'release/bind-rp/26.1')
+    commit(
+        repository,
+        {METADATA_PATH: metadata('26.1', source_upstream_commit)},
+        'record divergent source upstream commit',
+    )
+    git(repository, 'checkout', 'master')
+    decision = plan(repositories)
+
+    result = apply(repositories, decision, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    target_metadata = json.loads(git(repository, 'show', f'{decision["target_release"]}:{METADATA_PATH}'))
+    assert target_metadata['upstream_commit'] == repositories['stable_26_7']
+
+
 def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
     repositories, tmp_path
 ):

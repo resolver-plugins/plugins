@@ -366,7 +366,8 @@ def validate_apply_plan(repository: Path, plan_data: dict[str, Any]) -> tuple[st
     if not ref_exists(repository, source_release):
         raise ValueError('missing source release')
     metadata = source_metadata(repository, source_release)
-    if git_result(repository, 'merge-base', '--is-ancestor', metadata['upstream_commit'], upstream_ref).returncode:
+    source_upstream_ref = f"upstream/{metadata['upstream_branch']}"
+    if git_result(repository, 'merge-base', '--is-ancestor', metadata['upstream_commit'], source_upstream_ref).returncode:
         raise ValueError('missing or invalid source metadata')
     sync_branch = plan_data['sync_branch']
     if action == 'bootstrap-build':
