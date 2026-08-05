@@ -141,6 +141,9 @@ manifest: check
 	@echo "deps: {"
 .if defined(PLUGIN_DEPENDS)
 	@for PLUGIN_DEPEND in ${PLUGIN_DEPENDS}; do \
+		case " ${PLUGIN_DEPEND_FORMULA_DEPENDS} " in \
+		*" $${PLUGIN_DEPEND} "*) continue;; \
+		esac; \
 		if ! ${PKG} query '  %n: { version: "%v", origin: "%o" }' \
 		    $${PLUGIN_DEPEND}; then \
 			echo ">>> Missing dependency: $${PLUGIN_DEPEND}" >&2; \
