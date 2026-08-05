@@ -74,13 +74,19 @@ repository_root=$(CDPATH= cd -- "$script_directory/../.." && pwd)
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
 
-opnsense_core_archive_sha256=$("$script_directory/setup-opnsense-repository.sh" "$series")
+opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series")
 "$pkg_command" update -f
 "$pkg_command" install -y git
 git config --global --add safe.directory "$repository_root"
 "$pkg_command" install -y bind920
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || \
     fail 'bind920 is not installed after package setup'
+comparison=$("$pkg_command" version -t "$bind_version" 9.20.26) || \
+    fail "cannot compare BIND version: $bind_version"
+case "$comparison" in
+    '='|'>') ;;
+    *) fail "BIND $bind_version is below the required 9.20.26" ;;
+esac
 opnsense_version=$("$pkg_command" rquery -r OPNsense -e '%n = opnsense' '%v') || \
     fail 'OPNsense core package is not available after package setup'
 comparison=$("$pkg_command" version -t "$opnsense_version" 26.1.11_10) || \
@@ -106,7 +112,7 @@ cp "$package" "$artifact_directory/"
     printf 'pkg_abi=%s\n' "$("$pkg_command" config ABI)"
     printf 'bind920=%s\n' "$bind_version"
     printf 'opnsense=%s\n' "$opnsense_version"
-    printf 'opnsense_core_archive_sha256=%s\n' "$opnsense_core_archive_sha256"
+    printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
     printf 'upstream_commit=%s\n' "$upstream_commit"
     printf 'core_commit=%s\n' "$core_commit"
     printf 'freebsd_release=%s\n' "$freebsd_release"
