@@ -1,0 +1,19 @@
+name: Test BIND plugin
+
+on:
+  pull_request:
+    paths:
+      - 'dns/bind/**'
+      - '.github/workflows/bind-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: resolver-plugins/plugins/.github/workflows/bind-tests.yml@master
+    with:
+      pull_request_base: ${{ github.event.pull_request.base.ref }}
+      pull_request_sha: ${{ github.sha }}
+    permissions:
+      contents: read
