@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    uses: resolver-plugins/plugins/.github/workflows/bind-tests.yml@master
+    uses: resolver-plugins/plugins/.github/workflows/bind-tests.yml@66df08cbc5d4a7418dacfccc4c4957bd22299145
     with:
       pull_request_base: ${{ github.event.pull_request.base.ref }}
       pull_request_sha: ${{ github.sha }}
