@@ -1,0 +1,10 @@
+{
+  "series": "26.7",
+  "upstream_branch": "stable/26.7",
+  "upstream_commit": "70399a6037a717a6497086659b5ca57728c77220",
+  "tools_tag": "26.7.1",
+  "freebsd_release": "15.1",
+  "core_commit": "08d6a784769aceb6334731d5eae7070a9e48603d",
+  "core_archive_url": "https://github.com/opnsense/core/archive/08d6a784769aceb6334731d5eae7070a9e48603d.tar.gz",
+  "core_archive_sha256": "a8a597aa240ff3b3392e7f3b82dd2e155ac1e54d45c6e8c8ce46dbc6ad732ac3"
+}
