@@ -52,11 +52,13 @@ replacement with the target OPNsense `pkg` implementation.
 
 ## Chosen approach
 
-Build packages with a package creator compatible with the target OPNsense
-series, and verify the result using the target package manager before signing
-or publication. The workflow will treat the target-recognized per-file
-checksum representation as an output contract rather than assuming that
-matching FreeBSD ABI alone makes builder output compatible.
+Build packages with an immutable package-creator archive pinned per supported
+OPNsense series by identity, ABI, and SHA-256, and verify the result using that
+minimum-supported parser before signing or publication. The workflow will
+treat the target-recognized per-file checksum representation as an output
+contract rather than assuming that matching FreeBSD ABI alone makes builder
+output compatible. If the exact pinned creator archive is no longer available
+from the signed OPNsense repository, the build fails closed.
 
 The installer will fetch the resolved candidate archives before installation
 and inspect them through the local target `pkg`. It will reject any archive
@@ -74,9 +76,17 @@ Alternatives were rejected for the following reasons:
 
 ## Build and publication contract
 
-The BIND and plugin build jobs will explicitly select the OPNsense-compatible
-package creator after configuring the pinned OPNsense repository. The build
-metadata will record the creator version used for each archive.
+The BIND and plugin build jobs will fetch the exact package-creator identity
+declared in immutable repository metadata after configuring the pinned
+OPNsense repository. They will verify its archive SHA-256 before installing
+those exact bytes, lock the creator package, and verify its identity and static
+executable hash immediately before and after every package target. Plugin build
+metadata, BIND provenance, signing validation, and schema-2 channel audit
+metadata will record the creator identity and archive hash used for each
+archive; BIND compatibility fingerprints include that record so packages built
+with the former creator contract cannot be reused. Recovery validation remains
+able to read already-published schema-1 channels but cannot use them as new
+build provenance.
 
 Before an archive can enter a signed staged repository, a durable verifier
 will inspect every archive with the target package manager and require:
@@ -96,10 +106,11 @@ HA-2 canary uses a host-local repository signed by a one-use local key whose
 private material is never published or added to the source tree. This is
 necessary because ordinary PR development releases are intentionally
 unsigned. The canary installer copy uses the local repository URL and the
-one-use public-key fingerprint; the committed installer retains the production
-URL and key. Once accepted, production promotion must use the same verified
-build inputs and compatibility gates; no stable channel is published manually
-during the canary.
+one-use public-key fingerprint in isolated repository and key directories; it
+does not overwrite HA-2's production configuration or public key. The
+committed installer retains the production URL and key. Once accepted,
+production promotion must use the same verified build inputs and compatibility
+gates; no stable channel is published manually during the canary.
 
 ## Installer contract
 
@@ -113,10 +124,17 @@ installing package transaction it will:
    installing them.
 3. Verify each fetched archive through the local `pkg`, rejecting missing,
    empty, null-checksum, or unparseable file metadata.
-4. Detect and report whether the transaction replaces official `os-bind` or
+4. Copy the verified archives into an isolated, temporary local repository and
+   freeze their identities and SHA-256 values. Installation resolves exact
+   versions only from that repository, so a moving remote channel cannot
+   substitute different bytes after preflight. The client package-manager
+   package is locked for the bounded transaction, and its prior lock state is
+   restored on every exit path.
+5. Detect and report whether the transaction replaces official `os-bind` or
    upgrades an existing `os-bind-rp`.
-5. Copy `/conf/config.xml` to a timestamped, mode-preserving backup and record
-   the installed package identities.
+6. Copy `/conf/config.xml` to a timestamped, mode-preserving backup below a
+   new mode-0700 `/var/backups/os-bind-rp-install.<timestamp>` directory and
+   record the installed package identities there.
 
 The installer will then install the BIND pair and replacement plugin from the
 selected Resolver Plugins repository. On success it will require the expected
@@ -127,8 +145,9 @@ files after an error.
 A preflight failure exits without changing installed packages. A package
 transaction failure preserves the configuration backup, package-state record,
 and downloaded archives, then prints their locations and bounded recovery
-instructions. Cleanup may remove only installer-created temporary metadata
-after success; it may not broadly delete plugin paths.
+instructions. Successful installation preserves the configuration backup and
+package-state record but removes only the separate ephemeral download and
+local-repository directory. Cleanup may not broadly delete plugin paths.
 
 ## Automated verification
 
@@ -156,8 +175,10 @@ recurrence.
 
 ## HA-2 canary procedure
 
-HA-1 remains unchanged and must pass package, BIND process, and recursive-query
-health checks immediately before HA-2 mutation. HA-2 will have these rollback
+HA-1 remains unchanged and must pass CARP/HA role, package, BIND process, DNS
+VIP, and recursive-query health checks immediately before HA-2 mutation. HA-2
+must be the backup peer, and configuration synchronization must be bounded so
+the canary cannot change HA-1. HA-2 will have these rollback
 materials captured locally before its baseline is changed:
 
 - `/conf/config.xml` and relevant BIND configuration state;
@@ -174,7 +195,9 @@ without publishing different bytes under an existing immutable version. The
 production workflow still requires revision-bumped, source-built packages.
 
 HA-2 will then be returned temporarily to a healthy official `os-bind`
-baseline using the configured OPNsense repository. The baseline must have
+baseline using the configured OPNsense repository. Previewed transactions may
+remove only `os-bind-rp` and add only official `os-bind`; the OPNsense core
+package is not installed or upgraded. The baseline must have
 official `os-bind` registered, `os-bind-rp` absent, valid BIND configuration,
 a running daemon, and successful representative recursive queries.
 
@@ -190,10 +213,12 @@ supported replacement path. Acceptance requires:
 - the same checks succeeding after an HA-2 reboot.
 
 HA consistency and representative DNS responses will then be compared between
-HA-1 and HA-2. If any acceptance gate fails, HA-2 is restored from its captured
-configuration and locally preserved package archives. Recovery operations are
-limited to HA-2 and exact package-owned or archive-listed paths; HA-1 remains
-untouched throughout.
+HA-1 and HA-2. If any acceptance gate fails, recovery stops managed BIND,
+removes official `os-bind` if present, installs the exact preserved BIND pair
+and `os-bind-rp` archives, restores configuration, reloads templates, and
+restarts BIND. The saved package database is evidence only and is not copied
+over the live database. Recovery operations are limited to HA-2 and exact
+package-owned or archive-listed paths; HA-1 remains untouched throughout.
 
 ## Documentation
 
