@@ -1,0 +1,2 @@
+bind_package_restore
+trap - EXIT HUP INT TERM
