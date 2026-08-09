@@ -83,7 +83,9 @@ def stop_watcher():
 
 def bind_config(root):
     if root.tag.lower() == "opnsense":
-        return root.find("./bind")
+        node = root.find("./bind")
+        if node is not None:
+            return node
     for path in ("./OPNsense/bind", "./opnsense/bind", ".//OPNsense/bind", ".//opnsense/bind"):
         node = root.find(path)
         if node is not None:
@@ -114,6 +116,60 @@ def model_zones():
         if name:
             zones.add(name)
     return zones
+
+
+def dynamic_model_zones(strict=False):
+    try:
+        root = ElementTree.parse(CONFIG).getroot()
+    except (OSError, ElementTree.ParseError):
+        if strict:
+            raise
+        return set()
+    plugin = bind_config(root)
+    if plugin is None:
+        return set()
+
+    domains = {}
+    zones = set()
+    for domain in plugin.findall("./domain/domains/domain"):
+        enabled = (domain.findtext("enabled") or "1").strip()
+        name = (domain.findtext("domainname") or "").strip()
+        zone_type = (domain.findtext("type") or "primary").strip()
+        allow_update = (domain.findtext("allowrndcupdate") or "1").strip()
+        uuid = domain.attrib.get("uuid")
+        if uuid:
+            domains[uuid] = (name, enabled, zone_type)
+        if enabled == "1" and zone_type in {"primary", "reverse"} and allow_update == "1":
+            zones.add(name)
+
+    enabled_keys = {
+        key.attrib.get("uuid")
+        for key in plugin.findall("./tsig/keys/key")
+        if (key.findtext("enabled") or "1").strip() == "1"
+    }
+    reverse_zones = {
+        name for name, enabled, zone_type in domains.values()
+        if enabled == "1" and zone_type == "reverse"
+    }
+    for mapping in plugin.findall("./watcher/mappings/mapping"):
+        if (mapping.findtext("enabled") or "1").strip() != "1":
+            continue
+        if (mapping.findtext("tsigkey") or "").strip() not in enabled_keys:
+            continue
+        forward = domains.get((mapping.findtext("hostname_suffix") or "").strip())
+        if forward and forward[1:] == ("1", "primary"):
+            zones.add(forward[0])
+        reverse_uuid = (mapping.findtext("reverse_zone") or "").strip()
+        if reverse_uuid:
+            reverse = domains.get(reverse_uuid)
+            if reverse and reverse[1:] == ("1", "reverse"):
+                zones.add(reverse[0])
+        else:
+            zones.update(reverse_zones)
+
+    if strict and any(not valid_zone(zone) for zone in zones):
+        raise ValueError("invalid dynamic zone name in configuration")
+    return set(filter(valid_zone, zones))
 
 
 def watcher_zones():
