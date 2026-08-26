@@ -44,13 +44,14 @@ major upgrade.
 From an OPNsense root shell, configure the ABI-aware current channel:
 
 ```sh
-url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
 key=/usr/local/etc/pkg/keys/resolver-plugins.pub
 install -d -m 0755 "${key%/*}" /usr/local/etc/pkg/repos
-fetch -o "$key" "$url/resolver-plugins.pub"
+fetch -o "$key" "$fetch_url/resolver-plugins.pub"
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
 resolver-plugins: {
-  url: "$url",
+  url: "$repo_url",
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "$key",

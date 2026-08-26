@@ -4,6 +4,7 @@ set -eu
 
 readonly minimum_bind920_version=9.20.26
 readonly public_key_sha256=bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e
+readonly repository_base_url=https://resolver-plugins.github.io/repository/pkg
 readonly repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
 
 state_directory=
@@ -606,6 +607,11 @@ key_directory=${RP_PKG_KEYS_DIR:-/usr/local/etc/pkg/keys}
 mkdir -p "$repository_directory" "$key_directory"
 
 series_from_opnsense_version >/dev/null
+repository_abi=$("$pkg_command" config ABI) || fail 'could not determine the pkg ABI'
+case "$repository_abi" in
+    ''|*[!A-Za-z0-9._:+-]*) fail "invalid pkg ABI: ${repository_abi:-empty}" ;;
+esac
+repository_fetch_url="$repository_base_url/$repository_abi/latest"
 public_key="$key_directory/resolver-plugins.pub"
 if [ -n "${RP_TEMPORARY_DIRECTORY:-}" ]
 then
@@ -617,7 +623,7 @@ fi
 mkdir -p "$key_stage_directory"
 public_key_candidate="$key_stage_directory/resolver-plugins.pub"
 
-fetch -o "$public_key_candidate" "$repository_url/resolver-plugins.pub"
+fetch -o "$public_key_candidate" "$repository_fetch_url/resolver-plugins.pub"
 [ "$(sha256 -q "$public_key_candidate")" = "$public_key_sha256" ] || \
     fail 'resolver-plugins public-key fingerprint verification failed'
 install -m 0644 "$public_key_candidate" "$public_key"

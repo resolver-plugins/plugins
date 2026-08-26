@@ -74,6 +74,20 @@ def test_exact_legacy_repository_is_atomically_migrated(tmp_path, series):
     assert "manual migration" not in result.stderr
 
 
+def test_abi_aware_repository_is_left_unchanged_without_warning(tmp_path):
+    config = tmp_path / "resolver-plugins.conf"
+    original = repository_config(ABI_URL).encode()
+    config.write_bytes(original)
+    before = config.stat()
+
+    result = run_hook(config)
+
+    assert result.returncode == 0
+    assert config.read_bytes() == original
+    assert config.stat().st_ino == before.st_ino
+    assert result.stderr == ""
+
+
 @pytest.mark.parametrize(
     "contents",
     (

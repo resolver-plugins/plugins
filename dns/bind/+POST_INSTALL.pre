@@ -47,6 +47,15 @@ os_bind_rp_migrate_repository()
         return 0
     fi
 
+    os_bind_rp_write_repository "${os_bind_rp_repository_url}" \
+        > "${os_bind_rp_repository_temporary}"
+    if cmp "${os_bind_rp_repository_config}" \
+        "${os_bind_rp_repository_temporary}" >/dev/null 2>&1
+    then
+        rm -f "${os_bind_rp_repository_temporary}"
+        return 0
+    fi
+
     os_bind_rp_repository_legacy=no
     for os_bind_rp_repository_series in 26.1 26.7
     do

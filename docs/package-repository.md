@@ -44,14 +44,15 @@ Clients verify both using that public key.
 Configure the ABI-aware current plugin channel:
 
 ```sh
-base='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
 install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
-fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$base/resolver-plugins.pub"
+fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$fetch_url/resolver-plugins.pub"
 test "$(sha256 -q /usr/local/etc/pkg/keys/resolver-plugins.pub)" = \
   bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e || exit 1
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
 resolver-plugins: {
-  url: "$base",
+  url: "$repo_url",
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",

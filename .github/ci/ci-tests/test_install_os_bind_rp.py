@@ -178,6 +178,8 @@ if command == "version":
     left, right = args[-2:]
     comparison = (version_key(left) > version_key(right)) - (version_key(left) < version_key(right))
     print("<=>"[comparison + 1])
+elif command == "config" and args == ["ABI"]:
+    print(os.environ.get("RP_TEST_ABI", "FreeBSD:14:amd64"))
 elif command == "update":
     pass
 elif command == "rquery":
@@ -413,8 +415,12 @@ def test_installs_current_plugin_for_the_detected_series_without_service_changes
     )
     calls = log.read_text(encoding="utf-8")
     assert (
-        "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest/"
+        "https://resolver-plugins.github.io/repository/pkg/FreeBSD:14:amd64/latest/"
         "resolver-plugins.pub" in calls
+    )
+    assert (
+        "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest/"
+        "resolver-plugins.pub" not in calls
     )
     assert "releases/download/pkg-" not in calls
     assert "os-bind-rp-1.36_10" in calls
