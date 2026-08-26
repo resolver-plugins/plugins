@@ -393,7 +393,7 @@ def stage_channel_repository(
         packages, output, private_key, pkg_command, [provenance, build_metadata]
     )
     channel_manifest = {
-        "schema": 2,
+        "schema": 3,
         "series": metadata["series"],
         "package_abi": package_abi,
         "plugin_version": packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"),
@@ -603,25 +603,31 @@ def validate_channel_directory(directory: Path) -> None:
     base_channel_fields = {
         "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
     }
-    required_channel_fields = (
-        base_channel_fields
-        if schema == 1
-        else base_channel_fields | {"package_creator", "package_abi"}
-    )
+    if schema == 1:
+        required_channel_fields = base_channel_fields
+    elif schema == 2:
+        required_channel_fields = base_channel_fields | {"package_creator"}
+    else:
+        required_channel_fields = base_channel_fields | {"package_creator", "package_abi"}
     required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
     expected_bind = {
         field: provenance.get(field)
         for field in ("fingerprint", "freebsd_release", "architecture")
     }
     try:
-        package_abi = channel["package_abi"] if schema == 2 else None
+        if schema == 1:
+            package_abi = None
+        elif schema == 2:
+            package_abi = channel.get("package_creator", {}).get("abi")
+        else:
+            package_abi = channel["package_abi"]
         if package_abi is not None:
             abi_path(package_abi)
-    except (KeyError, ValueError) as error:
+    except (AttributeError, KeyError, ValueError) as error:
         raise ValueError("prior channel audit metadata is inconsistent") from error
     if (
         set(channel) != required_channel_fields
-        or schema not in {1, 2}
+        or schema not in {1, 2, 3}
         or channel["series"] != metadata["series"]
         or channel["plugin_version"]
         != packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg")
@@ -632,10 +638,13 @@ def validate_channel_directory(directory: Path) -> None:
         or channel["bind"] != expected_bind
         or any(value is None for value in expected_bind.values())
         or (
-            schema == 2
+            schema in {2, 3}
             and (
                 channel.get("package_creator") != provenance.get("package_creator")
-                or package_abi != channel.get("package_creator", {}).get("abi")
+                or (
+                    schema == 3
+                    and package_abi != channel.get("package_creator", {}).get("abi")
+                )
                 or metadata.get("pkg_creator")
                 != provenance.get("package_creator", {}).get("version")
                 or metadata.get("pkg_creator_sha256")

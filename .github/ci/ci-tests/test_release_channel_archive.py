@@ -331,7 +331,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 names,
             )
             manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
-            self.assertEqual(2, manifest["schema"])
+            self.assertEqual(3, manifest["schema"])
             self.assertEqual("26.7", manifest["series"])
             self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
             self.assertEqual("1.36_7", manifest["plugin_version"])
@@ -346,6 +346,13 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             )
             (root / "channel/resolver-plugins.pub").write_text("public key", encoding="utf-8")
             (root / "channel/packagesite.pkg").touch()
+            release_channel.validate_channel_directory(root / "channel")
+
+            legacy_v2_manifest = dict(manifest, schema=2)
+            legacy_v2_manifest.pop("package_abi")
+            (root / "channel/channel.json").write_text(
+                json.dumps(legacy_v2_manifest), encoding="utf-8"
+            )
             release_channel.validate_channel_directory(root / "channel")
 
             legacy_manifest = dict(manifest, schema=1)
