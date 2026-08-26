@@ -100,7 +100,11 @@ function bind_configure_do($verbose)
      * preventing a newly rendered base zone from being paired with an older
      * dynamic-update journal.
      */
-    configd_run('bind stop');
+    $stopStatus = mwexecf('/usr/local/opnsense/scripts/OPNsense/Bind/bindStop.py');
+    if ($stopStatus !== 0) {
+        service_log("BIND stop failed; configuration was not regenerated.\n", $verbose);
+        return;
+    }
     configd_run('template reload OPNsense/Bind');
     bind_generate_listen_config();
     mwexecf('/usr/local/opnsense/scripts/OPNsense/Bind/bindStart.sh');
