@@ -171,6 +171,15 @@ def test_public_verification_compares_all_static_bytes_before_installation():
     )
 
 
+def test_public_verification_uses_the_installed_freebsd_ca_bundle():
+    workflow = workflow_text()
+    verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
+
+    assert 'SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt' in verifier
+    assert 'test -r "$SSL_CERT_FILE"' in verifier
+    assert verifier.index('test -r "$SSL_CERT_FILE"') < verifier.index('verify-abi-endpoint')
+
+
 def test_publication_waits_for_current_and_snapshot_installability_in_freebsd():
     workflow = workflow_text()
     publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
