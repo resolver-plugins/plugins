@@ -20,6 +20,18 @@ SPEC.loader.exec_module(release_channel)
 
 
 class ChannelTagTest(unittest.TestCase):
+    def test_abi_path_uses_the_exact_freebsd_amd64_package_abi(self) -> None:
+        """A package ABI selects only its own ABI-indexed repository path."""
+        self.assertEqual(
+            "pkg/FreeBSD:15:amd64/latest",
+            release_channel.abi_path("FreeBSD:15:amd64"),
+        )
+
+    def test_abi_path_rejects_an_unsupported_architecture(self) -> None:
+        """An unsupported package ABI must not become a repository path."""
+        with self.assertRaisesRegex(ValueError, "invalid package ABI"):
+            release_channel.abi_path("FreeBSD:15:arm64")
+
     def test_package_release_title_names_current_and_archive_purpose(self) -> None:
         self.assertEqual("26.1-latest", release_channel.package_release_title("pkg-26.1"))
         self.assertEqual(
@@ -294,7 +306,11 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch.object(release_channel, "validate_channel_package_manifests"),
+                patch.object(
+                    release_channel,
+                    "validate_channel_package_manifests",
+                    return_value="FreeBSD:15:amd64",
+                ),
                 patch.object(release_channel.subprocess, "run", side_effect=fake_repo),
             ):
                 assets = release_channel.stage_channel_repository(
@@ -317,6 +333,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
             self.assertEqual(2, manifest["schema"])
             self.assertEqual("26.7", manifest["series"])
+            self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
             self.assertEqual("1.36_7", manifest["plugin_version"])
             self.assertEqual("0123456789abcdef", manifest["source_commit"])
             self.assertEqual("f" * 64, manifest["bind"]["fingerprint"])
@@ -333,6 +350,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
 
             legacy_manifest = dict(manifest, schema=1)
             legacy_manifest.pop("package_creator")
+            legacy_manifest.pop("package_abi")
             (root / "channel/channel.json").write_text(
                 json.dumps(legacy_manifest), encoding="utf-8"
             )
@@ -353,6 +371,84 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 legacy_metadata + "\n", encoding="utf-8"
             )
             release_channel.validate_channel_directory(root / "channel")
+
+    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self) -> None:
+        """A 26.7 channel cannot carry a FreeBSD 14 package set."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            packages = root / "packages"
+            packages.mkdir()
+            for name in (
+                "bind-tools-9.20.26_1.pkg",
+                "bind920-9.20.26_1.pkg",
+                "os-bind-rp-1.36_7.pkg",
+            ):
+                (packages / name).write_bytes(name.encode())
+            package_creator = {
+                "name": "pkg",
+                "version": "2.3.1_1",
+                "origin": "ports-mgmt/pkg",
+                "abi": "FreeBSD:15:amd64",
+                "filename": "pkg-2.3.1_1.pkg",
+                "sha256": "a" * 64,
+                "pkg_static_sha256": "b" * 64,
+            }
+            (packages / "bind920-provenance.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "fingerprint": "f" * 64,
+                        "series": "26.7",
+                        "freebsd_release": "15.1",
+                        "architecture": "x86_64",
+                        "package_creator": package_creator,
+                        "packages": {
+                            "bind-tools": {
+                                "name": "bind-tools", "version": "9.20.26_1",
+                                "origin": "dns/bind-tools", "filename": "bind-tools-9.20.26_1.pkg",
+                            },
+                            "bind920": {
+                                "name": "bind920", "version": "9.20.26_1",
+                                "origin": "dns/bind920", "filename": "bind920-9.20.26_1.pkg",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (packages / "build-metadata.txt").write_text(
+                "series=26.7\n"
+                "uname=FreeBSD test 15.1\n"
+                "pkg_abi=FreeBSD:15:amd64\n"
+                "bind920=9.20.26_1\n"
+                "bind_source=resolver\n"
+                "opnsense=26.7\n"
+                "opnsense_core_commit=2222222222222222222222222222222222222222\n"
+                "source_commit=0123456789abcdef\n"
+                "upstream_commit=1111111111111111111111111111111111111111\n"
+                "core_commit=2222222222222222222222222222222222222222\n"
+                "tools_tag=26.7\n"
+                "freebsd_release=15.1\n"
+                "pkg_creator=2.3.1_1\n"
+                "pkg_creator_sha256=" + "a" * 64 + "\n",
+                encoding="utf-8",
+            )
+            target_metadata = root / "target-pkg.json"
+            target_metadata.write_text(
+                json.dumps({"schema": 1, "series": {"26.1": dict(package_creator, abi="FreeBSD:14:amd64"), "26.7": package_creator}}),
+                encoding="utf-8",
+            )
+            key = root / "private.pem"
+            key.touch()
+            with patch.object(
+                release_channel,
+                "validate_channel_package_manifests",
+                return_value="FreeBSD:14:amd64",
+            ), patch.object(release_channel, "stage_selected_repository"):
+                with self.assertRaisesRegex(ValueError, "trusted target package profile"):
+                    release_channel.stage_channel_repository(
+                        packages, root / "channel", key, "pkg", target_metadata
+                    )
 
     def test_asset_order_puts_repository_metadata_after_packages(self) -> None:
         """Publishing a self-contained channel uploads packages before catalog metadata."""

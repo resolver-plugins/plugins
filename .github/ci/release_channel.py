@@ -25,6 +25,7 @@ DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)")
 PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
 PROVENANCE_NAME = "bind920-provenance.json"
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
+PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
     "series",
     "uname",
@@ -69,6 +70,13 @@ def source_release_tag(series: str, version: str) -> str:
     if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError("invalid package version")
     return f"os-bind-rp-{series}-{version}"
+
+
+def abi_path(abi: str) -> str:
+    """Return the ABI-indexed repository path for one supported package ABI."""
+    if not isinstance(abi, str) or PACKAGE_ABI_PATTERN.fullmatch(abi) is None:
+        raise ValueError("invalid package ABI")
+    return f"pkg/{abi}/latest"
 
 
 def package_release_title(tag: str) -> str:
@@ -208,7 +216,7 @@ def read_package_manifest(package: Path, pkg_command: str) -> dict[str, object]:
 
 def validate_channel_package_manifests(
     packages: list[Path], provenance_path: Path, pkg_command: str
-) -> None:
+) -> str:
     """Validate a self-contained package set against its BIND provenance."""
     if len(packages) != 3:
         raise ValueError("channel does not contain one BIND pair and one plugin")
@@ -242,6 +250,10 @@ def validate_channel_package_manifests(
         raise ValueError("plugin package records an exact BIND dependency")
     if read_package_manifest(packages[2], pkg_command).get("dep_formula") != "bind920 >= 9.20.26":
         raise ValueError("plugin package does not declare the required BIND dependency formula")
+    if common_abi is None:
+        raise ValueError("channel does not contain package ABIs")
+    abi_path(common_abi)
+    return common_abi
 
 
 def stage_selected_repository(
@@ -358,9 +370,8 @@ def stage_channel_repository(
         raise ValueError("BIND provenance is invalid") from error
     if bind_metadata.get("series") != metadata["series"]:
         raise ValueError("BIND provenance series does not match plugin build metadata")
-    package_creator = target_pkg.load_target(
-        target_pkg_metadata, metadata["series"]
-    ).record()
+    target_package = target_pkg.load_target(target_pkg_metadata, metadata["series"])
+    package_creator = target_package.record()
     records = read_bind_package_records(provenance)
     if (
         bind_metadata.get("freebsd_release") != metadata["freebsd_release"]
@@ -371,13 +382,16 @@ def stage_channel_repository(
         or metadata["pkg_creator_sha256"] != package_creator["sha256"]
     ):
         raise ValueError("BIND provenance does not match plugin build metadata")
-    validate_channel_package_manifests(packages, provenance, pkg_command)
+    package_abi = validate_channel_package_manifests(packages, provenance, pkg_command)
+    if package_abi != target_package.identity.abi:
+        raise ValueError("channel package ABI does not match the trusted target package profile")
     stage_selected_repository(
         packages, output, private_key, pkg_command, [provenance, build_metadata]
     )
     channel_manifest = {
         "schema": 2,
         "series": metadata["series"],
+        "package_abi": package_abi,
         "plugin_version": packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"),
         "source_commit": metadata["source_commit"],
         "build": {field: metadata[field] for field in sorted(required_build_fields)},
@@ -454,13 +468,21 @@ def validate_channel_directory(directory: Path) -> None:
         "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
     }
     required_channel_fields = (
-        base_channel_fields if schema == 1 else base_channel_fields | {"package_creator"}
+        base_channel_fields
+        if schema == 1
+        else base_channel_fields | {"package_creator", "package_abi"}
     )
     required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
     expected_bind = {
         field: provenance.get(field)
         for field in ("fingerprint", "freebsd_release", "architecture")
     }
+    try:
+        package_abi = channel["package_abi"] if schema == 2 else None
+        if package_abi is not None:
+            abi_path(package_abi)
+    except (KeyError, ValueError) as error:
+        raise ValueError("prior channel audit metadata is inconsistent") from error
     if (
         set(channel) != required_channel_fields
         or schema not in {1, 2}
@@ -477,6 +499,7 @@ def validate_channel_directory(directory: Path) -> None:
             schema == 2
             and (
                 channel.get("package_creator") != provenance.get("package_creator")
+                or package_abi != channel.get("package_creator", {}).get("abi")
                 or metadata.get("pkg_creator")
                 != provenance.get("package_creator", {}).get("version")
                 or metadata.get("pkg_creator_sha256")
