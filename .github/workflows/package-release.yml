@@ -644,6 +644,9 @@ jobs:
             pkg update -f
             python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             pkg install -y -r OPNsense opnsense os-bind
+            SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
+            export SSL_CERT_FILE
+            test -r "$SSL_CERT_FILE"
             install -d -m 0750 /conf
             if [ ! -e /conf/config.xml ]; then
               printf '%s\n' '<opnsense/>' > /conf/config.xml
