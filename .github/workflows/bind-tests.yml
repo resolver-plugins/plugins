@@ -5,6 +5,7 @@ on:
     paths:
       - 'dns/bind/**'
       - '.github/ci/**'
+      - '.resolver-plugins/target-pkg.json'
       - '.github/workflows/bind-tests.yml'
   workflow_call:
     inputs:
