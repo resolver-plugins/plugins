@@ -406,8 +406,17 @@ def test_installs_current_plugin_for_the_detected_series_without_service_changes
     result, log, repositories = run_installer(tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert "pkg-26.1" in (repositories / "resolver-plugins.conf").read_text(encoding="utf-8")
+    repository = (repositories / "resolver-plugins.conf").read_text(encoding="utf-8")
+    assert (
+        'url: "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest"'
+        in repository
+    )
     calls = log.read_text(encoding="utf-8")
+    assert (
+        "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest/"
+        "resolver-plugins.pub" in calls
+    )
+    assert "releases/download/pkg-" not in calls
     assert "os-bind-rp-1.36_10" in calls
     assert "resolver-plugins-bind920" not in calls
     assert "configctl" not in calls

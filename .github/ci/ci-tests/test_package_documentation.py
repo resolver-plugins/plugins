@@ -5,9 +5,9 @@ ROOT = Path(__file__).resolve().parents[3]
 USER_GUIDES = (ROOT / "README.md", ROOT / "docs/package-repository.md", ROOT / "docs/building.md")
 
 
-def test_user_guides_use_only_the_distribution_repository_for_package_channels():
+def test_user_guides_use_the_abi_aware_current_package_channel():
     text = "\n".join(path.read_text(encoding="utf-8") for path in USER_GUIDES)
-    assert "github.com/resolver-plugins/repository/releases/download/pkg-" in text
+    assert "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest" in text
     assert "resolver-plugins/plugins/releases/download/pkg-" not in text
     assert "pkg-<series>-bind920" not in text
     assert "pkg-$series-bind920" not in text
