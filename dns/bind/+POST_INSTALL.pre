@@ -94,3 +94,150 @@ os_bind_rp_migrate_repository()
 }
 
 os_bind_rp_migrate_repository
+
+set -eu
+
+BIND_PACKAGE_NAMED_RC=${BIND_PACKAGE_NAMED_RC:-/usr/local/etc/rc.d/named}
+BIND_PACKAGE_START=${BIND_PACKAGE_START:-/usr/local/opnsense/scripts/OPNsense/Bind/bindStart.sh}
+BIND_PACKAGE_ZONE_HELPER=${BIND_PACKAGE_ZONE_HELPER:-/usr/local/opnsense/scripts/OPNsense/Bind/bindPackageZones.py}
+BIND_PACKAGE_SNAPSHOT_PARENT=${BIND_PACKAGE_SNAPSHOT_PARENT:-/var/cache/bind}
+BIND_PACKAGE_MKTEMP=${BIND_PACKAGE_MKTEMP:-mktemp}
+bind_package_was_running=no
+bind_package_snapshot_dir=
+bind_package_zones_restored=yes
+
+bind_package_probe()
+{
+    if "${BIND_PACKAGE_NAMED_RC}" status >/dev/null 2>&1
+    then
+        bind_package_named_status=0
+    else
+        bind_package_named_status=$?
+    fi
+    case "${bind_package_named_status}" in
+        0|1)
+            return 0
+            ;;
+        *)
+            return "${bind_package_named_status}"
+            ;;
+    esac
+}
+
+bind_package_discard_snapshot()
+{
+    [ -n "${bind_package_snapshot_dir}" ] || return 0
+    if "${BIND_PACKAGE_ZONE_HELPER}" discard "${bind_package_snapshot_dir}"
+    then
+        bind_package_snapshot_dir=
+        return 0
+    fi
+    bind_package_discard_status=$?
+    echo "BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+    return "${bind_package_discard_status}"
+}
+
+bind_package_restore()
+{
+    [ "${bind_package_was_running}" = yes ] || return 0
+    if [ "${bind_package_zones_restored}" = no ]
+    then
+        if "${BIND_PACKAGE_ZONE_HELPER}" restore "${bind_package_snapshot_dir}"
+        then
+            bind_package_zones_restored=yes
+        else
+            bind_package_restore_status=$?
+            echo "BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+            return "${bind_package_restore_status}"
+        fi
+    fi
+    if bind_package_probe
+    then
+        :
+    else
+        return $?
+    fi
+    if [ "${bind_package_named_status}" -eq 0 ]
+    then
+        bind_package_was_running=no
+        bind_package_discard_snapshot
+        return $?
+    fi
+
+    if "${BIND_PACKAGE_START}"
+    then
+        bind_package_start_status=0
+    else
+        bind_package_start_status=$?
+    fi
+    if bind_package_probe
+    then
+        bind_package_probe_status=0
+        if [ "${bind_package_named_status}" -eq 0 ]
+        then
+            bind_package_was_running=no
+        fi
+    else
+        bind_package_probe_status=$?
+    fi
+    if [ "${bind_package_start_status}" -ne 0 ]
+    then
+        if [ "${bind_package_was_running}" = no ]
+        then
+            bind_package_discard_snapshot || true
+        fi
+        return "${bind_package_start_status}"
+    fi
+    if [ "${bind_package_probe_status}" -ne 0 ]
+    then
+        return "${bind_package_probe_status}"
+    fi
+    [ "${bind_package_named_status}" -eq 0 ] || return 1
+    bind_package_discard_snapshot
+    return $?
+}
+
+bind_package_cleanup()
+{
+    bind_package_status=$?
+    trap - EXIT HUP INT TERM
+    set +e
+    bind_package_restore
+    bind_package_restore_status=$?
+    if [ "${bind_package_status}" -eq 0 ] && [ "${bind_package_restore_status}" -ne 0 ]
+    then
+        bind_package_status=${bind_package_restore_status}
+    fi
+    exit "${bind_package_status}"
+}
+
+trap bind_package_cleanup EXIT
+trap 'exit 128' HUP INT TERM
+
+if bind_package_probe
+then
+    :
+else
+    exit $?
+fi
+case "${bind_package_named_status}" in
+    0)
+        bind_package_was_running=yes
+        bind_package_snapshot_dir=$("${BIND_PACKAGE_MKTEMP}" -d \
+            "${BIND_PACKAGE_SNAPSHOT_PARENT%/}/os-bind-rp-package.XXXXXX")
+        if "${BIND_PACKAGE_ZONE_HELPER}" prepare "${bind_package_snapshot_dir}"
+        then
+            bind_package_zones_restored=no
+        else
+            bind_package_prepare_status=$?
+            if ! rmdir "${bind_package_snapshot_dir}" 2>/dev/null
+            then
+                echo "incomplete BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+            fi
+            bind_package_snapshot_dir=
+            exit "${bind_package_prepare_status}"
+        fi
+        ;;
+    1)
+        ;;
+esac
