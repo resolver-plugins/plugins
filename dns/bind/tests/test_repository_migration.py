@@ -36,7 +36,11 @@ def repository_config(
 def run_hook(config):
     return subprocess.run(
         ["/bin/sh", str(HOOK)],
-        env=os.environ | {"OS_BIND_RP_REPOSITORY_CONFIG": str(config)},
+        env=os.environ
+        | {
+            "OS_BIND_RP_REPOSITORY_CONFIG": str(config),
+            "BIND_PACKAGE_NAMED_RC": "/usr/bin/false",
+        },
         text=True,
         capture_output=True,
         check=False,
