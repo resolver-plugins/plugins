@@ -22,11 +22,94 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 
 class ListenerLifecycleTest(unittest.TestCase):
+    def run_configure(self, stop_status):
+        bind_root = Path(__file__).resolve().parents[1]
+        plugin = bind_root / "src/etc/inc/plugins.inc.d/bind.inc"
+
+        with tempfile.TemporaryDirectory(dir=bind_root) as directory:
+            temporary = Path(directory)
+            events = temporary / "events"
+            harness = temporary / "configure.php"
+            harness.write_text(
+                """<?php
+namespace OPNsense\\Bind {
+    class General {
+        public $enabled = '1';
+        public $active_interface = '';
+        public $port = '53';
+    }
+}
+namespace {
+    function test_event($event) {
+        file_put_contents(getenv('TEST_EVENTS'), $event . "\\n", FILE_APPEND);
+    }
+    function mwexecf($command) {
+        test_event($command);
+        if (str_ends_with($command, '/bindStop.py')) {
+            return (int)getenv('TEST_STOP_STATUS');
+        }
+        return 0;
+    }
+    function configd_run($command) {
+        test_event($command);
+        return '';
+    }
+    function service_log($message, $verbose) {}
+    function killbypid($pidfile) {}
+    require $argv[1];
+    bind_configure_do(false);
+}
+"""
+            )
+
+            result = subprocess.run(
+                [
+                    "php",
+                    "-d",
+                    f"open_basedir={bind_root}:{temporary}",
+                    harness,
+                    plugin,
+                ],
+                env=os.environ | {
+                    "TEST_EVENTS": str(events),
+                    "TEST_STOP_STATUS": str(stop_status),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            return result, events.read_text().splitlines()
+
+    def test_stop_failure_prevents_render_and_start(self):
+        result, events = self.run_configure(42)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            events,
+            ["/usr/local/opnsense/scripts/OPNsense/Bind/bindStop.py"],
+        )
+
+    def test_successful_stop_renders_then_starts(self):
+        result, events = self.run_configure(0)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            events,
+            [
+                "/usr/local/opnsense/scripts/OPNsense/Bind/bindStop.py",
+                "template reload OPNsense/Bind",
+                "/usr/local/opnsense/scripts/OPNsense/Bind/bindStart.sh",
+            ],
+        )
+
     def test_start_and_restart_render_selected_listener_interfaces(self):
         bind_root = Path(__file__).resolve().parents[1]
         plugin = (bind_root / "src/etc/inc/plugins.inc.d/bind.inc").read_text()
