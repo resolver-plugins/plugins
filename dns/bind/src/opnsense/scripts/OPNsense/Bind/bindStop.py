@@ -210,10 +210,22 @@ def stop_named():
     except OSError as error:
         log(syslog.LOG_ERR, f"unable to stop named: {error}")
         return False
-    if result.returncode:
-        log(syslog.LOG_ERR, f"named stop failed with exit status {result.returncode}")
+    if result.returncode == 0:
+        return True
+    try:
+        status = subprocess.run([NAMED_RC, "status"], check=False)
+    except OSError as error:
+        log(syslog.LOG_ERR, f"unable to verify named status: {error}")
         return False
-    return True
+    if status.returncode == 1:
+        log(syslog.LOG_NOTICE, "named was already stopped")
+        return True
+    log(
+        syslog.LOG_ERR,
+        f"named stop failed with exit status {result.returncode}; "
+        f"status exited {status.returncode}",
+    )
+    return False
 
 
 def main():
