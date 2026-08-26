@@ -24,6 +24,7 @@ def test_workflow_runs_only_for_relevant_pull_request_changes():
     assert 'pull_request_target:' not in workflow
     assert "- 'dns/bind/**'" in workflow
     assert "- '.github/ci/**'" in workflow
+    assert "- '.resolver-plugins/target-pkg.json'" in workflow
     assert "- '.github/workflows/bind-tests.yml'" in workflow
 
 
