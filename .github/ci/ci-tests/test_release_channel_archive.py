@@ -20,6 +20,18 @@ SPEC.loader.exec_module(release_channel)
 
 
 class ChannelTagTest(unittest.TestCase):
+    def test_abi_path_uses_the_exact_freebsd_amd64_package_abi(self) -> None:
+        """A package ABI selects only its own ABI-indexed repository path."""
+        self.assertEqual(
+            "pkg/FreeBSD:15:amd64/latest",
+            release_channel.abi_path("FreeBSD:15:amd64"),
+        )
+
+    def test_abi_path_rejects_an_unsupported_architecture(self) -> None:
+        """An unsupported package ABI must not become a repository path."""
+        with self.assertRaisesRegex(ValueError, "invalid package ABI"):
+            release_channel.abi_path("FreeBSD:15:arm64")
+
     def test_package_release_title_names_current_and_archive_purpose(self) -> None:
         self.assertEqual("26.1-latest", release_channel.package_release_title("pkg-26.1"))
         self.assertEqual(
@@ -294,7 +306,11 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with (
-                patch.object(release_channel, "validate_channel_package_manifests"),
+                patch.object(
+                    release_channel,
+                    "validate_channel_package_manifests",
+                    return_value="FreeBSD:15:amd64",
+                ),
                 patch.object(release_channel.subprocess, "run", side_effect=fake_repo),
             ):
                 assets = release_channel.stage_channel_repository(
@@ -317,6 +333,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
             self.assertEqual(2, manifest["schema"])
             self.assertEqual("26.7", manifest["series"])
+            self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
             self.assertEqual("1.36_7", manifest["plugin_version"])
             self.assertEqual("0123456789abcdef", manifest["source_commit"])
             self.assertEqual("f" * 64, manifest["bind"]["fingerprint"])
@@ -333,6 +350,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
 
             legacy_manifest = dict(manifest, schema=1)
             legacy_manifest.pop("package_creator")
+            legacy_manifest.pop("package_abi")
             (root / "channel/channel.json").write_text(
                 json.dumps(legacy_manifest), encoding="utf-8"
             )
@@ -353,6 +371,84 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 legacy_metadata + "\n", encoding="utf-8"
             )
             release_channel.validate_channel_directory(root / "channel")
+
+    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self) -> None:
+        """A 26.7 channel cannot carry a FreeBSD 14 package set."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            packages = root / "packages"
+            packages.mkdir()
+            for name in (
+                "bind-tools-9.20.26_1.pkg",
+                "bind920-9.20.26_1.pkg",
+                "os-bind-rp-1.36_7.pkg",
+            ):
+                (packages / name).write_bytes(name.encode())
+            package_creator = {
+                "name": "pkg",
+                "version": "2.3.1_1",
+                "origin": "ports-mgmt/pkg",
+                "abi": "FreeBSD:15:amd64",
+                "filename": "pkg-2.3.1_1.pkg",
+                "sha256": "a" * 64,
+                "pkg_static_sha256": "b" * 64,
+            }
+            (packages / "bind920-provenance.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "fingerprint": "f" * 64,
+                        "series": "26.7",
+                        "freebsd_release": "15.1",
+                        "architecture": "x86_64",
+                        "package_creator": package_creator,
+                        "packages": {
+                            "bind-tools": {
+                                "name": "bind-tools", "version": "9.20.26_1",
+                                "origin": "dns/bind-tools", "filename": "bind-tools-9.20.26_1.pkg",
+                            },
+                            "bind920": {
+                                "name": "bind920", "version": "9.20.26_1",
+                                "origin": "dns/bind920", "filename": "bind920-9.20.26_1.pkg",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (packages / "build-metadata.txt").write_text(
+                "series=26.7\n"
+                "uname=FreeBSD test 15.1\n"
+                "pkg_abi=FreeBSD:15:amd64\n"
+                "bind920=9.20.26_1\n"
+                "bind_source=resolver\n"
+                "opnsense=26.7\n"
+                "opnsense_core_commit=2222222222222222222222222222222222222222\n"
+                "source_commit=0123456789abcdef\n"
+                "upstream_commit=1111111111111111111111111111111111111111\n"
+                "core_commit=2222222222222222222222222222222222222222\n"
+                "tools_tag=26.7\n"
+                "freebsd_release=15.1\n"
+                "pkg_creator=2.3.1_1\n"
+                "pkg_creator_sha256=" + "a" * 64 + "\n",
+                encoding="utf-8",
+            )
+            target_metadata = root / "target-pkg.json"
+            target_metadata.write_text(
+                json.dumps({"schema": 1, "series": {"26.1": dict(package_creator, abi="FreeBSD:14:amd64"), "26.7": package_creator}}),
+                encoding="utf-8",
+            )
+            key = root / "private.pem"
+            key.touch()
+            with patch.object(
+                release_channel,
+                "validate_channel_package_manifests",
+                return_value="FreeBSD:14:amd64",
+            ), patch.object(release_channel, "stage_selected_repository"):
+                with self.assertRaisesRegex(ValueError, "trusted target package profile"):
+                    release_channel.stage_channel_repository(
+                        packages, root / "channel", key, "pkg", target_metadata
+                    )
 
     def test_asset_order_puts_repository_metadata_after_packages(self) -> None:
         """Publishing a self-contained channel uploads packages before catalog metadata."""
@@ -380,6 +476,128 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 ],
                 [path.name for path in release_channel.asset_order(directory)],
             )
+
+
+class AbiStaticPublicationTest(unittest.TestCase):
+    def _channel(self, root: Path) -> Path:
+        channel = root / "channel"
+        channel.mkdir()
+        (channel / "channel.json").write_text(
+            json.dumps({"package_abi": "FreeBSD:15:amd64"}), encoding="utf-8"
+        )
+        (channel / "meta.conf").write_bytes(b"meta")
+        (channel / "packagesite.pkg").write_bytes(b"catalogue")
+        (channel / "os-bind-rp-1.36_7.pkg").write_bytes(b"package")
+        return channel
+
+    def test_publication_replaces_only_the_channel_declared_abi_path(self) -> None:
+        """A static publish cannot remove another ABI or retain stale same-ABI bytes."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            channel = self._channel(root)
+            old_head = "1" * 40
+            calls: list[tuple[list[str], object | None]] = []
+            blob_number = 0
+
+            def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal blob_number
+                payload = json.loads(str(kwargs["input"])) if kwargs.get("input") else None
+                calls.append((command, payload))
+                endpoint = command[-1]
+                method = command[command.index("--method") + 1] if "--method" in command else "GET"
+                if endpoint.endswith("/git/ref/heads/gh-pages") and method == "GET":
+                    response = {"object": {"sha": old_head}}
+                elif endpoint.endswith(f"/git/commits/{old_head}"):
+                    response = {"tree": {"sha": "2" * 40}}
+                elif endpoint.endswith("/git/trees/" + "2" * 40 + "?recursive=1"):
+                    response = {
+                        "truncated": False,
+                        "tree": [
+                            {"path": "pages-health", "mode": "100644", "type": "blob", "sha": "3" * 40},
+                            {"path": "pkg/FreeBSD:14:amd64/latest/meta.conf", "mode": "100644", "type": "blob", "sha": "4" * 40},
+                            {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": "5" * 40},
+                        ],
+                    }
+                elif endpoint.endswith("/git/blobs"):
+                    blob_number += 1
+                    response = {"sha": f"{blob_number + 5:x}" * 40}
+                elif endpoint.endswith("/git/trees"):
+                    response = {"sha": "a" * 40}
+                elif endpoint.endswith("/git/commits"):
+                    response = {"sha": "b" * 40}
+                elif endpoint.endswith("/git/refs/heads/gh-pages") and method == "PATCH":
+                    response = {"object": {"sha": "b" * 40}}
+                else:  # pragma: no cover - makes unexpected API calls diagnostic
+                    raise AssertionError(command)
+                return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+            with (
+                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
+            ):
+                release_channel.publish_abi_channel(
+                    "resolver-plugins/repository", channel, root / "recovery"
+                )
+
+            tree_payload = next(
+                payload
+                for command, payload in calls
+                if command[-1].endswith("/git/trees") and payload is not None
+            )
+            assert isinstance(tree_payload, dict)
+            changes = tree_payload["tree"]
+            self.assertIn(
+                {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": None},
+                changes,
+            )
+            self.assertFalse(
+                any(change["path"].startswith("pkg/FreeBSD:14:amd64/") for change in changes)
+            )
+            self.assertEqual(
+                {f"pkg/FreeBSD:15:amd64/latest/{path.name}" for path in channel.iterdir()},
+                {change["path"] for change in changes if change.get("sha") is not None},
+            )
+            self.assertEqual(old_head + "\n", (root / "recovery/gh-pages-head.txt").read_text())
+
+    def test_publication_rejects_a_changed_head_before_ref_update(self) -> None:
+        """A concurrent gh-pages publisher must win instead of losing its update."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            channel = self._channel(root)
+            heads = iter(("1" * 40, "9" * 40))
+            ref_updates: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                endpoint = command[-1]
+                method = command[command.index("--method") + 1] if "--method" in command else "GET"
+                if endpoint.endswith("/git/ref/heads/gh-pages") and method == "GET":
+                    response = {"object": {"sha": next(heads)}}
+                elif endpoint.endswith("/git/commits/" + "1" * 40):
+                    response = {"tree": {"sha": "2" * 40}}
+                elif endpoint.endswith("/git/trees/" + "2" * 40 + "?recursive=1"):
+                    response = {"truncated": False, "tree": []}
+                elif endpoint.endswith("/git/blobs"):
+                    response = {"sha": "6" * 40}
+                elif endpoint.endswith("/git/trees"):
+                    response = {"sha": "7" * 40}
+                elif endpoint.endswith("/git/commits"):
+                    response = {"sha": "8" * 40}
+                elif method == "PATCH":
+                    ref_updates.append(command)
+                    response = {}
+                else:  # pragma: no cover
+                    raise AssertionError(command)
+                return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+            with (
+                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
+                self.assertRaisesRegex(RuntimeError, "gh-pages head changed"),
+            ):
+                release_channel.publish_abi_channel(
+                    "resolver-plugins/repository", channel, root / "recovery"
+                )
+            self.assertEqual([], ref_updates)
 
 
 class PublicationRecoveryTest(unittest.TestCase):

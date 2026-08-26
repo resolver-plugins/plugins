@@ -1,0 +1,96 @@
+os_bind_rp_repository_config=${OS_BIND_RP_REPOSITORY_CONFIG:-/usr/local/etc/pkg/repos/resolver-plugins.conf}
+os_bind_rp_repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+
+os_bind_rp_repository_warning()
+{
+    printf '%s\n' \
+        "WARNING: resolver-plugins.conf was not changed; manual migration: set its URL to ${os_bind_rp_repository_url} after reviewing the custom repository configuration." >&2
+}
+
+os_bind_rp_write_repository()
+{
+    os_bind_rp_write_url=$1
+    printf '%s\n' 'resolver-plugins: {'
+    printf '  url: "%s",\n' "${os_bind_rp_write_url}"
+    printf '%s\n' '  mirror_type: "none",'
+    printf '%s\n' '  signature_type: "pubkey",'
+    printf '%s\n' '  pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",'
+    printf '%s\n' '  enabled: yes'
+    printf '%s\n' '}'
+}
+
+os_bind_rp_migrate_repository()
+{
+    if [ -L "${os_bind_rp_repository_config}" ] || \
+        [ ! -f "${os_bind_rp_repository_config}" ]
+    then
+        os_bind_rp_repository_warning
+        return 0
+    fi
+
+    case "${os_bind_rp_repository_config}" in
+        */*)
+            os_bind_rp_repository_directory=${os_bind_rp_repository_config%/*}
+            os_bind_rp_repository_name=${os_bind_rp_repository_config##*/}
+            ;;
+        *)
+            os_bind_rp_repository_directory=.
+            os_bind_rp_repository_name=${os_bind_rp_repository_config}
+            ;;
+    esac
+    if os_bind_rp_repository_temporary=$(mktemp \
+        "${os_bind_rp_repository_directory}/.${os_bind_rp_repository_name}.XXXXXX")
+    then
+        :
+    else
+        os_bind_rp_repository_warning
+        return 0
+    fi
+
+    os_bind_rp_write_repository "${os_bind_rp_repository_url}" \
+        > "${os_bind_rp_repository_temporary}"
+    if cmp "${os_bind_rp_repository_config}" \
+        "${os_bind_rp_repository_temporary}" >/dev/null 2>&1
+    then
+        rm -f "${os_bind_rp_repository_temporary}"
+        return 0
+    fi
+
+    os_bind_rp_repository_legacy=no
+    for os_bind_rp_repository_series in 26.1 26.7
+    do
+        os_bind_rp_write_repository \
+            "https://github.com/resolver-plugins/repository/releases/download/pkg-${os_bind_rp_repository_series}" \
+            > "${os_bind_rp_repository_temporary}"
+        if cmp "${os_bind_rp_repository_config}" \
+            "${os_bind_rp_repository_temporary}" >/dev/null 2>&1
+        then
+            os_bind_rp_repository_legacy=yes
+            break
+        fi
+    done
+
+    if [ "${os_bind_rp_repository_legacy}" != yes ]
+    then
+        rm -f "${os_bind_rp_repository_temporary}"
+        os_bind_rp_repository_warning
+        return 0
+    fi
+
+    if cp -p "${os_bind_rp_repository_config}" \
+        "${os_bind_rp_repository_temporary}" && \
+        os_bind_rp_write_repository "${os_bind_rp_repository_url}" \
+            > "${os_bind_rp_repository_temporary}" && \
+        mv -f "${os_bind_rp_repository_temporary}" \
+            "${os_bind_rp_repository_config}"
+    then
+        os_bind_rp_repository_temporary=
+        return 0
+    fi
+
+    rm -f "${os_bind_rp_repository_temporary}"
+    os_bind_rp_repository_warning
+    return 0
+}
+
+os_bind_rp_migrate_repository

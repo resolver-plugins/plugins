@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import shutil
@@ -11,6 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 
@@ -25,6 +29,7 @@ DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)")
 PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
 PROVENANCE_NAME = "bind920-provenance.json"
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
+PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
     "series",
     "uname",
@@ -69,6 +74,13 @@ def source_release_tag(series: str, version: str) -> str:
     if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError("invalid package version")
     return f"os-bind-rp-{series}-{version}"
+
+
+def abi_path(abi: str) -> str:
+    """Return the ABI-indexed repository path for one supported package ABI."""
+    if not isinstance(abi, str) or PACKAGE_ABI_PATTERN.fullmatch(abi) is None:
+        raise ValueError("invalid package ABI")
+    return f"pkg/{abi}/latest"
 
 
 def package_release_title(tag: str) -> str:
@@ -208,7 +220,7 @@ def read_package_manifest(package: Path, pkg_command: str) -> dict[str, object]:
 
 def validate_channel_package_manifests(
     packages: list[Path], provenance_path: Path, pkg_command: str
-) -> None:
+) -> str:
     """Validate a self-contained package set against its BIND provenance."""
     if len(packages) != 3:
         raise ValueError("channel does not contain one BIND pair and one plugin")
@@ -242,6 +254,10 @@ def validate_channel_package_manifests(
         raise ValueError("plugin package records an exact BIND dependency")
     if read_package_manifest(packages[2], pkg_command).get("dep_formula") != "bind920 >= 9.20.26":
         raise ValueError("plugin package does not declare the required BIND dependency formula")
+    if common_abi is None:
+        raise ValueError("channel does not contain package ABIs")
+    abi_path(common_abi)
+    return common_abi
 
 
 def stage_selected_repository(
@@ -358,9 +374,8 @@ def stage_channel_repository(
         raise ValueError("BIND provenance is invalid") from error
     if bind_metadata.get("series") != metadata["series"]:
         raise ValueError("BIND provenance series does not match plugin build metadata")
-    package_creator = target_pkg.load_target(
-        target_pkg_metadata, metadata["series"]
-    ).record()
+    target_package = target_pkg.load_target(target_pkg_metadata, metadata["series"])
+    package_creator = target_package.record()
     records = read_bind_package_records(provenance)
     if (
         bind_metadata.get("freebsd_release") != metadata["freebsd_release"]
@@ -371,13 +386,16 @@ def stage_channel_repository(
         or metadata["pkg_creator_sha256"] != package_creator["sha256"]
     ):
         raise ValueError("BIND provenance does not match plugin build metadata")
-    validate_channel_package_manifests(packages, provenance, pkg_command)
+    package_abi = validate_channel_package_manifests(packages, provenance, pkg_command)
+    if package_abi != target_package.identity.abi:
+        raise ValueError("channel package ABI does not match the trusted target package profile")
     stage_selected_repository(
         packages, output, private_key, pkg_command, [provenance, build_metadata]
     )
     channel_manifest = {
         "schema": 2,
         "series": metadata["series"],
+        "package_abi": package_abi,
         "plugin_version": packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"),
         "source_commit": metadata["source_commit"],
         "build": {field: metadata[field] for field in sorted(required_build_fields)},
@@ -433,6 +451,138 @@ def directory_checksums(directory: Path) -> dict[str, str]:
     }
 
 
+def gh_api(endpoint: str, *, method: str = "GET", payload: object | None = None) -> object:
+    """Call one Git Data API endpoint with the workflow's scoped App token."""
+    command = ["gh", "api"]
+    if method != "GET":
+        command.extend(("--method", method))
+    input_text = None
+    if payload is not None:
+        command.extend(("--input", "-"))
+        input_text = json.dumps(payload, separators=(",", ":"))
+    command.append(endpoint)
+    result = subprocess.run(command, text=True, capture_output=True, input=input_text)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"GitHub API request failed: {endpoint}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"GitHub API returned invalid JSON: {endpoint}") from error
+
+
+def _object_sha(payload: object, *path: str) -> str:
+    value = payload
+    for component in path:
+        if not isinstance(value, dict):
+            raise RuntimeError("GitHub API response is missing an object SHA")
+        value = value.get(component)
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise RuntimeError("GitHub API response is missing an object SHA")
+    return value
+
+
+def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> None:
+    """Replace one ABI subtree and compare-and-advance the gh-pages branch."""
+    validate_channel_directory(directory)
+    try:
+        channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
+        target = abi_path(channel["package_abi"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("static channel audit metadata is invalid") from error
+    assets = sorted(directory.iterdir(), key=lambda path: path.name)
+    if not assets or any(not path.is_file() for path in assets):
+        raise ValueError("static channel must contain only flat assets")
+
+    ref_endpoint = f"repos/{repository}/git/ref/heads/gh-pages"
+    update_ref_endpoint = f"repos/{repository}/git/refs/heads/gh-pages"
+    old_head = _object_sha(gh_api(ref_endpoint), "object", "sha")
+    old_tree = _object_sha(
+        gh_api(f"repos/{repository}/git/commits/{old_head}"), "tree", "sha"
+    )
+    tree_payload = gh_api(f"repos/{repository}/git/trees/{old_tree}?recursive=1")
+    if not isinstance(tree_payload, dict) or tree_payload.get("truncated") is not False:
+        raise RuntimeError("cannot read the complete gh-pages tree")
+    entries = tree_payload.get("tree")
+    if not isinstance(entries, list):
+        raise RuntimeError("cannot read the gh-pages tree")
+
+    prefix = target + "/"
+    replacement_paths = {prefix + asset.name for asset in assets}
+    changes: list[dict[str, object]] = []
+    for entry in entries:
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("path"), str)
+            and entry["path"].startswith(prefix)
+            and entry["path"] not in replacement_paths
+            and entry.get("type") == "blob"
+        ):
+            changes.append(
+                {"path": entry["path"], "mode": "100644", "type": "blob", "sha": None}
+            )
+    for asset in assets:
+        blob = gh_api(
+            f"repos/{repository}/git/blobs",
+            method="POST",
+            payload={
+                "content": base64.b64encode(asset.read_bytes()).decode("ascii"),
+                "encoding": "base64",
+            },
+        )
+        changes.append(
+            {
+                "path": prefix + asset.name,
+                "mode": "100644",
+                "type": "blob",
+                "sha": _object_sha(blob, "sha"),
+            }
+        )
+    new_tree = _object_sha(
+        gh_api(
+            f"repos/{repository}/git/trees",
+            method="POST",
+            payload={"base_tree": old_tree, "tree": changes},
+        ),
+        "sha",
+    )
+    new_commit = _object_sha(
+        gh_api(
+            f"repos/{repository}/git/commits",
+            method="POST",
+            payload={
+                "message": f"Publish package channel {channel['package_abi']}",
+                "tree": new_tree,
+                "parents": [old_head],
+            },
+        ),
+        "sha",
+    )
+    recovery.mkdir(parents=True, exist_ok=True)
+    (recovery / "gh-pages-head.txt").write_text(old_head + "\n", encoding="ascii")
+    current_head = _object_sha(gh_api(ref_endpoint), "object", "sha")
+    if current_head != old_head:
+        raise RuntimeError("gh-pages head changed during static publication")
+    gh_api(update_ref_endpoint, method="PATCH", payload={"sha": new_commit, "force": False})
+
+
+def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
+    """Require every expected static channel asset to match its public bytes."""
+    validate_channel_directory(expected_channel)
+    assets = sorted(expected_channel.iterdir(), key=lambda path: path.name)
+    if not assets or any(not path.is_file() for path in assets):
+        raise ValueError("static channel must contain only flat assets")
+    base_url = url.rstrip("/") + "/"
+    for asset in assets:
+        asset_url = urllib.parse.urljoin(base_url, urllib.parse.quote(asset.name))
+        try:
+            with urllib.request.urlopen(asset_url, timeout=30) as response:
+                published = response.read()
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError(f"cannot fetch static channel asset: {asset.name}") from error
+        if published != asset.read_bytes():
+            raise RuntimeError(f"static channel asset has unexpected bytes: {asset.name}")
+
+
 def validate_channel_directory(directory: Path) -> None:
     """Reject malformed recovery bytes before mutating the current channel."""
     packages = select_channel_packages(directory)
@@ -454,13 +604,21 @@ def validate_channel_directory(directory: Path) -> None:
         "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
     }
     required_channel_fields = (
-        base_channel_fields if schema == 1 else base_channel_fields | {"package_creator"}
+        base_channel_fields
+        if schema == 1
+        else base_channel_fields | {"package_creator", "package_abi"}
     )
     required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
     expected_bind = {
         field: provenance.get(field)
         for field in ("fingerprint", "freebsd_release", "architecture")
     }
+    try:
+        package_abi = channel["package_abi"] if schema == 2 else None
+        if package_abi is not None:
+            abi_path(package_abi)
+    except (KeyError, ValueError) as error:
+        raise ValueError("prior channel audit metadata is inconsistent") from error
     if (
         set(channel) != required_channel_fields
         or schema not in {1, 2}
@@ -477,6 +635,7 @@ def validate_channel_directory(directory: Path) -> None:
             schema == 2
             and (
                 channel.get("package_creator") != provenance.get("package_creator")
+                or package_abi != channel.get("package_creator", {}).get("abi")
                 or metadata.get("pkg_creator")
                 != provenance.get("package_creator", {}).get("version")
                 or metadata.get("pkg_creator_sha256")
@@ -1041,6 +1200,13 @@ def main() -> None:
     publish_channels_parser.add_argument("--repository", required=True)
     publish_channels_parser.add_argument("--recovery", type=Path, required=True)
     publish_channels_parser.add_argument("--channel", type=parse_channel, action="append", required=True)
+    publish_abi = commands.add_parser("publish-abi-channel")
+    publish_abi.add_argument("--repository", required=True)
+    publish_abi.add_argument("--directory", type=Path, required=True)
+    publish_abi.add_argument("--recovery", type=Path, required=True)
+    verify_abi = commands.add_parser("verify-abi-endpoint")
+    verify_abi.add_argument("--url", required=True)
+    verify_abi.add_argument("--expected-channel", type=Path, required=True)
     prune = commands.add_parser("prune-snapshots")
     prune.add_argument("--repository", required=True)
     prune.add_argument("--series", required=True)
@@ -1110,6 +1276,10 @@ def main() -> None:
         )
     elif arguments.command == "publish-channels":
         publish_channels(arguments.repository, arguments.channel, arguments.recovery)
+    elif arguments.command == "publish-abi-channel":
+        publish_abi_channel(arguments.repository, arguments.directory, arguments.recovery)
+    elif arguments.command == "verify-abi-endpoint":
+        verify_abi_endpoint(arguments.url, arguments.expected_channel)
     elif arguments.command == "prune-snapshots":
         prune_snapshots(arguments.repository, arguments.series, arguments.keep)
     elif arguments.command == "mark-latest-package-channel":

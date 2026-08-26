@@ -10,7 +10,7 @@ package. They conflict and must not be installed together. The current package
 build requires OPNsense `26.1.11_10` or newer, which includes the BIND fix
 needed for DNS-over-TLS operation.
 
-Packages are published through signed GitHub Release channels. Maintainers
+Packages are published through a signed, ABI-aware package channel. Maintainers
 should start with the [maintainer documentation](docs/README.md).
 
 Custom BIND functionality
@@ -34,24 +34,29 @@ These additions are implemented for both supported OPNsense release series:
 Installing os-bind-rp
 =====================
 
-`os-bind-rp` has package channels for the OPNsense 26.1 and 26.7 release
-series. Select the channel that matches the first two components of the
-installed OPNsense version. Do not install it alongside the official `os-bind`
-plugin: the two packages conflict by design. The normal channel is
-self-contained and includes the `bind920`/`bind-tools` pair used to build the
-current plugin.
+`os-bind-rp` supports OPNsense 26.1 and 26.7. Do not install it alongside the
+official `os-bind` plugin: the two packages conflict by design. The normal
+channel is self-contained and includes the `bind920`/`bind-tools` pair used to
+build the current plugin. `pkg` expands `${ABI}`, so this one repository URL
+selects the compatible FreeBSD 14 or FreeBSD 15 catalogue across an OPNsense
+major upgrade.
 
-From an OPNsense root shell, set the supported `major.minor` release series and
-configure its current channel:
+From an OPNsense root shell, configure the ABI-aware current channel:
 
 ```sh
-series=26.1
-url="https://github.com/resolver-plugins/repository/releases/download/pkg-$series"
+repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
 key=/usr/local/etc/pkg/keys/resolver-plugins.pub
 install -d -m 0755 "${key%/*}" /usr/local/etc/pkg/repos
-fetch -o "$key" "$url/resolver-plugins.pub"
+fetch -o "$key" "$fetch_url/resolver-plugins.pub"
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
-resolver-plugins: { url: "$url", signature_type: "pubkey", pubkey: "$key", enabled: yes }
+resolver-plugins: {
+  url: "$repo_url",
+  mirror_type: "none",
+  signature_type: "pubkey",
+  pubkey: "$key",
+  enabled: yes
+}
 EOF
 pkg update -r resolver-plugins && pkg install os-bind-rp
 ```
@@ -73,13 +78,16 @@ OPNsense series, an install or upgrade briefly stops an already-running BIND
 service before regenerating managed zone files and restarts it afterward. A
 service that was stopped remains stopped.
 
-The repository catalogue and package are signed by the public key above. A
-future release for the same OPNsense series updates the same `pkg-<series>`
-channel, so normal `pkg upgrade` operations can receive it. The signed
-`pkg-<series>-os-bind-rp-<version>` snapshots retain the five newest plugin
-rollback versions as self-contained channels in the same distribution
-repository. See the [package repository guide](docs/package-repository.md)
-before changing a release channel or signing key.
+The package migrates only the exact legacy Resolver Plugins repository shape.
+It does not rewrite a custom URL, key, mirror mode, enabled state, symlink, or
+non-regular file; follow its `manual migration` warning to review and set the
+ABI-aware URL yourself. A system already upgraded from 26.1 to 26.7 before the
+migration package was installed also needs this one-time manual correction.
+
+The repository catalogue and package are signed by the public key above.
+Signed GitHub Release URLs remain available only for transition and retained
+rollback snapshots. See the [package repository guide](docs/package-repository.md)
+before changing a repository URL or signing key.
 
 About the OPNsense plugins
 ==========================

@@ -1,28 +1,34 @@
 # Package repository
 
-`os-bind-rp` is published as signed GitHub Release assets in
-`resolver-plugins/repository`. The distribution repository contains generated
-package channels; source releases contain only the plugin archive and build
-metadata.
+`os-bind-rp` is published at an ABI-aware GitHub Pages path backed by verified,
+signed channel bytes from `resolver-plugins/repository`. The distribution
+repository also retains GitHub Release channels for transition and rollback;
+source releases contain only the plugin archive and build metadata.
 
 ## Channels
 
-Every supported OPNsense series has a self-contained current channel and up
-to five self-contained immutable rollback snapshots:
+Clients use one current repository URL:
+
+```text
+https://resolver-plugins.github.io/repository/pkg/${ABI}/latest
+```
+
+`pkg` expands `${ABI}` to select `FreeBSD:14:amd64` for OPNsense 26.1 or
+`FreeBSD:15:amd64` for OPNsense 26.7. Every published ABI path is
+self-contained. The distribution repository also keeps transition and up to
+five immutable rollback Releases per supported OPNsense series:
 
 | Purpose | Display title | Release tag | Default state |
 | --- | --- | --- | --- |
-| Current plugin and BIND baseline | `<series>-latest` | `pkg-<series>` | enabled |
+| Legacy transition channel | `<series>-latest` | `pkg-<series>` | legacy clients pending migration only |
 | Plugin rollback snapshot and its BIND baseline | `<series>-archive-<version>` | `pkg-<series>-os-bind-rp-<version>` | enabled only while rolling back |
 
-Display titles are concise labels only. The stable tags above continue to
-define repository URLs and client configuration. GitHub requires one
-repository-wide `Latest` release, so publication assigns that badge to the
-current channel for the highest numeric OPNsense series. Archive releases
-never receive it. The stable series-specific tags remain authoritative for
-client configuration.
+Display titles are concise labels only. GitHub requires one repository-wide
+`Latest` release, so publication assigns that badge to the transition channel
+for the highest numeric OPNsense series. Archive releases never receive it.
+These series-specific Release URLs are not used by new client configuration.
 
-The current channel and every rollback snapshot contain exactly one
+The ABI current channel and every rollback snapshot contain exactly one
 `os-bind-rp` package, the matching `bind920`/`bind-tools` pair, BIND
 provenance, `channel.json`, and the signed catalogue. `pkg` catalogues expose
 one selected version per package name, so rollback temporarily selects a
@@ -35,18 +41,18 @@ Clients verify both using that public key.
 
 ## Host operation
 
-Choose the matching OPNsense series and configure the current plugin channel:
+Configure the ABI-aware current plugin channel:
 
 ```sh
-series=26.7
-base="https://github.com/resolver-plugins/repository/releases/download/pkg-$series"
+repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
 install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
-fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$base/resolver-plugins.pub"
+fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$fetch_url/resolver-plugins.pub"
 test "$(sha256 -q /usr/local/etc/pkg/keys/resolver-plugins.pub)" = \
   bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e || exit 1
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
 resolver-plugins: {
-  url: "$base",
+  url: "$repo_url",
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
@@ -55,6 +61,22 @@ resolver-plugins: {
 EOF
 pkg update -r resolver-plugins
 scripts/install-os-bind-rp.sh
+```
+
+The package post-install hook migrates only the exact documented legacy form
+above when its URL ends in `releases/download/pkg-26.1` or
+`releases/download/pkg-26.7`. It preserves the file's mode and owner and
+atomically replaces only that known shape. A custom URL, alternate key,
+disabled repository, different mirror mode, symlink, or non-regular path is
+left byte-for-byte unchanged and produces a `manual migration` warning.
+
+Systems already upgraded from 26.1 to 26.7 before receiving the migration
+package cannot be repaired retrospectively. On those systems, back up and
+review `/usr/local/etc/pkg/repos/resolver-plugins.conf`, change only its URL to
+the literal `${ABI}` URL above, then run:
+
+```sh
+pkg update -f -r resolver-plugins
 ```
 
 ### Supported installer transition
@@ -151,7 +173,7 @@ pkg install -f -r resolver-plugins os-bind-rp
 ```
 
 The rollback snapshot is not a separate product feed; leave it disabled
-outside an explicit rollback to keep ordinary upgrades on `pkg-<series>`.
+outside an explicit rollback to keep ordinary upgrades on the ABI-aware URL.
 
 Development builds use pre-release tags such as `pr-123-26.7`. They are for
 review testing only and are neither signed nor promoted into a stable channel.
@@ -223,7 +245,7 @@ allows a new promotion while rejecting stale runs even after snapshot pruning.
 
 After promotion, a fresh FreeBSD VM configures the pinned OPNsense repository,
 installs its matching core package, and runs `scripts/install-os-bind-rp.sh`
-against the published `pkg-<series>` URL. It verifies the installed
+against the published ABI-aware URL. It verifies the installed
 `bind-tools`, `bind920`, and `os-bind-rp` identities against the staged package
 archives and requires the public `channel.json` to match the staged bytes. The
 immutable source release is created only after this exact public-channel
