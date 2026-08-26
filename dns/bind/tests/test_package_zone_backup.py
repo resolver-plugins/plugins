@@ -8,6 +8,8 @@ import tempfile
 
 import pytest
 
+from .package_lifecycle_contract import current_release_requires_lifecycle
+
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE_HELPER = (
@@ -32,7 +34,7 @@ else:
     PLUGIN_VERSION = (0,)
     PLUGIN_REVISION = 0
 
-if (PLUGIN_VERSION, PLUGIN_REVISION) >= ((1, 36), 11):
+if current_release_requires_lifecycle(BIND_ROOT, PLUGIN_VERSION, PLUGIN_REVISION):
     assert PACKAGE_HELPER.is_file(), "release package zone helper is missing"
 else:
     pytestmark = pytest.mark.skip(reason="release version predates package lifecycle hooks")
@@ -59,13 +61,15 @@ def _fixture(tmp_path, *, freeze_failure=""):
         <domain uuid="reverse"><domainname>1.168.192.in-addr.arpa</domainname><type>reverse</type><allowrndcupdate>1</allowrndcupdate></domain>
         <domain uuid="watcher"><domainname>watcher.example</domainname><type>primary</type><allowrndcupdate>0</allowrndcupdate></domain>
         <domain uuid="static"><domainname>static.example</domainname><type>primary</type><allowrndcupdate>0</allowrndcupdate></domain>
+        <domain uuid="secondary"><domainname>secondary.example</domainname><type>secondary</type><allowrndcupdate>1</allowrndcupdate></domain>
+        <domain uuid="disabled"><enabled>0</enabled><domainname>disabled.example</domainname><type>primary</type><allowrndcupdate>1</allowrndcupdate></domain>
         </domains></domain><tsig><keys><key uuid="watcher-key"><enabled>1</enabled></key></keys></tsig>
         <watcher><mappings><mapping><enabled>1</enabled><hostname_suffix>watcher</hostname_suffix><reverse_zone>reverse</reverse_zone><tsigkey>watcher-key</tsigkey></mapping></mappings></watcher>
         </bind></OPNsense></opnsense>"""
     )
     for zone in (
         "dynamic.example", "1.168.192.in-addr.arpa", "watcher.example",
-        "static.example",
+        "static.example", "secondary.example", "disabled.example",
     ):
         (zone_dir / f"{zone}.db").write_text(f"static {zone}\n")
         (zone_dir / f"{zone}.db.jnl").write_text("journal\n")
@@ -128,6 +132,8 @@ def test_package_backup_preserves_non_watcher_dynamic_record(executable_tmp_path
     assert not (zone_dir / "1.168.192.in-addr.arpa.db.jnl").exists()
     assert not (zone_dir / "watcher.example.db.jnl").exists()
     assert (zone_dir / "static.example.db.jnl").exists()
+    assert (zone_dir / "secondary.example.db.jnl").exists()
+    assert (zone_dir / "disabled.example.db.jnl").exists()
 
     (zone_dir / "dynamic.example.db").write_text("regenerated static model\n")
     (zone_dir / "watcher.example.db").write_text("regenerated static model\n")
@@ -196,4 +202,29 @@ def test_invalid_configuration_fails_before_rndc_or_service_mutation(executable_
     )
 
     assert result.returncode == 1
+    assert events.read_text() == ""
+
+
+def test_invalid_dynamic_zone_fails_before_rndc_or_service_mutation(executable_tmp_path):
+    _zone_dir, events, environment = _fixture(executable_tmp_path)
+    config = pathlib.Path(environment["BIND_STOP_CONFIG"])
+    config.write_text(
+        config.read_text().replace(
+            "dynamic.example</domainname>",
+            "../dynamic.example</domainname>",
+        )
+    )
+    backup = executable_tmp_path / "backup"
+    backup.mkdir(mode=0o700)
+
+    result = subprocess.run(
+        ["python3", str(PACKAGE_HELPER), "prepare", str(backup)],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "invalid dynamic zone name" in result.stderr
     assert events.read_text() == ""

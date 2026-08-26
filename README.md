@@ -72,11 +72,14 @@ The installer does not enable the BIND plugin or service or change its user
 configuration. It checks the installed OPNsense BIND packages first. If they
 are incompatible, it explains the DNS-over-TLS issue, shows the installed and
 channel versions, and asks before installing the channel's BIND packages.
-Declining the prompt leaves `os-bind-rp` uninstalled. Beginning with
-`os-bind-rp` 1.36_11, once that version or newer is published for the selected
-OPNsense series, an install or upgrade briefly stops an already-running BIND
-service before regenerating managed zone files and restarts it afterward. A
-service that was stopped remains stopped.
+Declining the prompt leaves `os-bind-rp` uninstalled. Package-transaction zone
+preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1 and 1.36_4 on
+OPNsense 26.7. Those versions briefly stop an already-running BIND service,
+preserve effective dynamic zone masters while the package framework
+regenerates managed files, and restart it afterward. A service that was
+stopped remains stopped. Separately, an ordinary plugin configure or restart
+does not regenerate zone files unless its managed stop confirms that BIND is
+stopped.
 
 The package migrates only the exact legacy Resolver Plugins repository shape.
 It does not rewrite a custom URL, key, mirror mode, enabled state, symlink, or

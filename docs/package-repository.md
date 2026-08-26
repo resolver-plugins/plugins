@@ -88,16 +88,22 @@ local isolated repository, and dry-runs the frozen transaction. It locks the
 installed `pkg` package for the transaction, attempts to restore its original
 lock state on every exit, and reports failure if restoration does not succeed.
 The installer does not upgrade the host package manager.
-It does not enable BIND or change its user configuration. Beginning with
-`os-bind-rp` 1.36_11, once that version or newer is published for the selected
-OPNsense series, the package lifecycle detects whether BIND is running and, if
-so, freezes each enabled dynamic primary and reverse zone, stops BIND, and
-preserves the effective zone masters before the OPNsense package framework
-regenerates managed templates and zone files. It atomically restores those
-effective masters—including records received through RNDC updates—before
-restarting BIND. It restarts BIND only when it was running before the
-transaction. A package transaction fails if zone preservation or the original
-running state cannot be restored and confirmed.
+It does not enable BIND or change its user configuration. Package-transaction
+zone preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1 and
+1.36_4 on OPNsense 26.7. The package lifecycle detects whether BIND is
+running and, if so, freezes each enabled dynamic primary and reverse zone,
+stops BIND, and preserves the effective zone masters before the OPNsense
+package framework regenerates managed templates and zone files. It atomically
+restores those effective masters—including records received through RNDC
+updates—before restarting BIND. It restarts BIND only when it was running
+before the transaction. A package transaction fails if zone preservation or
+the original running state cannot be restored and confirmed.
+
+That transaction boundary is distinct from the ordinary configure/restart
+guard. During a normal plugin configure, the runtime stop helper accepts an
+already-stopped service only after the rc script confirms `status=1`; a
+running, indeterminate, or otherwise failed stop prevents template and zone
+regeneration entirely.
 
 Immediately before the first package install, the script creates a mode-0700
 state directory below `/var/backups`, preserves a mode-retaining configuration
