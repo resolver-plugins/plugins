@@ -1,5 +1,10 @@
 name: Publish os-bind-rp package release
 
+# One-time distribution setup before the first 26.1 dispatch:
+# create a non-empty gh-pages branch whose pages-health file contains exactly
+# "resolver-plugins-pages-ok", configure Pages to deploy that branch at /, and
+# install the publisher App on resolver-plugins/repository with Contents: write.
+
 on:
   workflow_dispatch:
     inputs:
@@ -444,6 +449,19 @@ jobs:
         with:
           name: os-bind-rp-production-repository-${{ needs.select.outputs.series }}
           path: artifacts/${{ needs.select.outputs.series }}/repository
+      - name: Preflight distribution GitHub Pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          attempt=1
+          while [[ "$(curl --fail --silent --show-error https://resolver-plugins.github.io/repository/pages-health || true)" != resolver-plugins-pages-ok ]]; do
+            if [ "$attempt" -ge 10 ]; then
+              echo 'distribution GitHub Pages health marker is unavailable' >&2
+              exit 1
+            fi
+            sleep 15
+            attempt=$((attempt + 1))
+          done
       - name: Mint distribution repository token
         id: distribution-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -468,6 +486,7 @@ jobs:
           channels=(--channel "$snapshot_tag=$root/snapshot")
           channels+=(--channel "pkg-$SERIES=$root/current")
           python3 .github/ci/release_channel.py publish-channels --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" "${channels[@]}"
+          python3 .github/ci/release_channel.py publish-abi-channel --repository resolver-plugins/repository --directory "$root/current" --recovery "$RUNNER_TEMP/recovery"
           python3 .github/ci/release_channel.py prune-snapshots --repository resolver-plugins/repository --series "$SERIES" --keep 5
           python3 .github/ci/release_channel.py mark-latest-package-channel --repository resolver-plugins/repository
 
@@ -618,7 +637,9 @@ jobs:
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
             root="artifacts/$series/repository/current"
-            channel_url="https://github.com/resolver-plugins/repository/releases/download/pkg-$series"
+            package_abi=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["package_abi"])' "$root/channel.json")
+            channel_url="https://resolver-plugins.github.io/repository/pkg/$package_abi/latest"
+            repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
             RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
             python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
@@ -643,44 +664,31 @@ jobs:
               "$root"/bind-tools-*.pkg "$root"/bind920-*.pkg "$root"/os-bind-rp-*.pkg
             install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
             install -m 0644 docs/package-repository/resolver-plugins.pub /usr/local/etc/pkg/keys/resolver-plugins.pub
+            attempt=1
+            while ! python3 .github/ci/release_channel.py verify-abi-endpoint --url "$channel_url" --expected-channel "$root"; do
+              if [ "$attempt" -ge 20 ]; then
+                echo 'published Resolver Plugins static channel did not match staged bytes' >&2
+                exit 1
+              fi
+              sleep 30
+              attempt=$((attempt + 1))
+            done
             cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
             resolver-plugins: {
-              url: "$channel_url",
+              url: "$repository_url",
               mirror_type: "none",
               signature_type: "pubkey",
               pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
               enabled: yes
             }
             EOF
-            attempt=1
-            public_channel="$PWD/.published-channel.json"
-            while :; do
-              channel_identities=
-              if pkg update -f -r resolver-plugins \
-                && fetch -q -o "$public_channel" "$channel_url/channel.json" \
-                && cmp -s "$root/channel.json" "$public_channel"; then
-                channel_identities=$(
-                  for package in bind-tools bind920 os-bind-rp; do
-                    pkg rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o'
-                  done | sort
-                )
-              fi
-              if [ "$channel_identities" = "$expected_identities" ]; then
-                break
-              fi
-              if [ "$attempt" -ge 20 ]; then
-                echo 'published Resolver Plugins channel did not match staged release' >&2
-                printf 'expected identities:\n%s\n' "$expected_identities" >&2
-                printf 'published identities:\n%s\n' "$channel_identities" >&2
-                if [ -f "$public_channel" ]; then
-                  printf 'staged channel sha256: %s\n' "$(sha256 -q "$root/channel.json")" >&2
-                  printf 'published channel sha256: %s\n' "$(sha256 -q "$public_channel")" >&2
-                fi
-                exit 1
-              fi
-              sleep 30
-              attempt=$((attempt + 1))
-            done
+            pkg update -f -r resolver-plugins
+            channel_identities=$(
+              for package in bind-tools bind920 os-bind-rp; do
+                pkg rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o'
+              done | sort
+            )
+            [ "$channel_identities" = "$expected_identities" ]
             dependencies=$(
               for package in bind-tools bind920 os-bind-rp; do
                 pkg rquery -r resolver-plugins -e "%n = $package" '%dn'

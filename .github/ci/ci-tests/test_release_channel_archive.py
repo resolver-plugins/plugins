@@ -478,6 +478,128 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             )
 
 
+class AbiStaticPublicationTest(unittest.TestCase):
+    def _channel(self, root: Path) -> Path:
+        channel = root / "channel"
+        channel.mkdir()
+        (channel / "channel.json").write_text(
+            json.dumps({"package_abi": "FreeBSD:15:amd64"}), encoding="utf-8"
+        )
+        (channel / "meta.conf").write_bytes(b"meta")
+        (channel / "packagesite.pkg").write_bytes(b"catalogue")
+        (channel / "os-bind-rp-1.36_7.pkg").write_bytes(b"package")
+        return channel
+
+    def test_publication_replaces_only_the_channel_declared_abi_path(self) -> None:
+        """A static publish cannot remove another ABI or retain stale same-ABI bytes."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            channel = self._channel(root)
+            old_head = "1" * 40
+            calls: list[tuple[list[str], object | None]] = []
+            blob_number = 0
+
+            def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal blob_number
+                payload = json.loads(str(kwargs["input"])) if kwargs.get("input") else None
+                calls.append((command, payload))
+                endpoint = command[-1]
+                method = command[command.index("--method") + 1] if "--method" in command else "GET"
+                if endpoint.endswith("/git/ref/heads/gh-pages") and method == "GET":
+                    response = {"object": {"sha": old_head}}
+                elif endpoint.endswith(f"/git/commits/{old_head}"):
+                    response = {"tree": {"sha": "2" * 40}}
+                elif endpoint.endswith("/git/trees/" + "2" * 40 + "?recursive=1"):
+                    response = {
+                        "truncated": False,
+                        "tree": [
+                            {"path": "pages-health", "mode": "100644", "type": "blob", "sha": "3" * 40},
+                            {"path": "pkg/FreeBSD:14:amd64/latest/meta.conf", "mode": "100644", "type": "blob", "sha": "4" * 40},
+                            {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": "5" * 40},
+                        ],
+                    }
+                elif endpoint.endswith("/git/blobs"):
+                    blob_number += 1
+                    response = {"sha": f"{blob_number + 5:x}" * 40}
+                elif endpoint.endswith("/git/trees"):
+                    response = {"sha": "a" * 40}
+                elif endpoint.endswith("/git/commits"):
+                    response = {"sha": "b" * 40}
+                elif endpoint.endswith("/git/refs/heads/gh-pages") and method == "PATCH":
+                    response = {"object": {"sha": "b" * 40}}
+                else:  # pragma: no cover - makes unexpected API calls diagnostic
+                    raise AssertionError(command)
+                return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+            with (
+                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
+            ):
+                release_channel.publish_abi_channel(
+                    "resolver-plugins/repository", channel, root / "recovery"
+                )
+
+            tree_payload = next(
+                payload
+                for command, payload in calls
+                if command[-1].endswith("/git/trees") and payload is not None
+            )
+            assert isinstance(tree_payload, dict)
+            changes = tree_payload["tree"]
+            self.assertIn(
+                {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": None},
+                changes,
+            )
+            self.assertFalse(
+                any(change["path"].startswith("pkg/FreeBSD:14:amd64/") for change in changes)
+            )
+            self.assertEqual(
+                {f"pkg/FreeBSD:15:amd64/latest/{path.name}" for path in channel.iterdir()},
+                {change["path"] for change in changes if change.get("sha") is not None},
+            )
+            self.assertEqual(old_head + "\n", (root / "recovery/gh-pages-head.txt").read_text())
+
+    def test_publication_rejects_a_changed_head_before_ref_update(self) -> None:
+        """A concurrent gh-pages publisher must win instead of losing its update."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            channel = self._channel(root)
+            heads = iter(("1" * 40, "9" * 40))
+            ref_updates: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                endpoint = command[-1]
+                method = command[command.index("--method") + 1] if "--method" in command else "GET"
+                if endpoint.endswith("/git/ref/heads/gh-pages") and method == "GET":
+                    response = {"object": {"sha": next(heads)}}
+                elif endpoint.endswith("/git/commits/" + "1" * 40):
+                    response = {"tree": {"sha": "2" * 40}}
+                elif endpoint.endswith("/git/trees/" + "2" * 40 + "?recursive=1"):
+                    response = {"truncated": False, "tree": []}
+                elif endpoint.endswith("/git/blobs"):
+                    response = {"sha": "6" * 40}
+                elif endpoint.endswith("/git/trees"):
+                    response = {"sha": "7" * 40}
+                elif endpoint.endswith("/git/commits"):
+                    response = {"sha": "8" * 40}
+                elif method == "PATCH":
+                    ref_updates.append(command)
+                    response = {}
+                else:  # pragma: no cover
+                    raise AssertionError(command)
+                return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+            with (
+                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
+                self.assertRaisesRegex(RuntimeError, "gh-pages head changed"),
+            ):
+                release_channel.publish_abi_channel(
+                    "resolver-plugins/repository", channel, root / "recovery"
+                )
+            self.assertEqual([], ref_updates)
+
+
 class PublicationRecoveryTest(unittest.TestCase):
     def test_existing_package_release_title_converges_during_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

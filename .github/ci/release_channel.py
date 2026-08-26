@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import shutil
@@ -11,6 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 
@@ -445,6 +449,138 @@ def directory_checksums(directory: Path) -> dict[str, str]:
         for path in directory.iterdir()
         if path.is_file()
     }
+
+
+def gh_api(endpoint: str, *, method: str = "GET", payload: object | None = None) -> object:
+    """Call one Git Data API endpoint with the workflow's scoped App token."""
+    command = ["gh", "api"]
+    if method != "GET":
+        command.extend(("--method", method))
+    input_text = None
+    if payload is not None:
+        command.extend(("--input", "-"))
+        input_text = json.dumps(payload, separators=(",", ":"))
+    command.append(endpoint)
+    result = subprocess.run(command, text=True, capture_output=True, input=input_text)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"GitHub API request failed: {endpoint}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"GitHub API returned invalid JSON: {endpoint}") from error
+
+
+def _object_sha(payload: object, *path: str) -> str:
+    value = payload
+    for component in path:
+        if not isinstance(value, dict):
+            raise RuntimeError("GitHub API response is missing an object SHA")
+        value = value.get(component)
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise RuntimeError("GitHub API response is missing an object SHA")
+    return value
+
+
+def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> None:
+    """Replace one ABI subtree and compare-and-advance the gh-pages branch."""
+    validate_channel_directory(directory)
+    try:
+        channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
+        target = abi_path(channel["package_abi"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("static channel audit metadata is invalid") from error
+    assets = sorted(directory.iterdir(), key=lambda path: path.name)
+    if not assets or any(not path.is_file() for path in assets):
+        raise ValueError("static channel must contain only flat assets")
+
+    ref_endpoint = f"repos/{repository}/git/ref/heads/gh-pages"
+    update_ref_endpoint = f"repos/{repository}/git/refs/heads/gh-pages"
+    old_head = _object_sha(gh_api(ref_endpoint), "object", "sha")
+    old_tree = _object_sha(
+        gh_api(f"repos/{repository}/git/commits/{old_head}"), "tree", "sha"
+    )
+    tree_payload = gh_api(f"repos/{repository}/git/trees/{old_tree}?recursive=1")
+    if not isinstance(tree_payload, dict) or tree_payload.get("truncated") is not False:
+        raise RuntimeError("cannot read the complete gh-pages tree")
+    entries = tree_payload.get("tree")
+    if not isinstance(entries, list):
+        raise RuntimeError("cannot read the gh-pages tree")
+
+    prefix = target + "/"
+    replacement_paths = {prefix + asset.name for asset in assets}
+    changes: list[dict[str, object]] = []
+    for entry in entries:
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("path"), str)
+            and entry["path"].startswith(prefix)
+            and entry["path"] not in replacement_paths
+            and entry.get("type") == "blob"
+        ):
+            changes.append(
+                {"path": entry["path"], "mode": "100644", "type": "blob", "sha": None}
+            )
+    for asset in assets:
+        blob = gh_api(
+            f"repos/{repository}/git/blobs",
+            method="POST",
+            payload={
+                "content": base64.b64encode(asset.read_bytes()).decode("ascii"),
+                "encoding": "base64",
+            },
+        )
+        changes.append(
+            {
+                "path": prefix + asset.name,
+                "mode": "100644",
+                "type": "blob",
+                "sha": _object_sha(blob, "sha"),
+            }
+        )
+    new_tree = _object_sha(
+        gh_api(
+            f"repos/{repository}/git/trees",
+            method="POST",
+            payload={"base_tree": old_tree, "tree": changes},
+        ),
+        "sha",
+    )
+    new_commit = _object_sha(
+        gh_api(
+            f"repos/{repository}/git/commits",
+            method="POST",
+            payload={
+                "message": f"Publish package channel {channel['package_abi']}",
+                "tree": new_tree,
+                "parents": [old_head],
+            },
+        ),
+        "sha",
+    )
+    recovery.mkdir(parents=True, exist_ok=True)
+    (recovery / "gh-pages-head.txt").write_text(old_head + "\n", encoding="ascii")
+    current_head = _object_sha(gh_api(ref_endpoint), "object", "sha")
+    if current_head != old_head:
+        raise RuntimeError("gh-pages head changed during static publication")
+    gh_api(update_ref_endpoint, method="PATCH", payload={"sha": new_commit, "force": False})
+
+
+def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
+    """Require every expected static channel asset to match its public bytes."""
+    validate_channel_directory(expected_channel)
+    assets = sorted(expected_channel.iterdir(), key=lambda path: path.name)
+    if not assets or any(not path.is_file() for path in assets):
+        raise ValueError("static channel must contain only flat assets")
+    base_url = url.rstrip("/") + "/"
+    for asset in assets:
+        asset_url = urllib.parse.urljoin(base_url, urllib.parse.quote(asset.name))
+        try:
+            with urllib.request.urlopen(asset_url, timeout=30) as response:
+                published = response.read()
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError(f"cannot fetch static channel asset: {asset.name}") from error
+        if published != asset.read_bytes():
+            raise RuntimeError(f"static channel asset has unexpected bytes: {asset.name}")
 
 
 def validate_channel_directory(directory: Path) -> None:
@@ -1064,6 +1200,13 @@ def main() -> None:
     publish_channels_parser.add_argument("--repository", required=True)
     publish_channels_parser.add_argument("--recovery", type=Path, required=True)
     publish_channels_parser.add_argument("--channel", type=parse_channel, action="append", required=True)
+    publish_abi = commands.add_parser("publish-abi-channel")
+    publish_abi.add_argument("--repository", required=True)
+    publish_abi.add_argument("--directory", type=Path, required=True)
+    publish_abi.add_argument("--recovery", type=Path, required=True)
+    verify_abi = commands.add_parser("verify-abi-endpoint")
+    verify_abi.add_argument("--url", required=True)
+    verify_abi.add_argument("--expected-channel", type=Path, required=True)
     prune = commands.add_parser("prune-snapshots")
     prune.add_argument("--repository", required=True)
     prune.add_argument("--series", required=True)
@@ -1133,6 +1276,10 @@ def main() -> None:
         )
     elif arguments.command == "publish-channels":
         publish_channels(arguments.repository, arguments.channel, arguments.recovery)
+    elif arguments.command == "publish-abi-channel":
+        publish_abi_channel(arguments.repository, arguments.directory, arguments.recovery)
+    elif arguments.command == "verify-abi-endpoint":
+        verify_abi_endpoint(arguments.url, arguments.expected_channel)
     elif arguments.command == "prune-snapshots":
         prune_snapshots(arguments.repository, arguments.series, arguments.keep)
     elif arguments.command == "mark-latest-package-channel":

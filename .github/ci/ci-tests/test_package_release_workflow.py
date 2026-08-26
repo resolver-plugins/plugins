@@ -146,6 +146,31 @@ def test_publisher_mints_a_repository_scoped_github_app_token():
     assert '--recovery "$RUNNER_TEMP/recovery"' in workflow
 
 
+def test_production_preflights_pages_then_publishes_the_abi_static_channel():
+    workflow = workflow_text()
+    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
+
+    assert 'https://resolver-plugins.github.io/repository/pages-health' in publisher
+    assert '[ "$attempt" -ge 10 ]' in publisher
+    assert 'sleep 15' in publisher
+    assert 'publish-abi-channel --repository resolver-plugins/repository' in publisher
+    assert publisher.index('publish-channels') < publisher.index('publish-abi-channel')
+    assert 'GH_TOKEN: ${{ steps.distribution-token.outputs.token }}' in publisher
+
+
+def test_public_verification_compares_all_static_bytes_before_installation():
+    workflow = workflow_text()
+    verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
+
+    assert 'https://resolver-plugins.github.io/repository/pkg/${ABI}/latest' in verifier
+    assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
+    assert '[ "$attempt" -ge 20 ]' in verifier
+    assert 'sleep 30' in verifier
+    assert verifier.index('verify-abi-endpoint') < verifier.index(
+        'pkg update -f -r resolver-plugins'
+    )
+
+
 def test_publication_waits_for_current_and_snapshot_installability_in_freebsd():
     workflow = workflow_text()
     publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
@@ -176,7 +201,7 @@ def test_published_channel_is_installed_from_github_in_freebsd():
     assert 'needs: [select, profile, publish]' in verifier
     assert 'permissions:\n      contents: read' in verifier
     assert 'name: os-bind-rp-production-repository-${{ needs.select.outputs.series }}' in verifier
-    assert 'https://github.com/resolver-plugins/repository/releases/download/pkg-$series' in verifier
+    assert "repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'" in verifier
     assert '.github/ci/setup-opnsense-repository.sh "$series"' in verifier
     assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier
     assert '"$root"/bind-tools-*.pkg' in verifier
@@ -184,13 +209,11 @@ def test_published_channel_is_installed_from_github_in_freebsd():
     assert '"$root"/os-bind-rp-*.pkg' in verifier
     assert '"$root"/*.pkg' not in verifier
     assert 'pkg update -f -r resolver-plugins' in verifier
-    assert 'cmp -s "$root/channel.json" "$public_channel"' in verifier
+    assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
     assert '/usr/local/sbin/pkg-static query -F "$archive" \'%n|%v|%o\'' in verifier
     assert '[ "$channel_identities" = "$expected_identities" ]' in verifier
     assert '[ "$attempt" -ge 20 ]' in verifier
     assert 'sleep 30' in verifier
-    assert "printf 'expected identities:\\n%s\\n' \"$expected_identities\"" in verifier
-    assert "printf 'published identities:\\n%s\\n' \"$channel_identities\"" in verifier
     assert 'pkg rquery -r resolver-plugins -e "%n = $package" \'%dn\'' in verifier
     assert 'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh' in verifier
     assert verifier.index('pkg install -y -r OPNsense opnsense os-bind') < verifier.index(
