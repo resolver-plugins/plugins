@@ -725,6 +725,7 @@ class PublicationRecoveryTest(unittest.TestCase):
             staged = root / "staged"
             staged.mkdir()
             (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
+            (staged / "build-metadata.txt").write_bytes(b"metadata")
             absent = release_channel.ReleaseSnapshot(
                 "os-bind-rp-26.7-1.36_2",
                 False,
@@ -757,6 +758,21 @@ class PublicationRecoveryTest(unittest.TestCase):
             self.assertEqual("release", calls[0][0])
             self.assertEqual("create", calls[0][1])
             self.assertIn("--latest=false", calls[0])
+            self.assertEqual(
+                [
+                    [
+                        "release", "upload", absent.tag,
+                        str(staged / "os-bind-rp-1.36_2.pkg"),
+                        "--clobber", "--repo", "resolver-plugins/plugins",
+                    ],
+                    [
+                        "release", "upload", absent.tag,
+                        str(staged / "build-metadata.txt"),
+                        "--clobber", "--repo", "resolver-plugins/plugins",
+                    ],
+                ],
+                [call for call in calls if call[:2] == ["release", "upload"]],
+            )
 
     def test_existing_snapshot_is_materialized_for_an_exact_release_retry(self) -> None:
         """A published version is reused instead of rebuilt under a new control commit."""

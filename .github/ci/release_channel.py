@@ -440,6 +440,15 @@ def run_gh(arguments: list[str]) -> None:
     subprocess.run(["gh", *arguments], check=True)
 
 
+def upload_release_assets(repository: str, tag: str, assets: list[Path]) -> None:
+    """Upload release assets one at a time to avoid partial multi-asset CLI failures."""
+    for asset in assets:
+        run_gh([
+            "release", "upload", tag, str(asset),
+            "--clobber", "--repo", repository,
+        ])
+
+
 def edit_package_release_title(repository: str, tag: str, prerelease: bool = False) -> None:
     """Converge a package Release on its purpose-first display title."""
     edit = [
@@ -838,9 +847,10 @@ def publish_immutable_release(
             return
 
     run_gh([
-        "release", "create", tag, *(str(path) for path in asset_order(directory)),
+        "release", "create", tag,
         "--repo", repository, "--title", title, "--latest=false",
     ])
+    upload_release_assets(repository, tag, asset_order(directory))
     with tempfile.TemporaryDirectory() as temporary_directory:
         published = snapshot_release(repository, tag, Path(temporary_directory))
         if not snapshot_matches_directory(published, directory):
@@ -1137,10 +1147,7 @@ def publish(repository: str, tag: str, directory: Path, prerelease: bool) -> Non
                 "release", "delete-asset", tag, asset_name, "--yes",
                 "--repo", repository,
             ])
-    run_gh([
-        "release", "upload", tag, *(str(path) for path in assets),
-        "--clobber", "--repo", repository,
-    ])
+    upload_release_assets(repository, tag, assets)
     result = subprocess.run(
         ["gh", "release", "view", tag, "--repo", repository, "--json", "assets"],
         check=True,
