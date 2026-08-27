@@ -21,6 +21,7 @@ case "$1" in
                 '#!/bin/sh' \
                 'printf '\''%s\n'\'' "$*" >> "$PKG_STATIC_CALL_LOG"' \
                 'if [ "$1" = -v ]; then printf '\''%s\n'\'' '\''2.3.1'\''; exit 0; fi' \
+                'if [ "$1" = query ] && [ "$4" = %v ]; then package=${3##*/}; version=${package#os-bind-rp-}; printf '\''%s\n'\'' "${version%.pkg}"; exit 0; fi' \
                 'if [ "$1" = query ]; then printf '\''%s\n'\'' '\''/usr/local/opnsense/mvc/app/models/OPNsense/Bind/Menu/Menu.xml|1$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\''; exit 0; fi' \
                 'exit 64' > "$PKG_STATIC_PATH"
             chmod 0755 "$PKG_STATIC_PATH"

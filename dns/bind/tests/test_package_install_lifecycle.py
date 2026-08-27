@@ -8,6 +8,8 @@ import tempfile
 
 import pytest
 
+from .package_lifecycle_contract import current_release_requires_lifecycle
+
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PRE_INSTALL = BIND_ROOT / "+POST_INSTALL.pre"
@@ -32,7 +34,7 @@ else:
     PLUGIN_VERSION = (0,)
     PLUGIN_REVISION = 0
 
-if (PLUGIN_VERSION, PLUGIN_REVISION) >= ((1, 36), 11):
+if current_release_requires_lifecycle(BIND_ROOT, PLUGIN_VERSION, PLUGIN_REVISION):
     missing = [
         str(path.relative_to(BIND_ROOT))
         for path in (PRE_INSTALL, POST_INSTALL, STOP_SCRIPT)

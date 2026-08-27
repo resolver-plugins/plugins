@@ -132,6 +132,17 @@ set -- "$repository_root"/dns/bind/work/pkg/os-bind-rp-*.pkg
 [ -f "$1" ] || fail 'package build did not produce os-bind-rp'
 [ "$#" -eq 1 ] || fail 'package build produced more than one os-bind-rp package'
 package=$1
+plugin_version=$("$pkg_static" query -F "$package" '%v') || \
+    fail "cannot read os-bind-rp package version"
+case "$plugin_version" in
+    "$series"_[1-9]*)
+        plugin_revision=${plugin_version#"$series"_}
+        case "$plugin_revision" in
+            *[!0-9]*) fail "plugin version $plugin_version does not match release series $series" ;;
+        esac
+        ;;
+    *) fail "plugin version $plugin_version does not match release series $series" ;;
+esac
 "$python_command" "$script_directory/package_checksums.py" \
     --pkg-command "$pkg_static" "$package"
 

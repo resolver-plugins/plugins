@@ -638,8 +638,8 @@ jobs:
             series='${{ needs.select.outputs.series }}'
             root="artifacts/$series/repository/current"
             package_abi=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["package_abi"])' "$root/channel.json")
-            channel_url="https://resolver-plugins.github.io/repository/pkg/$package_abi/latest"
-            repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+            channel_url="https://resolver-plugins.github.io/repository/pkg/$package_abi/$series/latest"
+            repository_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
             RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
             python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"

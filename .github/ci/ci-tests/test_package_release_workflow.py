@@ -162,7 +162,7 @@ def test_public_verification_compares_all_static_bytes_before_installation():
     workflow = workflow_text()
     verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
 
-    assert 'https://resolver-plugins.github.io/repository/pkg/${ABI}/latest' in verifier
+    assert 'https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest' in verifier
     assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
     assert '[ "$attempt" -ge 20 ]' in verifier
     assert 'sleep 30' in verifier
@@ -210,7 +210,7 @@ def test_published_channel_is_installed_from_github_in_freebsd():
     assert 'needs: [select, profile, publish]' in verifier
     assert 'permissions:\n      contents: read' in verifier
     assert 'name: os-bind-rp-production-repository-${{ needs.select.outputs.series }}' in verifier
-    assert "repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'" in verifier
+    assert 'repository_url="https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest"' in verifier
     assert '.github/ci/setup-opnsense-repository.sh "$series"' in verifier
     assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier
     assert '"$root"/bind-tools-*.pkg' in verifier

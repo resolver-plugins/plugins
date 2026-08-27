@@ -17,8 +17,9 @@ using source-repository GitHub Releases as the per-series package channels.
 - `https://github.com/resolver-plugins/repository` is the dedicated
   distribution repository. It contains generated signed package-channel
   assets only; it is not a source or development repository.
-- Each OPNsense series has one self-contained, rolling current channel:
-  `pkg-26.1`, `pkg-26.7`, and so on. It also has up to five immutable,
+- Each OPNsense series has one self-contained, rolling current channel under
+  `pkg/<FreeBSD ABI>/<series>/latest`, for example
+  `pkg/FreeBSD:15:amd64/26.7/latest`. It also has up to five immutable,
   self-contained rollback snapshots named
   `pkg-<series>-os-bind-rp-<version>`.
 - Source-repository GitHub Releases are ordinary, immutable, human-facing
@@ -48,14 +49,16 @@ creates an immutable human-facing release record for the newly published
 
 ### Distribution repository: `resolver-plugins/repository`
 
-The distribution repository exposes stable GitHub Release tags used directly
+The distribution repository exposes stable GitHub Pages paths used directly
 as OPNsense package base URLs:
 
 ```text
-https://github.com/resolver-plugins/repository/releases/download/pkg-<series>
+https://resolver-plugins.github.io/repository/pkg/${ABI}/<series>/latest
 ```
 
-The current tags are operational channels rather than product releases. An
+Legacy transition GitHub Release tags such as `pkg-26.7` remain available for
+older clients until they migrate, but new client configuration does not use
+them. Current paths are operational channels rather than product releases. An
 immutable snapshot URL uses
 `pkg-<series>-os-bind-rp-<version>` in place of `pkg-<series>`. This layout is
 necessary because `pkg` publishes only one selected version of a package name
@@ -66,7 +69,7 @@ in a catalogue. Every current or snapshot channel is fully self-contained.
 For example, the current `pkg-26.7` channel contains:
 
 ```text
-os-bind-rp-1.36_7.pkg
+os-bind-rp-26.7_1.pkg
 bind920-9.20.26_1.pkg
 bind-tools-9.20.26_1.pkg
 packagesite/meta catalogue files
@@ -91,6 +94,9 @@ package.
 ## BIND baseline policy
 
 The BIND pair is a compatibility payload, not a per-plugin-release product.
+BIND packages keep upstream versions; only `os-bind-rp` uses the OPNsense
+series as its package version, such as `os-bind-rp-26.1_1` and
+`os-bind-rp-26.7_1`.
 The workflow reuses the signed pair already present in the target channel when
 its compatibility fingerprint matches. It builds a new BIND pair only when
 the pinned BIND version/profile, OPNsense series, FreeBSD release,
@@ -124,7 +130,8 @@ baseline.
 5. It verifies that the generated catalogue, public key, manifest checksums,
    and package dependency graph exactly match the intended set.
 6. A final distribution job writes the staged assets to
-   `resolver-plugins/repository` under the current and snapshot tags using a
+   `resolver-plugins/repository` under the ABI-plus-series current path and
+   snapshot tags using a
    short-lived installation token from an organization-owned GitHub App. The
    App has only `Contents: write`, has no webhooks, and is installed only on
    the distribution repository. A subsequent source-release job uses the

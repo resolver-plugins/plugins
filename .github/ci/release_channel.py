@@ -29,6 +29,7 @@ DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)")
 PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
 PROVENANCE_NAME = "bind920-provenance.json"
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
+SERIES_PLUGIN_VERSION_PATTERN = re.compile(r"(?P<series>[0-9]+\.[0-9]+)_(?P<revision>[1-9][0-9]*)")
 PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
     "series",
@@ -76,11 +77,18 @@ def source_release_tag(series: str, version: str) -> str:
     return f"os-bind-rp-{series}-{version}"
 
 
-def abi_path(abi: str) -> str:
-    """Return the ABI-indexed repository path for one supported package ABI."""
+def validate_package_abi(abi: str) -> None:
+    """Accept only package ABIs supported by the static package channel."""
     if not isinstance(abi, str) or PACKAGE_ABI_PATTERN.fullmatch(abi) is None:
         raise ValueError("invalid package ABI")
-    return f"pkg/{abi}/latest"
+
+
+def series_abi_path(abi: str, series: str) -> str:
+    """Return the ABI-and-series-indexed repository path for one channel."""
+    validate_package_abi(abi)
+    if not isinstance(series, str) or SERIES_PATTERN.fullmatch(series) is None:
+        raise ValueError("invalid series")
+    return f"pkg/{abi}/{series}/latest"
 
 
 def package_release_title(tag: str) -> str:
@@ -219,11 +227,13 @@ def read_package_manifest(package: Path, pkg_command: str) -> dict[str, object]:
 
 
 def validate_channel_package_manifests(
-    packages: list[Path], provenance_path: Path, pkg_command: str
+    packages: list[Path], provenance_path: Path, pkg_command: str, series: str
 ) -> str:
     """Validate a self-contained package set against its BIND provenance."""
     if len(packages) != 3:
         raise ValueError("channel does not contain one BIND pair and one plugin")
+    if SERIES_PATTERN.fullmatch(series) is None:
+        raise ValueError("invalid series")
     records = read_bind_package_records(provenance_path)
     common_abi = None
     identities = {}
@@ -241,6 +251,12 @@ def validate_channel_package_manifests(
                 raise ValueError(f"{expected_name} package does not match BIND provenance")
         elif origin != "opnsense/os-bind-rp":
             raise ValueError("channel plugin has an unexpected origin")
+        else:
+            match = SERIES_PLUGIN_VERSION_PATTERN.fullmatch(version)
+            if match is None or match.group("series") != series:
+                raise ValueError("channel plugin version does not match OPNsense series")
+            if package.name != f"{name}-{version}.pkg":
+                raise ValueError("channel plugin filename does not match package identity")
         if common_abi is None:
             common_abi = abi
         elif abi != common_abi:
@@ -256,7 +272,7 @@ def validate_channel_package_manifests(
         raise ValueError("plugin package does not declare the required BIND dependency formula")
     if common_abi is None:
         raise ValueError("channel does not contain package ABIs")
-    abi_path(common_abi)
+    validate_package_abi(common_abi)
     return common_abi
 
 
@@ -386,7 +402,9 @@ def stage_channel_repository(
         or metadata["pkg_creator_sha256"] != package_creator["sha256"]
     ):
         raise ValueError("BIND provenance does not match plugin build metadata")
-    package_abi = validate_channel_package_manifests(packages, provenance, pkg_command)
+    package_abi = validate_channel_package_manifests(
+        packages, provenance, pkg_command, metadata["series"]
+    )
     if package_abi != target_package.identity.abi:
         raise ValueError("channel package ABI does not match the trusted target package profile")
     stage_selected_repository(
@@ -486,7 +504,7 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
     validate_channel_directory(directory)
     try:
         channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
-        target = abi_path(channel["package_abi"])
+        target = series_abi_path(channel["package_abi"], channel["series"])
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise ValueError("static channel audit metadata is invalid") from error
     assets = sorted(directory.iterdir(), key=lambda path: path.name)
@@ -550,7 +568,7 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
             f"repos/{repository}/git/commits",
             method="POST",
             payload={
-                "message": f"Publish package channel {channel['package_abi']}",
+                "message": f"Publish package channel {channel['package_abi']} {channel['series']}",
                 "tree": new_tree,
                 "parents": [old_head],
             },
@@ -622,7 +640,7 @@ def validate_channel_directory(directory: Path) -> None:
         else:
             package_abi = channel["package_abi"]
         if package_abi is not None:
-            abi_path(package_abi)
+            validate_package_abi(package_abi)
     except (AttributeError, KeyError, ValueError) as error:
         raise ValueError("prior channel audit metadata is inconsistent") from error
     if (
@@ -1143,10 +1161,12 @@ def publish(repository: str, tag: str, directory: Path, prerelease: bool) -> Non
 
 def write_bootstrap(output: Path, base_url: str, series: str, public_key_path: str) -> None:
     """Write the UCL configuration a client needs for a signed channel."""
-    tag = channel_tag(series)
+    if SERIES_PATTERN.fullmatch(series) is None:
+        raise ValueError("invalid series")
+    url = f"{base_url.rstrip('/')}/pkg/${{ABI}}/{series}/latest"
     output.write_text(
         "resolver-plugins: {\n"
-        f"  url: \"{base_url.rstrip('/')}/{tag}\",\n"
+        f"  url: \"{url}\",\n"
         "  mirror_type: \"none\",\n"
         "  signature_type: \"pubkey\",\n"
         f"  pubkey: \"{public_key_path}\",\n"

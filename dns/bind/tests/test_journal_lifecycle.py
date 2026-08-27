@@ -87,7 +87,7 @@ class JournalLifecycleTest(unittest.TestCase):
                 for suffix in (".jnl", ".jnw", ".jbk"):
                     self.assertFalse((zone_dir / f"{zone}.db{suffix}").exists())
 
-    def test_stop_failure_preserves_journals_and_state(self):
+    def assert_stop_failure_preserves_journals_and_state(self, status_code):
         bind_root = pathlib.Path(__file__).resolve().parents[1]
         stop_script = bind_root / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
 
@@ -101,8 +101,14 @@ class JournalLifecycleTest(unittest.TestCase):
             state.write_text("{}")
             journal = zone_dir / "watcher.example.db.jnl"
             journal.write_text("")
+            events = temporary / "events"
             named = temporary / "named"
-            named.write_text("#!/bin/sh\nexit 1\n")
+            named.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$TEST_EVENTS\"\n"
+                "[ \"$1\" = status ] && exit \"$TEST_STATUS_CODE\"\n"
+                "exit 1\n"
+            )
             named.chmod(0o755)
 
             result = subprocess.run(
@@ -112,6 +118,8 @@ class JournalLifecycleTest(unittest.TestCase):
                     "BIND_STOP_WATCHER_CONFIG": str(watcher_config),
                     "BIND_STOP_ZONE_DIR": str(zone_dir),
                     "BIND_STOP_STATE_FILE": str(state),
+                    "TEST_EVENTS": str(events),
+                    "TEST_STATUS_CODE": str(status_code),
                 },
                 text=True,
                 capture_output=True,
@@ -119,8 +127,56 @@ class JournalLifecycleTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(events.read_text(), "stop\nstatus\n")
             self.assertTrue(state.exists())
             self.assertTrue(journal.exists())
+
+    def test_stop_failure_preserves_journals_and_state(self):
+        for status_code in (0, 2):
+            with self.subTest(status_code=status_code):
+                self.assert_stop_failure_preserves_journals_and_state(status_code)
+
+    def test_already_stopped_clears_journals_and_state(self):
+        bind_root = pathlib.Path(__file__).resolve().parents[1]
+        stop_script = bind_root / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
+
+        with tempfile.TemporaryDirectory(dir=bind_root) as directory:
+            temporary = pathlib.Path(directory)
+            zone_dir = temporary / "primary"
+            zone_dir.mkdir()
+            watcher_config = temporary / "dhcpwatcher.conf"
+            watcher_config.write_text("hostname_suffix = watcher.example\n")
+            state = temporary / "state.json"
+            state.write_text("{}")
+            journal = zone_dir / "watcher.example.db.jnl"
+            journal.write_text("")
+            events = temporary / "events"
+            named = temporary / "named"
+            named.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$TEST_EVENTS\"\n"
+                "exit 1\n"
+            )
+            named.chmod(0o755)
+
+            result = subprocess.run(
+                [sys.executable, stop_script],
+                env=os.environ | {
+                    "BIND_STOP_NAMED_RC": str(named),
+                    "BIND_STOP_WATCHER_CONFIG": str(watcher_config),
+                    "BIND_STOP_ZONE_DIR": str(zone_dir),
+                    "BIND_STOP_STATE_FILE": str(state),
+                    "TEST_EVENTS": str(events),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(events.read_text(), "stop\nstatus\n")
+            self.assertFalse(state.exists())
+            self.assertFalse(journal.exists())
 
 
 if __name__ == "__main__":
