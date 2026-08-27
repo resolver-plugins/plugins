@@ -89,7 +89,7 @@ jobs:
             source_ref="refs/heads/release/bind-rp/$SERIES"
             git fetch --no-tags origin "$source_ref:refs/remotes/origin/bind-under-test"
             source_commit=$(git rev-parse refs/remotes/origin/bind-under-test)
-            git checkout "$source_commit" -- dns/bind/Makefile dns/bind/src
+            git checkout "$source_commit" -- .resolver-plugins/upstream.json dns/bind/Makefile dns/bind/src
             for fragment in +POST_INSTALL.pre +POST_INSTALL.post; do
               if git cat-file -e "$source_commit:dns/bind/$fragment"; then
                 git show "$source_commit:dns/bind/$fragment" > "dns/bind/$fragment"

@@ -240,7 +240,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             for name in (
                 "bind-tools-9.20.26_1.pkg",
                 "bind920-9.20.26_1.pkg",
-                "os-bind-rp-1.36_7.pkg",
+                "os-bind-rp-26.7_1.pkg",
             ):
                 (packages / name).write_bytes(name.encode())
             (packages / "bind920-provenance.json").write_text(
@@ -324,7 +324,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 {
                     "bind-tools-9.20.26_1.pkg",
                     "bind920-9.20.26_1.pkg",
-                    "os-bind-rp-1.36_7.pkg",
+                    "os-bind-rp-26.7_1.pkg",
                     "bind920-provenance.json",
                     "build-metadata.txt",
                     "channel.json",
@@ -336,15 +336,15 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             self.assertEqual(3, manifest["schema"])
             self.assertEqual("26.7", manifest["series"])
             self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
-            self.assertEqual("1.36_7", manifest["plugin_version"])
+            self.assertEqual("26.7_1", manifest["plugin_version"])
             self.assertEqual("0123456789abcdef", manifest["source_commit"])
             self.assertEqual("f" * 64, manifest["bind"]["fingerprint"])
             self.assertEqual("15.1", manifest["build"]["freebsd_release"])
             self.assertEqual("26.7", manifest["build"]["tools_tag"])
             self.assertEqual(package_creator, manifest["package_creator"])
             self.assertEqual(
-                release_channel.sha256(packages / "os-bind-rp-1.36_7.pkg"),
-                manifest["packages"]["os-bind-rp-1.36_7.pkg"],
+                release_channel.sha256(packages / "os-bind-rp-26.7_1.pkg"),
+                manifest["packages"]["os-bind-rp-26.7_1.pkg"],
             )
             (root / "channel/resolver-plugins.pub").write_text("public key", encoding="utf-8")
             (root / "channel/packagesite.pkg").touch()
@@ -1307,7 +1307,7 @@ class ChannelManifestValidationTest(unittest.TestCase):
                 ("bind920", "9.20.26_1", "dns/bind920", "FreeBSD:15:amd64"),
                 {("bind-tools", "dns/bind-tools", "9.20.26_1")},
             ),
-            (("os-bind-rp", "1.36_2", "opnsense/os-bind-rp", "FreeBSD:15:amd64"), set()),
+            (("os-bind-rp", "26.7_1", "opnsense/os-bind-rp", "FreeBSD:15:amd64"), set()),
         ]
 
     def bind_records(self):
@@ -1330,7 +1330,7 @@ class ChannelManifestValidationTest(unittest.TestCase):
         packages = [
             Path("/tmp/bind-tools-9.20.26_1.pkg"),
             Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-1.36_2.pkg"),
+            Path("/tmp/os-bind-rp-26.7_1.pkg"),
         ]
         with (
             patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
@@ -1338,7 +1338,7 @@ class ChannelManifestValidationTest(unittest.TestCase):
             patch.object(release_channel, "read_package_manifest", return_value={"dep_formula": formula}),
         ):
             release_channel.validate_channel_package_manifests(
-                packages, Path("/tmp/bind920-provenance.json"), "pkg"
+                packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
             )
 
     def test_channel_rejects_plugin_without_minimum_bind_formula(self) -> None:
@@ -1357,7 +1357,7 @@ class ChannelManifestValidationTest(unittest.TestCase):
         packages = [
             Path("/tmp/bind-tools-9.20.26_1.pkg"),
             Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-1.36_2.pkg"),
+            Path("/tmp/os-bind-rp-26.7_1.pkg"),
         ]
         with (
             patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
@@ -1370,8 +1370,77 @@ class ChannelManifestValidationTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "exact BIND"):
                 release_channel.validate_channel_package_manifests(
-                    packages, Path("/tmp/bind920-provenance.json"), "pkg"
+                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
                 )
+
+    def test_channel_rejects_plugin_version_from_a_different_scheme(self) -> None:
+        identities = self.package_identities()
+        identities[2] = (
+            ("os-bind-rp", "1.36_2", "opnsense/os-bind-rp", "FreeBSD:15:amd64"),
+            set(),
+        )
+        packages = [
+            Path("/tmp/bind-tools-9.20.26_1.pkg"),
+            Path("/tmp/bind920-9.20.26_1.pkg"),
+            Path("/tmp/os-bind-rp-1.36_2.pkg"),
+        ]
+        with (
+            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
+            patch.object(release_channel, "query_package", side_effect=identities),
+            patch.object(
+                release_channel,
+                "read_package_manifest",
+                return_value={"dep_formula": "bind920 >= 9.20.26"},
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "plugin version does not match OPNsense series"):
+                release_channel.validate_channel_package_manifests(
+                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
+                )
+
+    def test_channel_rejects_plugin_filename_that_differs_from_validated_identity(self) -> None:
+        packages = [
+            Path("/tmp/bind-tools-9.20.26_1.pkg"),
+            Path("/tmp/bind920-9.20.26_1.pkg"),
+            Path("/tmp/os-bind-rp-1.36_2.pkg"),
+        ]
+        with (
+            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
+            patch.object(release_channel, "query_package", side_effect=self.package_identities()),
+            patch.object(
+                release_channel,
+                "read_package_manifest",
+                return_value={"dep_formula": "bind920 >= 9.20.26"},
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "filename does not match package identity"):
+                release_channel.validate_channel_package_manifests(
+                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
+                )
+
+
+class BootstrapRepositoryConfigTest(unittest.TestCase):
+    def test_bootstrap_uses_the_abi_and_series_scoped_static_repository_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "resolver-plugins.conf"
+
+            release_channel.write_bootstrap(
+                output,
+                "https://resolver-plugins.github.io/repository/",
+                "26.7",
+                "/usr/local/etc/pkg/keys/resolver-plugins.pub",
+            )
+
+            self.assertEqual(
+                'resolver-plugins: {\n'
+                '  url: "https://resolver-plugins.github.io/repository/pkg/${ABI}/26.7/latest",\n'
+                '  mirror_type: "none",\n'
+                '  signature_type: "pubkey",\n'
+                '  pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",\n'
+                '  enabled: yes\n'
+                '}\n',
+                output.read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":

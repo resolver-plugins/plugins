@@ -127,6 +127,24 @@ series_from_opnsense_version() {
     esac
 }
 
+validate_plugin_candidate_version() {
+    candidate_version=$1
+    expected_series=$2
+    case "$candidate_version" in
+        "$expected_series"_[1-9]*)
+            revision=${candidate_version#"$expected_series"_}
+            case "$revision" in
+                ''|*[!0-9]*)
+                    fail "os-bind-rp version does not match OPNsense series $expected_series"
+                    ;;
+            esac
+            ;;
+        *)
+            fail "os-bind-rp version does not match OPNsense series $expected_series"
+            ;;
+    esac
+}
+
 remote_pkg() {
     "$pkg_command" -o "REPOS_DIR=$repository_directory" "$@"
 }
@@ -644,6 +662,7 @@ candidate_plugin=$(remote_package os-bind-rp opnsense/os-bind-rp)
 candidate_bind920_version=$(package_field "$candidate_bind920" 2)
 candidate_bind_tools_version=$(package_field "$candidate_bind_tools" 2)
 candidate_plugin_version=$(package_field "$candidate_plugin" 2)
+validate_plugin_candidate_version "$candidate_plugin_version" "$series"
 
 bind920=$(installed_record bind920)
 bind_tools=$(installed_record bind-tools)

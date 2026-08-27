@@ -176,11 +176,11 @@ cp /conf/config.xml "/conf/config.xml.os-bind-rp.$(date +%Y%m%d%H%M%S).bak"
 ```
 
 Configure `resolver-plugins-rollback` with the same key and the exact snapshot
-URL, for example `pkg-$series-os-bind-rp-1.36_2`. Dry-run and then install the
+URL, for example `pkg-26.7-os-bind-rp-26.7_1`. Dry-run and then install the
 only plugin package exposed by that snapshot:
 
 ```sh
-snapshot="pkg-$series-os-bind-rp-1.36_2"
+snapshot="pkg-26.7-os-bind-rp-26.7_1"
 cat > /usr/local/etc/pkg/repos/resolver-plugins-rollback.conf <<EOF
 resolver-plugins-rollback: {
   url: "https://github.com/resolver-plugins/repository/releases/download/$snapshot",
