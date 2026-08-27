@@ -12,6 +12,10 @@ conflict with it. A system must have one or the other installed, never both.
 
 The package build requires OPNsense `26.1.11_10` or newer. That floor includes
 the BIND version carrying the named DoT-related fix relied on by this fork.
+Resolver Plugins owns the `bind920` package pin used by `os-bind-rp` and may
+advance it independently of OPNsense after review. Candidate automation may
+prepare evidence and PRs, but signed package publication remains a separate
+maintainer-controlled boundary.
 
 ## Branch responsibilities
 
