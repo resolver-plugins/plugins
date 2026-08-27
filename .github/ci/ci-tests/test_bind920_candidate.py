@@ -19,6 +19,7 @@ SPEC.loader.exec_module(bind920_candidate)
 
 Bind920Profile = bind920_candidate.Bind920Profile
 CandidateProfile = bind920_candidate.CandidateProfile
+assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
 parse_bind920_makefile = bind920_candidate.parse_bind920_makefile
 parse_distinfo_hash = bind920_candidate.parse_distinfo_hash
@@ -58,6 +59,62 @@ class Bind920CandidateTest(unittest.TestCase):
         candidate = CandidateProfile("repo", "new", "m2", "d2", "9.21.0", 0, "main")
         with self.assertRaisesRegex(ValueError, "9.20"):
             candidate_is_newer(current, candidate)
+
+    def test_assessment_classifies_security_signal(self) -> None:
+        """CVE-bearing updates must be visible as security review candidates."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Security fix: CVE-2026-1234 denial of service in resolver.",
+            "",
+        )
+        self.assertEqual("security", result.classification)
+        self.assertIn("CVE-2026-1234", result.signals)
+
+    def test_assessment_classifies_crash_or_servfail_as_critical_bugfix(self) -> None:
+        """Operationally important resolver fixes must not look like routine bumps."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Bug fixes include named crash and SERVFAIL regression.",
+            "",
+        )
+        self.assertEqual("critical-bugfix", result.classification)
+
+    def test_assessment_classifies_dependency_drift_as_risky(self) -> None:
+        """Ports dependency changes need explicit maintainer attention."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Maintenance release.",
+            "+LIB_DEPENDS+= libnew.so:security/newlib\n",
+        )
+        self.assertEqual("risky", result.classification)
+        self.assertIn("dependency change", result.signals)
+
+    def test_assessment_classifies_plain_patch_as_routine(self) -> None:
+        """A patch release without policy signals can be deferred as routine."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Maintenance release with documentation and minor bug fixes.",
+            "",
+        )
+        self.assertEqual("routine", result.classification)
+
+    def test_assessment_summary_is_stable(self) -> None:
+        """PR assessment text must be predictable across repeated workflow runs."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Bug fixes include resolver crash.",
+            "",
+        )
+        self.assertEqual(
+            "BIND 9.20.26 to 9.20.27 is classified as critical-bugfix. "
+            "Signals: crash, resolver. Maintainer review is required before publication.",
+            result.summary,
+        )
 
 
 if __name__ == "__main__":
