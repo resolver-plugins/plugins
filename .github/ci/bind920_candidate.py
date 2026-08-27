@@ -90,13 +90,13 @@ def parse_bind920_makefile(text: str) -> tuple[str, int]:
     return distversion, portrevision
 
 
-def _parse_distinfo(text: str) -> tuple[str, str]:
+def _parse_distinfo(text: str) -> str:
     match = DISTINFO_SHA256_PATTERN.search(text)
     if match is None:
         raise ValueError("distinfo does not contain a BIND tarball SHA256")
     distversion = match.group(1)
     _version_tuple(distversion)
-    return distversion, match.group(2)
+    return distversion
 
 
 def candidate_is_newer(current: Bind920Profile, candidate: CandidateProfile) -> bool:
@@ -115,7 +115,7 @@ def candidate_from_files(
     source_ref: str,
 ) -> CandidateProfile:
     distversion, portrevision = parse_bind920_makefile(makefile.read_text(encoding="utf-8"))
-    distinfo_version, _distinfo_hash = _parse_distinfo(distinfo.read_text(encoding="utf-8"))
+    distinfo_version = _parse_distinfo(distinfo.read_text(encoding="utf-8"))
     if distinfo_version != distversion:
         raise ValueError("distinfo BIND version does not match Makefile DISTVERSION")
     return CandidateProfile(
@@ -171,14 +171,14 @@ def _has_dependency_drift(ports_diff_text: str) -> bool:
     return False
 
 
-def _logical_makefile_assignments(text: str) -> dict[str, str]:
-    assignments: dict[str, str] = {}
+def _logical_makefile_assignments(text: str) -> list[tuple[str, str]]:
+    assignments: list[tuple[str, str]] = []
     current_field = ""
     current_value: list[str] = []
 
     def flush() -> None:
         if current_field:
-            assignments[current_field] = "\n".join(current_value)
+            assignments.append((current_field, "\n".join(current_value)))
 
     for line in text.splitlines():
         match = re.match(rf"^({'|'.join(DEPENDENCY_FIELDS)})[?+:!]?=\s*(.*)$", line)

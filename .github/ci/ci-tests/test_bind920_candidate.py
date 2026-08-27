@@ -129,6 +129,29 @@ LIB_DEPENDS= liba.so:devel/a \\
         self.assertEqual("risky", result.classification)
         self.assertIn("dependency change", result.signals)
 
+    def test_assessment_compares_repeated_dependency_assignments(self) -> None:
+        """Repeated dependency-like assignments must be compared as distinct logical blocks."""
+        old_makefile = """PORTNAME= bind920
+DISTVERSION= 9.20.27
+CONFIGURE_ARGS+= --with-a \\
+  --with-b
+CONFIGURE_ARGS+= --enable-fixed
+"""
+        new_makefile = old_makefile.replace("--with-b", "--with-c")
+        compact_diff = "@@ -4,1 +4,1 @@\n-  --with-b\n+  --with-c\n"
+
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Maintenance release.",
+            compact_diff,
+            old_makefile_text=old_makefile,
+            new_makefile_text=new_makefile,
+        )
+
+        self.assertEqual("risky", result.classification)
+        self.assertIn("dependency change", result.signals)
+
     def test_assessment_keeps_secondary_dependency_signal_for_security_candidate(self) -> None:
         """Security updates with dependency drift must surface both review concerns."""
         result = assess_candidate(
