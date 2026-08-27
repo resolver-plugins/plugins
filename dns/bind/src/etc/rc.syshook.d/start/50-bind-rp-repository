@@ -1,0 +1,13 @@
+#!/bin/sh
+
+pending_marker=${OS_BIND_RP_PENDING_MARKER:-/var/db/os-bind-rp/repository-reconcile.pending}
+[ -f "${pending_marker}" ] || exit 0
+
+daemon_command=${OS_BIND_RP_DAEMON_COMMAND:-/usr/sbin/daemon}
+worker_command=${OS_BIND_RP_WORKER_COMMAND:-/usr/local/opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py}
+attempts=${OS_BIND_RP_RETRY_ATTEMPTS:-3}
+
+(
+    ${daemon_command} ${worker_command} --retry --retry-attempts "${attempts}" >/dev/null 2>&1 &
+) || :
+exit 0
