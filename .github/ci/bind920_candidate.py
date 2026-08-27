@@ -211,6 +211,18 @@ def update_profile(
     output.write_text(render_updated_profile(current, candidate), encoding="utf-8")
 
 
+def render_assessment_markdown(assessment: Assessment) -> str:
+    signal_lines = "\n".join(f"- {signal}" for signal in assessment.signals) if assessment.signals else "- none"
+    return (
+        "## BIND Candidate Assessment\n\n"
+        f"{assessment.summary}\n\n"
+        f"- classification: {assessment.classification}\n"
+        "- publication: manual maintainer action required\n\n"
+        "### Signals\n\n"
+        f"{signal_lines}\n"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -222,6 +234,13 @@ def main() -> None:
     update_parser.add_argument("--distinfo", type=Path, required=True)
     update_parser.add_argument("--output", type=Path, required=True)
     update_parser.add_argument("--source-ref", default="")
+    assess_parser = subparsers.add_parser("assess")
+    assess_parser.add_argument("--old-version", required=True)
+    assess_parser.add_argument("--new-version", required=True)
+    assess_parser.add_argument("--changelog", type=Path, required=True)
+    assess_parser.add_argument("--ports-diff", type=Path, required=True)
+    assess_parser.add_argument("--security", type=Path)
+    assess_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.command == "update-profile":
         update_profile(
@@ -233,6 +252,18 @@ def main() -> None:
             arguments.output,
             arguments.source_ref or arguments.ports_commit,
         )
+    elif arguments.command == "assess":
+        security_text = ""
+        if arguments.security is not None:
+            security_text = arguments.security.read_text(encoding="utf-8")
+        assessment = assess_candidate(
+            arguments.old_version,
+            arguments.new_version,
+            arguments.changelog.read_text(encoding="utf-8"),
+            arguments.ports_diff.read_text(encoding="utf-8"),
+            security_text,
+        )
+        arguments.output.write_text(render_assessment_markdown(assessment), encoding="utf-8")
 
 
 if __name__ == "__main__":

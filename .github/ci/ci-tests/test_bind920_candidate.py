@@ -197,6 +197,40 @@ class Bind920CandidateTest(unittest.TestCase):
             self.assertEqual(bind920_candidate.sha256_file(makefile), updated["makefile_sha256"])
             self.assertEqual(bind920_candidate.sha256_file(distinfo), updated["distinfo_sha256"])
 
+    def test_assess_cli_writes_markdown_summary(self) -> None:
+        """The workflow should get stable PR text without embedding assessment logic."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            changelog = directory / "changelog.txt"
+            diff = directory / "ports.diff"
+            output = directory / "assessment.md"
+            changelog.write_text("Resolver crash fixed.\n", encoding="utf-8")
+            diff.write_text("", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "assess",
+                    "--old-version",
+                    "9.20.26",
+                    "--new-version",
+                    "9.20.27",
+                    "--changelog",
+                    str(changelog),
+                    "--ports-diff",
+                    str(diff),
+                    "--output",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            self.assertIn("classification: critical-bugfix", output.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
