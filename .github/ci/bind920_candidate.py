@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import dataclasses
+import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -73,6 +75,10 @@ def load_current_profile(path: Path) -> Bind920Profile:
     )
 
 
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def parse_bind920_makefile(text: str) -> tuple[str, int]:
     distversion_match = DISTVERSION_PATTERN.search(text)
     if distversion_match is None:
@@ -98,6 +104,40 @@ def candidate_is_newer(current: Bind920Profile, candidate: CandidateProfile) -> 
     if candidate_version != current_version:
         return candidate_version > current_version
     return candidate.portrevision > current.portrevision
+
+
+def candidate_from_files(
+    ports_repository: str,
+    ports_commit: str,
+    makefile: Path,
+    distinfo: Path,
+    source_ref: str,
+) -> CandidateProfile:
+    distversion, portrevision = parse_bind920_makefile(makefile.read_text(encoding="utf-8"))
+    parse_distinfo_hash(distinfo.read_text(encoding="utf-8"))
+    return CandidateProfile(
+        ports_repository=ports_repository,
+        ports_commit=ports_commit,
+        makefile_sha256=sha256_file(makefile),
+        distinfo_sha256=sha256_file(distinfo),
+        distversion=distversion,
+        portrevision=portrevision,
+        source_ref=source_ref,
+    )
+
+
+def render_updated_profile(current: Bind920Profile, candidate: CandidateProfile) -> str:
+    if not candidate_is_newer(current, candidate):
+        raise ValueError("candidate is not newer than the current BIND profile")
+    data = {
+        "ports_repository": candidate.ports_repository,
+        "ports_commit": candidate.ports_commit,
+        "makefile_sha256": candidate.makefile_sha256,
+        "distinfo_sha256": candidate.distinfo_sha256,
+        "distversion": candidate.distversion,
+        "portrevision": candidate.portrevision,
+    }
+    return json.dumps(data, indent=2) + "\n"
 
 
 def _contains_term(text: str, term: str) -> bool:
@@ -155,3 +195,45 @@ def assess_candidate(
         f"Signals: {signal_text}. Maintainer review is required before publication."
     )
     return Assessment(classification, signals, summary)
+
+
+def update_profile(
+    current_path: Path,
+    ports_repository: str,
+    ports_commit: str,
+    makefile: Path,
+    distinfo: Path,
+    output: Path,
+    source_ref: str,
+) -> None:
+    current = load_current_profile(current_path)
+    candidate = candidate_from_files(ports_repository, ports_commit, makefile, distinfo, source_ref)
+    output.write_text(render_updated_profile(current, candidate), encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    update_parser = subparsers.add_parser("update-profile")
+    update_parser.add_argument("--current", type=Path, required=True)
+    update_parser.add_argument("--ports-repository", required=True)
+    update_parser.add_argument("--ports-commit", required=True)
+    update_parser.add_argument("--makefile", type=Path, required=True)
+    update_parser.add_argument("--distinfo", type=Path, required=True)
+    update_parser.add_argument("--output", type=Path, required=True)
+    update_parser.add_argument("--source-ref", default="")
+    arguments = parser.parse_args()
+    if arguments.command == "update-profile":
+        update_profile(
+            arguments.current,
+            arguments.ports_repository,
+            arguments.ports_commit,
+            arguments.makefile,
+            arguments.distinfo,
+            arguments.output,
+            arguments.source_ref or arguments.ports_commit,
+        )
+
+
+if __name__ == "__main__":
+    main()

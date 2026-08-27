@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +26,7 @@ assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
 parse_bind920_makefile = bind920_candidate.parse_bind920_makefile
 parse_distinfo_hash = bind920_candidate.parse_distinfo_hash
+render_updated_profile = bind920_candidate.render_updated_profile
 
 
 class Bind920CandidateTest(unittest.TestCase):
@@ -115,6 +119,83 @@ class Bind920CandidateTest(unittest.TestCase):
             "Signals: crash, resolver. Maintainer review is required before publication.",
             result.summary,
         )
+
+    def test_render_updated_profile_preserves_key_order_and_updates_candidate_values(self) -> None:
+        """Profile rewrites must be stable and limited to candidate values."""
+        current = Bind920Profile("repo", "old", "oldmake", "olddist", "9.20.26", 1)
+        candidate = CandidateProfile("repo", "new", "newmake", "newdist", "9.20.27", 0, "main")
+        rendered = render_updated_profile(current, candidate)
+        self.assertIn('"ports_commit": "new"', rendered)
+        self.assertIn('"distversion": "9.20.27"', rendered)
+        self.assertIn('"portrevision": 0', rendered)
+        self.assertEqual(
+            [
+                "ports_repository",
+                "ports_commit",
+                "makefile_sha256",
+                "distinfo_sha256",
+                "distversion",
+                "portrevision",
+            ],
+            list(json.loads(rendered).keys()),
+        )
+
+    def test_update_profile_cli_hashes_candidate_files(self) -> None:
+        """The CLI must derive checksums from the candidate recipe files."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            current = directory / "bind920.json"
+            makefile = directory / "Makefile"
+            distinfo = directory / "distinfo"
+            current.write_text(
+                json.dumps(
+                    {
+                        "ports_repository": "https://github.com/freebsd/freebsd-ports.git",
+                        "ports_commit": "0" * 40,
+                        "makefile_sha256": "1" * 64,
+                        "distinfo_sha256": "2" * 64,
+                        "distversion": "9.20.26",
+                        "portrevision": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            makefile.write_text("PORTNAME= bind920\nDISTVERSION= 9.20.27\n", encoding="utf-8")
+            distinfo.write_text(
+                "TIMESTAMP = 1\nSHA256 (bind-9.20.27.tar.xz) = abc123\nSIZE (bind-9.20.27.tar.xz) = 1\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "update-profile",
+                    "--current",
+                    str(current),
+                    "--ports-repository",
+                    "https://github.com/freebsd/freebsd-ports.git",
+                    "--ports-commit",
+                    "f" * 40,
+                    "--makefile",
+                    str(makefile),
+                    "--distinfo",
+                    str(distinfo),
+                    "--output",
+                    str(current),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            updated = json.loads(current.read_text(encoding="utf-8"))
+            self.assertEqual("9.20.27", updated["distversion"])
+            self.assertEqual(0, updated["portrevision"])
+            self.assertEqual("f" * 40, updated["ports_commit"])
+            self.assertEqual(bind920_candidate.sha256_file(makefile), updated["makefile_sha256"])
+            self.assertEqual(bind920_candidate.sha256_file(distinfo), updated["distinfo_sha256"])
 
 
 if __name__ == "__main__":
