@@ -436,8 +436,28 @@ def asset_order(directory: Path) -> list[Path]:
     return packages + catalogs + metadata
 
 
+GH_TIMEOUT_SECONDS = 300
+GH_ATTEMPTS = 3
+
+
 def run_gh(arguments: list[str]) -> None:
-    subprocess.run(["gh", *arguments], check=True)
+    command = ["gh", *arguments]
+    for attempt in range(1, GH_ATTEMPTS + 1):
+        try:
+            subprocess.run(command, check=True, timeout=GH_TIMEOUT_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            if attempt == GH_ATTEMPTS:
+                raise
+
+
+def upload_release_assets(repository: str, tag: str, assets: list[Path]) -> None:
+    """Upload release assets one at a time to avoid partial multi-asset CLI failures."""
+    for asset in assets:
+        run_gh([
+            "release", "upload", tag, str(asset),
+            "--clobber", "--repo", repository,
+        ])
 
 
 def upload_release_assets(repository: str, tag: str, assets: list[Path]) -> None:
