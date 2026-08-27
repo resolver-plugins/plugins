@@ -133,7 +133,15 @@ def require_installed(package: str, expected: tuple[str, str, str, str]) -> None
         raise ReconcileError(f"installed identity mismatch for {package}: {actual or 'missing'}")
 
 
-def validate_dry_run(output: str, requested_identity: str) -> None:
+def package_version_less_than(installed: str, candidate: str) -> bool:
+    result = run([*package_command(), "version", "-t", installed, candidate])
+    comparison = result.stdout.strip()
+    if comparison not in {"<", "=", ">"}:
+        raise ReconcileError(f"could not compare package versions: {installed} and {candidate}")
+    return comparison == "<"
+
+
+def validate_dry_run(output: str, requested_identities: list[str]) -> None:
     if "will be affected" not in output and "already installed" not in output:
         raise ReconcileError("dry-run package plan is not recognized")
     if "REMOVED:" in output or "DOWNGRADED:" in output:
@@ -142,14 +150,15 @@ def validate_dry_run(output: str, requested_identity: str) -> None:
     for name in names:
         if name not in ALLOWED:
             raise ReconcileError(f"dry-run package plan changes unexpected package: {name}")
-    requested_version = requested_identity.removeprefix("os-bind-rp-")
-    satisfied_by_arrow = re.search(
-        rf"^\s*os-bind-rp:\s+\S+\s+->\s+{re.escape(requested_version)}(?:\s|$)",
-        output,
-        re.MULTILINE,
-    )
-    if requested_identity not in output and satisfied_by_arrow is None:
-        raise ReconcileError(f"dry-run package plan omitted {requested_identity}")
+    for requested_identity in requested_identities:
+        requested_name, requested_version = requested_identity.rsplit("-", 1)
+        satisfied_by_arrow = re.search(
+            rf"^\s*{re.escape(requested_name)}:\s+\S+\s+->\s+{re.escape(requested_version)}(?:\s|$)",
+            output,
+            re.MULTILINE,
+        )
+        if requested_identity not in output and satisfied_by_arrow is None:
+            raise ReconcileError(f"dry-run package plan omitted {requested_identity}")
 
 
 def reconcile_once() -> None:
@@ -186,10 +195,17 @@ def reconcile_once() -> None:
     official = record(package_command(), "os-bind")
     if official is not None:
         raise ReconcileError("official os-bind is installed")
+    bind_update_required = False
     for package, expected in (("bind920", bind920), ("bind-tools", bind_tools)):
         installed = record(package_command(), package)
         if installed is not None and installed[2] != expected[2]:
             raise ReconcileError(f"invalid installed identity for {package}")
+        if installed is None or package_version_less_than(installed[1], expected[1]):
+            bind_update_required = True
+    requested_identities = []
+    if bind_update_required:
+        requested_identities.extend([f"bind920-{bind920[1]}", f"bind-tools-{bind_tools[1]}"])
+    requested_identities.append(plugin_identity)
     dry_run = run(
         [
             *package_command(static=True),
@@ -197,12 +213,15 @@ def reconcile_once() -> None:
             "-n",
             "-r",
             "resolver-plugins",
-            plugin_identity,
+            *requested_identities,
         ],
         allow_status={0, 1},
     )
-    validate_dry_run(dry_run.stdout + dry_run.stderr, plugin_identity)
-    run([*package_command(static=True), "install", "-y", "-r", "resolver-plugins", plugin_identity])
+    validate_dry_run(dry_run.stdout + dry_run.stderr, requested_identities)
+    run([*package_command(static=True), "install", "-y", "-r", "resolver-plugins", *requested_identities])
+    if bind_update_required:
+        require_installed("bind920", bind920)
+        require_installed("bind-tools", bind_tools)
     require_installed("os-bind-rp", plugin)
     marker.unlink(missing_ok=True)
 
