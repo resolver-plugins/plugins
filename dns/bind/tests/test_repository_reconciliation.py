@@ -80,7 +80,14 @@ def write_provider(path):
     write_executable(path, "#!/bin/sh\nprintf 'provider %s\\n' \"$@\" >> \"$OS_BIND_RP_TEST_LOG\"\n")
 
 
-def write_pkg(path, *, update_fails=False, plan="upgrade", candidate_plugin="26.7_1"):
+def write_pkg(
+    path,
+    *,
+    update_fails=False,
+    plan="upgrade",
+    candidate_plugin="26.7_1",
+    installed_bind_version="9.20.26_2",
+):
     plan_text = {
         "upgrade": textwrap.dedent(
             f"""\
@@ -106,12 +113,13 @@ def write_pkg(path, *, update_fails=False, plan="upgrade", candidate_plugin="26.
               os-bind-rp: 26.1_1
             """
         ),
+        "requested": None,
         "empty": "",
     }[plan]
     write_executable(
         path,
         "#!/usr/bin/env python3\n"
-        "import os, pathlib, sys\n"
+        "import os, pathlib, re, sys\n"
         "raw = sys.argv[1:]\n"
         "with open(os.environ['OS_BIND_RP_TEST_LOG'], 'a', encoding='utf-8') as stream:\n"
         "    stream.write('pkg ' + ' '.join(raw) + '\\n')\n"
@@ -121,9 +129,13 @@ def write_pkg(path, *, update_fails=False, plan="upgrade", candidate_plugin="26.
         "command = args[0] if args else ''\n"
         "arguments = args[1:]\n"
         "installed = pathlib.Path(os.environ['OS_BIND_RP_INSTALLED_MARKER']).exists()\n"
+        "bind_updated = pathlib.Path(os.environ['OS_BIND_RP_BIND_MARKER']).exists()\n"
         f"candidate_plugin = {candidate_plugin!r}\n"
+        f"installed_bind_version = {installed_bind_version!r}\n"
         f"update_fails = {update_fails!r}\n"
         f"plan_text = {plan_text!r}\n"
+        "def version_key(value):\n"
+        "    return tuple(int(part) for part in re.findall(r'\\d+', value))\n"
         "if command == 'config' and arguments == ['ABI']:\n"
         "    print('FreeBSD:15:amd64')\n"
         "elif command == 'update':\n"
@@ -143,22 +155,40 @@ def write_pkg(path, *, update_fails=False, plan="upgrade", candidate_plugin="26.
         "    elif '%n = os-bind' in text:\n"
         "        pass\n"
         "    elif '%n = bind920' in text:\n"
-        "        print('bind920|9.20.26_2|dns/bind920|FreeBSD:15:amd64')\n"
+        "        print('bind920|' + ('9.20.26_2' if bind_updated else installed_bind_version) + '|dns/bind920|FreeBSD:15:amd64')\n"
         "    elif '%n = bind-tools' in text:\n"
-        "        print('bind-tools|9.20.26_2|dns/bind-tools|FreeBSD:15:amd64')\n"
+        "        print('bind-tools|' + ('9.20.26_2' if bind_updated else installed_bind_version) + '|dns/bind-tools|FreeBSD:15:amd64')\n"
         "elif command == 'version':\n"
-        "    print('=')\n"
+        "    left, right = arguments[-2:]\n"
+        "    comparison = (version_key(left) > version_key(right)) - (version_key(left) < version_key(right))\n"
+        "    print('<=>'[comparison + 1])\n"
         "elif command == 'install' and '-n' in arguments:\n"
-        "    print(plan_text)\n"
+        "    if plan_text is None:\n"
+        "        print('The following package(s) will be affected:')\n"
+        "        print('Installed packages to be UPGRADED:')\n"
+        "        for identity in arguments:\n"
+        "            if re.search(r'-[0-9]', identity):\n"
+        "                print('  ' + identity)\n"
+        "    elif plan_text:\n"
+        "        print(plan_text)\n"
         "    raise SystemExit(1)\n"
         "elif command == 'install':\n"
+        "    if 'bind920-9.20.26_2' in arguments and 'bind-tools-9.20.26_2' in arguments:\n"
+        "        pathlib.Path(os.environ['OS_BIND_RP_BIND_MARKER']).touch()\n"
         "    pathlib.Path(os.environ['OS_BIND_RP_INSTALLED_MARKER']).touch()\n"
         "else:\n"
         "    raise SystemExit(64)\n",
     )
 
 
-def worker_environment(tmp_path, *, repository_text=None, pkg_plan="upgrade", update_fails=False):
+def worker_environment(
+    tmp_path,
+    *,
+    repository_text=None,
+    pkg_plan="upgrade",
+    update_fails=False,
+    installed_bind_version="9.20.26_2",
+):
     config = tmp_path / "resolver-plugins.conf"
     if repository_text is None:
         repository_text = repository_config(series_url("26.7"))
@@ -166,6 +196,7 @@ def worker_environment(tmp_path, *, repository_text=None, pkg_plan="upgrade", up
     marker = tmp_path / "repository-reconcile.pending"
     marker.touch()
     log = tmp_path / "commands.log"
+    bind_marker = tmp_path / "bind-updated"
     opnsense_version = tmp_path / "opnsense-version"
     provider = tmp_path / "ResolverPlugins.sh"
     pkg = tmp_path / "pkg"
@@ -173,7 +204,13 @@ def worker_environment(tmp_path, *, repository_text=None, pkg_plan="upgrade", up
     write_opnsense_version(opnsense_version)
     write_provider(provider)
     candidate_plugin = os.environ.get("OS_BIND_RP_TEST_CANDIDATE_PLUGIN", "26.7_1")
-    write_pkg(pkg, update_fails=update_fails, plan=pkg_plan, candidate_plugin=candidate_plugin)
+    write_pkg(
+        pkg,
+        update_fails=update_fails,
+        plan=pkg_plan,
+        candidate_plugin=candidate_plugin,
+        installed_bind_version=installed_bind_version,
+    )
     environment = os.environ | {
         "OS_BIND_RP_REPOSITORY_CONFIG": str(config),
         "OS_BIND_RP_PENDING_MARKER": str(marker),
@@ -185,6 +222,7 @@ def worker_environment(tmp_path, *, repository_text=None, pkg_plan="upgrade", up
         "OS_BIND_RP_PKG_STATIC_COMMAND": f"{sys.executable} {pkg}",
         "OS_BIND_RP_TEST_LOG": str(log),
         "OS_BIND_RP_INSTALLED_MARKER": str(installed_marker),
+        "OS_BIND_RP_BIND_MARKER": str(bind_marker),
     }
     return environment, config, marker, log
 
@@ -262,6 +300,26 @@ def test_worker_refreshes_only_resolver_repo_installs_plugin_and_removes_marker(
     assert any("rquery -r resolver-plugins" in call and "%n = os-bind-rp" in call for call in calls)
     assert any("install -n -r resolver-plugins os-bind-rp-26.7_1" in call for call in calls)
     assert any("install -y -r resolver-plugins os-bind-rp-26.7_1" in call for call in calls)
+
+
+def test_worker_updates_bind_pair_when_opnsense_upgrade_installed_an_older_pair(tmp_path):
+    result, _, marker, log, worker_log = run_worker(
+        tmp_path, installed_bind_version="9.20.24", pkg_plan="requested"
+    )
+
+    assert result.returncode == 0, worker_log.read_text(encoding="utf-8")
+    assert not marker.exists()
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert any(
+        "install -n -r resolver-plugins bind920-9.20.26_2 bind-tools-9.20.26_2 os-bind-rp-26.7_1"
+        in call
+        for call in calls
+    )
+    assert any(
+        "install -y -r resolver-plugins bind920-9.20.26_2 bind-tools-9.20.26_2 os-bind-rp-26.7_1"
+        in call
+        for call in calls
+    )
 
 
 @pytest.mark.parametrize("pkg_plan", ("unrelated", "remove", "empty"))
