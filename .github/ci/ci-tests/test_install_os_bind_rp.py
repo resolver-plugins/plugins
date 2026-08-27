@@ -26,6 +26,7 @@ def installer_environment(
     tmp_path: Path,
     *,
     opnsense_version: str = "OPNsense 26.1.11_10 (amd64)",
+    pkg_abi: str = "FreeBSD:14:amd64",
     bind920: str = "bind920|9.20.26_2|dns/bind920",
     bind_tools: str = "bind-tools|9.20.26_2|dns/bind-tools",
     os_bind: str = "",
@@ -85,6 +86,7 @@ def installer_environment(
             "RP_TEST_KEY_SHA256": key_sha256,
             "RP_TEST_LOG": str(log),
             "RP_TEST_OPNSENSE_VERSION": opnsense_version,
+            "RP_TEST_ABI": pkg_abi,
             "RP_TEST_FALLBACK_MARKER": str(tmp_path / "fallback-installed"),
             "RP_TEST_PLUGIN_MARKER": str(tmp_path / "plugin-installed"),
             "RP_TEST_OFFICIAL_REMOVED_MARKER": str(tmp_path / "official-removed"),
@@ -404,22 +406,33 @@ def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.Complete
     return result, log, repositories
 
 
-def test_installs_current_plugin_for_the_detected_series_without_service_changes(tmp_path: Path) -> None:
-    result, log, repositories = run_installer(tmp_path)
+@pytest.mark.parametrize(
+    ("opnsense_version", "pkg_abi", "series"),
+    (
+        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1"),
+        ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7"),
+    ),
+)
+def test_installs_current_plugin_for_the_detected_series_without_service_changes(
+    tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str
+) -> None:
+    result, log, repositories = run_installer(
+        tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi
+    )
 
     assert result.returncode == 0, result.stderr
     repository = (repositories / "resolver-plugins.conf").read_text(encoding="utf-8")
     assert (
-        'url: "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest"'
+        f'url: "https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest"'
         in repository
     )
     calls = log.read_text(encoding="utf-8")
     assert (
-        "https://resolver-plugins.github.io/repository/pkg/FreeBSD:14:amd64/latest/"
+        f"https://resolver-plugins.github.io/repository/pkg/{pkg_abi}/{series}/latest/"
         "resolver-plugins.pub" in calls
     )
     assert (
-        "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest/"
+        f"https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest/"
         "resolver-plugins.pub" not in calls
     )
     assert "releases/download/pkg-" not in calls
