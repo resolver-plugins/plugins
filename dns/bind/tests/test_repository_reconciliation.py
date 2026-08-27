@@ -328,7 +328,7 @@ def test_worker_updates_bind_pair_when_opnsense_upgrade_installed_an_older_pair(
         for call in calls
     )
     assert "configctl template reload OPNsense/Bind" in calls
-    assert "configctl service restart bind" in calls
+    assert "configctl bind restart" in calls
 
 
 @pytest.mark.parametrize("pkg_plan", ("unrelated", "remove", "empty"))

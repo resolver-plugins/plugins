@@ -147,7 +147,7 @@ def package_version_less_than(installed: str, candidate: str) -> bool:
 
 def restart_bind_service() -> None:
     run([*configctl_command(), "template", "reload", "OPNsense/Bind"])
-    run([*configctl_command(), "service", "restart", "bind"])
+    run([*configctl_command(), "bind", "restart"])
 
 
 def validate_dry_run(output: str, requested_identities: list[str]) -> None:
