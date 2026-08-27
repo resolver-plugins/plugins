@@ -80,6 +80,10 @@ def write_provider(path):
     write_executable(path, "#!/bin/sh\nprintf 'provider %s\\n' \"$@\" >> \"$OS_BIND_RP_TEST_LOG\"\n")
 
 
+def write_configctl(path):
+    write_executable(path, "#!/bin/sh\nprintf 'configctl %s\\n' \"$*\" >> \"$OS_BIND_RP_TEST_LOG\"\n")
+
+
 def write_pkg(
     path,
     *,
@@ -199,10 +203,12 @@ def worker_environment(
     bind_marker = tmp_path / "bind-updated"
     opnsense_version = tmp_path / "opnsense-version"
     provider = tmp_path / "ResolverPlugins.sh"
+    configctl = tmp_path / "configctl"
     pkg = tmp_path / "pkg"
     installed_marker = tmp_path / "installed"
     write_opnsense_version(opnsense_version)
     write_provider(provider)
+    write_configctl(configctl)
     candidate_plugin = os.environ.get("OS_BIND_RP_TEST_CANDIDATE_PLUGIN", "26.7_1")
     write_pkg(
         pkg,
@@ -218,6 +224,7 @@ def worker_environment(
         "OS_BIND_RP_LOCK_FILE": str(tmp_path / "reconcile.lock"),
         "OS_BIND_RP_OPNSENSE_VERSION_COMMAND": f"/bin/sh {opnsense_version}",
         "OS_BIND_RP_PROVIDER_COMMAND": f"/bin/sh {provider}",
+        "OS_BIND_RP_CONFIGCTL_COMMAND": f"/bin/sh {configctl}",
         "OS_BIND_RP_PKG_COMMAND": f"{sys.executable} {pkg}",
         "OS_BIND_RP_PKG_STATIC_COMMAND": f"{sys.executable} {pkg}",
         "OS_BIND_RP_TEST_LOG": str(log),
@@ -320,6 +327,8 @@ def test_worker_updates_bind_pair_when_opnsense_upgrade_installed_an_older_pair(
         in call
         for call in calls
     )
+    assert "configctl template reload OPNsense/Bind" in calls
+    assert "configctl service restart bind" in calls
 
 
 @pytest.mark.parametrize("pkg_plan", ("unrelated", "remove", "empty"))
