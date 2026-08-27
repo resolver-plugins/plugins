@@ -34,6 +34,8 @@ jobs:
         run: |
           python -m py_compile .github/ci/*.py
           python .github/ci/ci-tests/test_bind920_candidate.py
+          python .github/ci/ci-tests/test_bind920_reuse.py
+          python .github/ci/ci-tests/test_release_channel_provenance.py
       - name: Fetch FreeBSD Ports candidate
         id: ports
         shell: bash
@@ -48,6 +50,7 @@ jobs:
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout set dns/bind920
           git -C "$RUNNER_TEMP/freebsd-ports" checkout "$candidate_commit"
           current_commit=$(python3 .github/ci/bind920_profile.py .resolver-plugins/bind920.json ports_commit)
+          git -C "$RUNNER_TEMP/freebsd-ports" show "$current_commit:dns/bind920/Makefile" > "$RUNNER_TEMP/current.Makefile"
           git -C "$RUNNER_TEMP/freebsd-ports" diff --no-ext-diff "$current_commit" "$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.diff"
           git -C "$RUNNER_TEMP/freebsd-ports" log --format='%h %s' "$current_commit..$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.log"
           {
@@ -56,6 +59,7 @@ jobs:
             printf 'ports_dir=%s\n' "$RUNNER_TEMP/freebsd-ports"
             printf 'ports_diff=%s\n' "$RUNNER_TEMP/ports.diff"
             printf 'ports_log=%s\n' "$RUNNER_TEMP/ports.log"
+            printf 'current_makefile=%s\n' "$RUNNER_TEMP/current.Makefile"
           } >> "$GITHUB_OUTPUT"
       - name: Evaluate candidate
         id: candidate
@@ -85,10 +89,14 @@ jobs:
           )
           newer = candidate_is_newer(current, candidate)
           with output_path.open("a", encoding="utf-8") as output:
+              package_version = candidate.distversion
+              if candidate.portrevision:
+                  package_version = f"{candidate.distversion}_{candidate.portrevision}"
               print(f"newer={'true' if newer else 'false'}", file=output)
               print(f"old_version={current.distversion}", file=output)
               print(f"new_version={candidate.distversion}", file=output)
               print(f"portrevision={candidate.portrevision}", file=output)
+              print(f"package_version={package_version}", file=output)
           PY
       - name: Stop when no newer candidate exists
         if: steps.candidate.outputs.newer != 'true'
@@ -102,6 +110,7 @@ jobs:
           PORTS_DIR: ${{ steps.ports.outputs.ports_dir }}
           PORTS_DIFF: ${{ steps.ports.outputs.ports_diff }}
           PORTS_LOG: ${{ steps.ports.outputs.ports_log }}
+          CURRENT_MAKEFILE: ${{ steps.ports.outputs.current_makefile }}
         run: |
           set -euo pipefail
           printf '%s\n' "$CHANGELOG_TEXT" > "$RUNNER_TEMP/maintainer-notes.txt"
@@ -123,13 +132,15 @@ jobs:
             --new-version '${{ steps.candidate.outputs.new_version }}' \
             --changelog "$RUNNER_TEMP/changelog.txt" \
             --ports-diff "$PORTS_DIFF" \
+            --old-makefile "$CURRENT_MAKEFILE" \
+            --new-makefile "$PORTS_DIR/dns/bind920/Makefile" \
             --output "$RUNNER_TEMP/assessment.md"
           {
             cat "$RUNNER_TEMP/assessment.md"
             printf '\n### Candidate Inputs\n\n'
             printf -- '- FreeBSD Ports commit: `%s`\n' "$CANDIDATE_COMMIT"
             printf -- '- Previous FreeBSD Ports commit: `%s`\n' '${{ steps.ports.outputs.current_commit }}'
-            printf -- '- New BIND version: `%s_%s`\n' '${{ steps.candidate.outputs.new_version }}' '${{ steps.candidate.outputs.portrevision }}'
+            printf -- '- New BIND version: `%s`\n' '${{ steps.candidate.outputs.package_version }}'
             printf -- '- Publication: not performed by this workflow\n'
           } > "$RUNNER_TEMP/pr-body.md"
       - name: Open or update candidate PR
@@ -139,9 +150,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version='${{ steps.candidate.outputs.new_version }}'
+          version="${{ steps.candidate.outputs.package_version }}"
           revision='${{ steps.candidate.outputs.portrevision }}'
-          branch="sync/bind920/$version-$revision"
+          branch="sync/bind920/${{ steps.candidate.outputs.new_version }}-$revision"
           git config user.name github-actions
           git config user.email github-actions@github.com
           git checkout -B "$branch"
@@ -150,10 +161,10 @@ jobs:
             echo "Candidate profile is unchanged."
             exit 0
           fi
-          git commit -m "ci(bind): update bind920 to ${version}_${revision}"
+          git commit -m "ci(bind): update bind920 to ${version}"
           git push --force-with-lease origin "$branch"
           number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[0].number // empty')
-          title="ci(bind): update bind920 to ${version}_${revision}"
+          title="ci(bind): update bind920 to ${version}"
           if [ -n "$number" ]; then
             gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
           else

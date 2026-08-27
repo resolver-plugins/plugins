@@ -28,7 +28,6 @@ CandidateProfile = bind920_candidate.CandidateProfile
 assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
 parse_bind920_makefile = bind920_candidate.parse_bind920_makefile
-parse_distinfo_hash = bind920_candidate.parse_distinfo_hash
 render_updated_profile = bind920_candidate.render_updated_profile
 
 
@@ -42,11 +41,6 @@ class Bind920CandidateTest(unittest.TestCase):
         """A fresh Ports version without PORTREVISION must become revision zero."""
         text = "PORTNAME= bind920\nDISTVERSION= 9.20.27\n"
         self.assertEqual(("9.20.27", 0), parse_bind920_makefile(text))
-
-    def test_parse_distinfo_hash_reads_bind_tarball_sha256(self) -> None:
-        """The candidate profile must hash the BIND distfile, not unrelated entries."""
-        text = "TIMESTAMP = 1\nSHA256 (bind-9.20.27.tar.xz) = abc123\nSIZE (bind-9.20.27.tar.xz) = 1\n"
-        self.assertEqual("abc123", parse_distinfo_hash(text))
 
     def test_candidate_is_newer_rejects_same_distversion_and_portrevision(self) -> None:
         """An unchanged candidate must not open a review PR."""
@@ -107,6 +101,31 @@ class Bind920CandidateTest(unittest.TestCase):
             "Maintenance release.",
             "@@ -1,3 +1,3 @@\n LIB_DEPENDS= liba.so:devel/a \\\n- libb.so:devel/b\n+ libc.so:devel/c\n",
         )
+        self.assertEqual("risky", result.classification)
+        self.assertIn("dependency change", result.signals)
+
+    def test_assessment_classifies_long_dependency_continuation_drift_as_risky(self) -> None:
+        """Dependency changes must be detected even when a compact diff omits the assignment header."""
+        old_makefile = """PORTNAME= bind920
+DISTVERSION= 9.20.27
+LIB_DEPENDS= liba.so:devel/a \\
+  libb.so:devel/b \\
+  libd.so:devel/d \\
+  libe.so:devel/e \\
+  libf.so:devel/f
+"""
+        new_makefile = old_makefile.replace("libf.so:devel/f", "libg.so:devel/g")
+        compact_diff = "@@ -5,1 +5,1 @@\n-  libf.so:devel/f\n+  libg.so:devel/g\n"
+
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Maintenance release.",
+            compact_diff,
+            old_makefile_text=old_makefile,
+            new_makefile_text=new_makefile,
+        )
+
         self.assertEqual("risky", result.classification)
         self.assertIn("dependency change", result.signals)
 
@@ -223,6 +242,30 @@ class Bind920CandidateTest(unittest.TestCase):
             self.assertEqual(bind920_candidate.sha256_file(makefile), updated["makefile_sha256"])
             self.assertEqual(bind920_candidate.sha256_file(distinfo), updated["distinfo_sha256"])
 
+    def test_candidate_from_files_validates_distinfo_version_and_hashes_whole_files(self) -> None:
+        """Candidate profiles must pair the Makefile version with the matching distinfo file."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            makefile = directory / "Makefile"
+            distinfo = directory / "distinfo"
+            makefile.write_text("PORTNAME= bind920\nDISTVERSION= 9.20.27\n", encoding="utf-8")
+            distinfo.write_text(
+                "TIMESTAMP = 1\nSHA256 (bind-9.20.27.tar.xz) = abc123\nSIZE (bind-9.20.27.tar.xz) = 1\n",
+                encoding="utf-8",
+            )
+
+            candidate = bind920_candidate.candidate_from_files(
+                "https://github.com/freebsd/freebsd-ports.git",
+                "f" * 40,
+                makefile,
+                distinfo,
+                "main",
+            )
+
+            self.assertEqual("9.20.27", candidate.distversion)
+            self.assertEqual(bind920_candidate.sha256_file(makefile), candidate.makefile_sha256)
+            self.assertEqual(bind920_candidate.sha256_file(distinfo), candidate.distinfo_sha256)
+
     def test_candidate_from_files_rejects_distinfo_version_mismatch(self) -> None:
         """A profile PR must not pair one DISTVERSION with another distfile."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -278,6 +321,48 @@ class Bind920CandidateTest(unittest.TestCase):
             self.assertEqual(0, result.returncode)
             self.assertIn("classification: critical-bugfix", output.read_text(encoding="utf-8"))
 
+    def test_assess_cli_accepts_old_and_new_makefiles_for_dependency_drift(self) -> None:
+        """Workflow assessment should not rely on diff context for dependency blocks."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            changelog = directory / "changelog.txt"
+            diff = directory / "ports.diff"
+            old_makefile = directory / "old.Makefile"
+            new_makefile = directory / "new.Makefile"
+            output = directory / "assessment.md"
+            changelog.write_text("Maintenance release.\n", encoding="utf-8")
+            diff.write_text("@@ -5,1 +5,1 @@\n-  libf.so:devel/f\n+  libg.so:devel/g\n", encoding="utf-8")
+            old_makefile.write_text("LIB_DEPENDS= liba.so:devel/a \\\n  libf.so:devel/f\n", encoding="utf-8")
+            new_makefile.write_text("LIB_DEPENDS= liba.so:devel/a \\\n  libg.so:devel/g\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "assess",
+                    "--old-version",
+                    "9.20.26",
+                    "--new-version",
+                    "9.20.27",
+                    "--changelog",
+                    str(changelog),
+                    "--ports-diff",
+                    str(diff),
+                    "--old-makefile",
+                    str(old_makefile),
+                    "--new-makefile",
+                    str(new_makefile),
+                    "--output",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            self.assertIn("classification: risky", output.read_text(encoding="utf-8"))
+
 
 class Bind920CandidateWorkflowTest(unittest.TestCase):
     def workflow_text(self) -> str:
@@ -291,6 +376,21 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertNotIn("pip install", workflow)
         self.assertNotIn("python -m pytest", workflow)
         self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", workflow)
+        self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", workflow)
+        self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", workflow)
+
+    def test_bind_pull_request_workflow_covers_profile_only_candidates_without_pip(self) -> None:
+        """Generated bind920 profile PRs need checks without adding package-registry egress."""
+        workflow = (REPOSITORY_ROOT / ".github/workflows/bind-tests.yml").read_text(encoding="utf-8")
+        helper_job = workflow.split("  ci-helpers:", 1)[1].split("  discover:", 1)[0]
+        bind_job = workflow.split("  test:", 1)[1]
+
+        self.assertIn("- '.resolver-plugins/bind920.json'", workflow)
+        self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", helper_job)
+        self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", helper_job)
+        self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", helper_job)
+        self.assertNotIn("pip install", helper_job)
+        self.assertIn("needs.changes.outputs.bind_source == 'true'", bind_job)
 
     def test_candidate_workflow_never_publishes_packages(self) -> None:
         """Candidate review PRs must not cross the publication boundary."""
@@ -311,6 +411,13 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         workflow = self.workflow_text()
         self.assertIn("git diff --cached --quiet", workflow)
         self.assertNotIn("git commit -m \"ci(bind): update bind920 to ${version}_${revision}\" || exit 0", workflow)
+
+    def test_candidate_workflow_uses_package_version_for_human_output(self) -> None:
+        """Reviewer-facing text must use the same version form as pkg artifacts."""
+        workflow = self.workflow_text()
+        self.assertIn("package_version=", workflow)
+        self.assertIn('version="${{ steps.candidate.outputs.package_version }}"', workflow)
+        self.assertNotIn("New BIND version: `%s_%s`", workflow)
 
 
 if __name__ == "__main__":

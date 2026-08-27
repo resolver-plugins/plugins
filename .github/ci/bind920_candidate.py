@@ -175,17 +175,59 @@ def _has_dependency_drift(ports_diff_text: str) -> bool:
     return False
 
 
+def _logical_makefile_assignments(text: str) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    current_field = ""
+    current_value: list[str] = []
+
+    def flush() -> None:
+        if current_field:
+            assignments[current_field] = "\n".join(current_value)
+
+    for line in text.splitlines():
+        match = re.match(rf"^({'|'.join(DEPENDENCY_FIELDS)})[?+:!]?=\s*(.*)$", line)
+        if match:
+            flush()
+            current_field = match.group(1)
+            current_value = [match.group(2).rstrip("\\").rstrip()]
+            if not line.rstrip().endswith("\\"):
+                flush()
+                current_field = ""
+                current_value = []
+            continue
+        if current_field:
+            current_value.append(line.rstrip("\\").rstrip())
+            if not line.rstrip().endswith("\\"):
+                flush()
+                current_field = ""
+                current_value = []
+    flush()
+    return assignments
+
+
+def _has_makefile_dependency_drift(old_makefile_text: str, new_makefile_text: str) -> bool:
+    return _logical_makefile_assignments(old_makefile_text) != _logical_makefile_assignments(new_makefile_text)
+
+
 def assess_candidate(
     old_version: str,
     new_version: str,
     changelog_text: str,
     ports_diff_text: str,
     security_text: str = "",
+    old_makefile_text: str = "",
+    new_makefile_text: str = "",
 ) -> Assessment:
     combined_notes = "\n".join((changelog_text, security_text))
     cves = [match.group(0).upper() for match in CVE_PATTERN.finditer(combined_notes)]
     security_signals = cves + [term for term in SECURITY_TERMS if _contains_term(combined_notes, term)]
-    dependency_signals = ["dependency change"] if _has_dependency_drift(ports_diff_text) else []
+    dependency_drift = _has_dependency_drift(ports_diff_text)
+    if old_makefile_text or new_makefile_text:
+        dependency_drift = dependency_drift or _has_makefile_dependency_drift(
+            old_makefile_text,
+            new_makefile_text,
+        )
+    dependency_signals = ["dependency change"] if dependency_drift else []
     patch_signals = [
         term
         for term in CRITICAL_TERMS
@@ -254,6 +296,8 @@ def main() -> None:
     assess_parser.add_argument("--changelog", type=Path, required=True)
     assess_parser.add_argument("--ports-diff", type=Path, required=True)
     assess_parser.add_argument("--security", type=Path)
+    assess_parser.add_argument("--old-makefile", type=Path)
+    assess_parser.add_argument("--new-makefile", type=Path)
     assess_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.command == "update-profile":
@@ -270,12 +314,20 @@ def main() -> None:
         security_text = ""
         if arguments.security is not None:
             security_text = arguments.security.read_text(encoding="utf-8")
+        old_makefile_text = ""
+        if arguments.old_makefile is not None:
+            old_makefile_text = arguments.old_makefile.read_text(encoding="utf-8")
+        new_makefile_text = ""
+        if arguments.new_makefile is not None:
+            new_makefile_text = arguments.new_makefile.read_text(encoding="utf-8")
         assessment = assess_candidate(
             arguments.old_version,
             arguments.new_version,
             arguments.changelog.read_text(encoding="utf-8"),
             arguments.ports_diff.read_text(encoding="utf-8"),
             security_text,
+            old_makefile_text,
+            new_makefile_text,
         )
         arguments.output.write_text(render_assessment_markdown(assessment), encoding="utf-8")
 
