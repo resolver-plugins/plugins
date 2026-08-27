@@ -61,7 +61,7 @@ def validate_profile(profile: object) -> dict[str, str | int]:
     if (
         not isinstance(profile["portrevision"], int)
         or isinstance(profile["portrevision"], bool)
-        or profile["portrevision"] <= 0
+        or profile["portrevision"] < 0
     ):
         raise ValueError("BIND profile has an invalid portrevision")
     return profile
@@ -78,6 +78,8 @@ def load_profile(path: Path) -> dict[str, str | int]:
 def package_version(profile: object) -> str:
     """Return the package version implied by a validated Ports profile."""
     profile = validate_profile(profile)
+    if profile["portrevision"] == 0:
+        return str(profile["distversion"])
     return f"{profile['distversion']}_{profile['portrevision']}"
 
 

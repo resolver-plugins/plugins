@@ -83,6 +83,17 @@ class Bind920ReuseTest(unittest.TestCase):
                 PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, invalid
             )
 
+    def test_profile_accepts_fresh_ports_version_without_portrevision(self) -> None:
+        """A new upstream BIND release commonly starts at PORTREVISION zero."""
+        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
+        self.assertEqual(0, bind920_profile.validate_profile(profile)["portrevision"])
+
+    def test_profile_rejects_negative_portrevision(self) -> None:
+        """Package identities must not be generated from impossible revisions."""
+        profile = dict(PROFILE, portrevision=-1)
+        with self.assertRaisesRegex(ValueError, "portrevision"):
+            bind920_profile.validate_profile(profile)
+
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
         """The shell build wrapper must be able to write reusable provenance."""
         with tempfile.TemporaryDirectory() as temporary_directory:
