@@ -97,6 +97,10 @@ def test_production_signing_and_publication_are_separate_from_builds():
     workflow = workflow_text()
     assert 'RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}' in workflow
     assert 'python3 .github/ci/release_channel.py stage-channel' in workflow
+    assert 'python3 .github/ci/release_channel.py validate-bind-provenance' in workflow
+    assert '--profile .resolver-plugins/bind920.json' in workflow
+    assert "--series '${{ needs.select.outputs.series }}'" in workflow
+    assert "--freebsd-release '${{ needs.profile.outputs.freebsd_release }}'" in workflow
     assert 'python3 .github/ci/release_channel.py publish-channels' in workflow
     assert 'permissions:\n      contents: write' in workflow
     assert workflow.index('  sign:') < workflow.index('  publish:')

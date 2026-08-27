@@ -33,23 +33,50 @@ PACKAGE_CREATOR = {
     "sha256": "a" * 64,
     "pkg_static_sha256": "b" * 64,
 }
+PACKAGES = {
+    "bind-tools": {
+        "name": "bind-tools",
+        "version": "9.20.26_2",
+        "origin": "dns/bind-tools",
+        "filename": "bind-tools-9.20.26_2.pkg",
+    },
+    "bind920": {
+        "name": "bind920",
+        "version": "9.20.26_2",
+        "origin": "dns/bind920",
+        "filename": "bind920-9.20.26_2.pkg",
+    },
+}
 
 
 class StageProvenanceTest(unittest.TestCase):
     def test_channel_rejects_provenance_that_does_not_match_the_trusted_profile(self) -> None:
-        provenance = {
-            "schema": 2,
-            "fingerprint": "0" * 64,
-            "series": "26.1",
-            "freebsd_release": "14.3",
-            "architecture": "x86_64",
-            "package_creator": dict(PACKAGE_CREATOR, abi="FreeBSD:14:amd64"),
-            "packages": {
-                "bind-tools": {"name": "bind-tools", "version": "9.20.26_2", "origin": "dns/bind-tools", "filename": "bind-tools-9.20.26_2.pkg"},
-                "bind920": {"name": "bind920", "version": "9.20.26_2", "origin": "dns/bind920", "filename": "bind920-9.20.26_2.pkg"},
-            },
-        }
+        provenance = release_channel.bind920_profile.build_provenance(
+            PROFILE, "26.1", "14.3", "x86_64", dict(PACKAGE_CREATOR, abi="FreeBSD:14:amd64"), PACKAGES
+        )
+        provenance["fingerprint"] = "0" * 64
+
         with self.assertRaisesRegex(ValueError, "fingerprint"):
+            release_channel.validate_bind_provenance(
+                provenance,
+                PROFILE,
+                "26.1",
+                "14.3",
+                dict(PACKAGE_CREATOR, abi="FreeBSD:14:amd64"),
+            )
+
+    def test_channel_rejects_stale_bind_compatibility_provenance(self) -> None:
+        """Package-matching provenance must still match target compatibility inputs."""
+        provenance = release_channel.bind920_profile.build_provenance(
+            PROFILE,
+            "26.1",
+            "14.4",
+            "x86_64",
+            dict(PACKAGE_CREATOR, abi="FreeBSD:14:amd64"),
+            PACKAGES,
+        )
+
+        with self.assertRaisesRegex(ValueError, "trusted profile"):
             release_channel.validate_bind_provenance(
                 provenance,
                 PROFILE,
@@ -66,15 +93,15 @@ class StageProvenanceTest(unittest.TestCase):
                 "packages": {
                     "bind-tools": {
                         "name": "bind-tools",
-                        "version": "9.20.27_1",
+                        "version": "9.20.27",
                         "origin": "dns/bind-tools",
-                        "filename": "bind-tools-9.20.27_1.pkg",
+                        "filename": "bind-tools-9.20.27.pkg",
                     },
                     "bind920": {
                         "name": "bind920",
-                        "version": "9.20.27_1",
+                        "version": "9.20.27",
                         "origin": "dns/bind920",
-                        "filename": "bind920-9.20.27_1.pkg",
+                        "filename": "bind920-9.20.27.pkg",
                     },
                 }
             }
@@ -82,17 +109,17 @@ class StageProvenanceTest(unittest.TestCase):
                 json.dumps(provenance), encoding="utf-8"
             )
             for name in (
-                "bind-tools-9.20.27_1.pkg",
-                "bind920-9.20.27_1.pkg",
-                "os-bind-rp-1.36_8.pkg",
+                "bind-tools-9.20.27.pkg",
+                "bind920-9.20.27.pkg",
+                "os-bind-rp-26.7_1.pkg",
             ):
                 (packages / name).touch()
 
             self.assertEqual(
                 [
-                    "bind-tools-9.20.27_1.pkg",
-                    "bind920-9.20.27_1.pkg",
-                    "os-bind-rp-1.36_8.pkg",
+                    "bind-tools-9.20.27.pkg",
+                    "bind920-9.20.27.pkg",
+                    "os-bind-rp-26.7_1.pkg",
                 ],
                 [path.name for path in release_channel.select_channel_packages(packages)],
             )
@@ -105,7 +132,7 @@ class StageProvenanceTest(unittest.TestCase):
                 "series=26.7\n"
                 "uname=FreeBSD test 15.1\n"
                 "pkg_abi=FreeBSD:15:amd64\n"
-                "bind920=9.20.26_1\n"
+                "bind920=9.20.26_2\n"
                 "bind_source=resolver\n"
                 "opnsense=26.7\n"
                 "opnsense_core_commit=core-commit\n"
@@ -138,7 +165,7 @@ class StageProvenanceTest(unittest.TestCase):
                         "series": "26.7",
                         "freebsd_release": "15.1",
                         "package_creator": PACKAGE_CREATOR,
-                        "packages": {"bind920": {"version": "9.20.26_1"}},
+                        "packages": {"bind920": {"version": "9.20.26_2"}},
                     }
                 ),
                 encoding="utf-8",
@@ -180,6 +207,7 @@ class StageProvenanceTest(unittest.TestCase):
                     "26.7",
                     "source-commit",
                 )
+
 
 if __name__ == "__main__":
     unittest.main()

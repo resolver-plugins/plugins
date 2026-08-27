@@ -89,12 +89,15 @@ jobs:
           )
           newer = candidate_is_newer(current, candidate)
           with output_path.open("a", encoding="utf-8") as output:
+              old_package_version = current.distversion
+              if current.portrevision:
+                  old_package_version = f"{current.distversion}_{current.portrevision}"
               package_version = candidate.distversion
               if candidate.portrevision:
                   package_version = f"{candidate.distversion}_{candidate.portrevision}"
               print(f"newer={'true' if newer else 'false'}", file=output)
-              print(f"old_version={current.distversion}", file=output)
-              print(f"new_version={candidate.distversion}", file=output)
+              print(f"old_version={old_package_version}", file=output)
+              print(f"new_version={package_version}", file=output)
               print(f"portrevision={candidate.portrevision}", file=output)
               print(f"package_version={package_version}", file=output)
           PY

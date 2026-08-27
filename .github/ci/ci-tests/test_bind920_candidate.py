@@ -412,6 +412,7 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", helper_job)
         self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", helper_job)
         self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", helper_job)
+        self.assertIn("python .github/ci/bind920_profile.py .resolver-plugins/bind920.json package_version", helper_job)
         self.assertNotIn("pip install", helper_job)
         self.assertIn("needs.changes.outputs.bind_source == 'true'", bind_job)
 
@@ -440,6 +441,9 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         workflow = self.workflow_text()
         self.assertIn("package_version=", workflow)
         self.assertIn('version="${{ steps.candidate.outputs.package_version }}"', workflow)
+        self.assertIn("old_package_version = ", workflow)
+        self.assertIn("print(f\"old_version={old_package_version}\"", workflow)
+        self.assertIn("print(f\"new_version={package_version}\"", workflow)
         self.assertNotIn("New BIND version: `%s_%s`", workflow)
 
 

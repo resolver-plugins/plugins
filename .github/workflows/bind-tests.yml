@@ -75,6 +75,7 @@ jobs:
       - name: Run stdlib CI helper tests
         run: |
           python -m py_compile .github/ci/*.py
+          python .github/ci/bind920_profile.py .resolver-plugins/bind920.json package_version
           python .github/ci/ci-tests/test_bind920_candidate.py
           python .github/ci/ci-tests/test_bind920_reuse.py
           python .github/ci/ci-tests/test_release_channel_provenance.py
