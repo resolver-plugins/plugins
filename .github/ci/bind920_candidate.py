@@ -99,10 +99,6 @@ def _parse_distinfo(text: str) -> tuple[str, str]:
     return distversion, match.group(2)
 
 
-def parse_distinfo_hash(text: str) -> str:
-    return _parse_distinfo(text)[1]
-
-
 def candidate_is_newer(current: Bind920Profile, candidate: CandidateProfile) -> bool:
     current_version = _version_tuple(current.distversion)
     candidate_version = _version_tuple(candidate.distversion)

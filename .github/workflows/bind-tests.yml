@@ -46,6 +46,7 @@ jobs:
           fi
           bind_source=false
           ci_helpers=false
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
           while IFS= read -r path; do
             case "$path" in
               dns/bind/*|.github/ci/*|.github/workflows/bind-tests.yml)
@@ -56,9 +57,7 @@ jobs:
                 ci_helpers=true
                 ;;
             esac
-          done <<EOF
-          $(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          EOF
+          done < "$RUNNER_TEMP/changed-paths"
           printf 'bind_source=%s\nci_helpers=%s\n' "$bind_source" "$ci_helpers" >> "$GITHUB_OUTPUT"
 
   ci-helpers:
