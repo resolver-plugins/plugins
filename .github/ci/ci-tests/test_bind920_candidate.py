@@ -197,6 +197,27 @@ class Bind920CandidateTest(unittest.TestCase):
             self.assertEqual(bind920_candidate.sha256_file(makefile), updated["makefile_sha256"])
             self.assertEqual(bind920_candidate.sha256_file(distinfo), updated["distinfo_sha256"])
 
+    def test_candidate_from_files_rejects_distinfo_version_mismatch(self) -> None:
+        """A profile PR must not pair one DISTVERSION with another distfile."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            makefile = directory / "Makefile"
+            distinfo = directory / "distinfo"
+            makefile.write_text("PORTNAME= bind920\nDISTVERSION= 9.20.27\n", encoding="utf-8")
+            distinfo.write_text(
+                "TIMESTAMP = 1\nSHA256 (bind-9.20.26.tar.xz) = abc123\nSIZE (bind-9.20.26.tar.xz) = 1\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "distinfo"):
+                bind920_candidate.candidate_from_files(
+                    "https://github.com/freebsd/freebsd-ports.git",
+                    "f" * 40,
+                    makefile,
+                    distinfo,
+                    "main",
+                )
+
     def test_assess_cli_writes_markdown_summary(self) -> None:
         """The workflow should get stable PR text without embedding assessment logic."""
         with tempfile.TemporaryDirectory() as temporary_directory:

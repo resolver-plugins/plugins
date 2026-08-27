@@ -90,12 +90,17 @@ def parse_bind920_makefile(text: str) -> tuple[str, int]:
     return distversion, portrevision
 
 
-def parse_distinfo_hash(text: str) -> str:
+def _parse_distinfo(text: str) -> tuple[str, str]:
     match = DISTINFO_SHA256_PATTERN.search(text)
     if match is None:
         raise ValueError("distinfo does not contain a BIND tarball SHA256")
-    _version_tuple(match.group(1))
-    return match.group(2)
+    distversion = match.group(1)
+    _version_tuple(distversion)
+    return distversion, match.group(2)
+
+
+def parse_distinfo_hash(text: str) -> str:
+    return _parse_distinfo(text)[1]
 
 
 def candidate_is_newer(current: Bind920Profile, candidate: CandidateProfile) -> bool:
@@ -114,7 +119,9 @@ def candidate_from_files(
     source_ref: str,
 ) -> CandidateProfile:
     distversion, portrevision = parse_bind920_makefile(makefile.read_text(encoding="utf-8"))
-    parse_distinfo_hash(distinfo.read_text(encoding="utf-8"))
+    distinfo_version, _distinfo_hash = _parse_distinfo(distinfo.read_text(encoding="utf-8"))
+    if distinfo_version != distversion:
+        raise ValueError("distinfo BIND version does not match Makefile DISTVERSION")
     return CandidateProfile(
         ports_repository=ports_repository,
         ports_commit=ports_commit,
