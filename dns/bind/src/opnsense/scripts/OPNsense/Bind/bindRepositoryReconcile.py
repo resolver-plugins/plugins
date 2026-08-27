@@ -81,6 +81,10 @@ def package_command(static: bool = False) -> list[str]:
     return shlex.split(os.environ.get("OS_BIND_RP_PKG_COMMAND", "/usr/local/sbin/pkg-static"))
 
 
+def configctl_command() -> list[str]:
+    return shlex.split(os.environ.get("OS_BIND_RP_CONFIGCTL_COMMAND", "/usr/local/sbin/configctl"))
+
+
 def pkg_config_abi() -> str:
     abi = run([*package_command(), "config", "ABI"]).stdout.strip()
     if re.fullmatch(r"FreeBSD:[0-9]+:amd64", abi) is None:
@@ -139,6 +143,11 @@ def package_version_less_than(installed: str, candidate: str) -> bool:
     if comparison not in {"<", "=", ">"}:
         raise ReconcileError(f"could not compare package versions: {installed} and {candidate}")
     return comparison == "<"
+
+
+def restart_bind_service() -> None:
+    run([*configctl_command(), "template", "reload", "OPNsense/Bind"])
+    run([*configctl_command(), "service", "restart", "bind"])
 
 
 def validate_dry_run(output: str, requested_identities: list[str]) -> None:
@@ -222,6 +231,7 @@ def reconcile_once() -> None:
     if bind_update_required:
         require_installed("bind920", bind920)
         require_installed("bind-tools", bind_tools)
+        restart_bind_service()
     require_installed("os-bind-rp", plugin)
     marker.unlink(missing_ok=True)
 
