@@ -98,6 +98,7 @@ jobs:
               print(f"newer={'true' if newer else 'false'}", file=output)
               print(f"old_version={old_package_version}", file=output)
               print(f"new_version={package_version}", file=output)
+              print(f"candidate_distversion={candidate.distversion}", file=output)
               print(f"portrevision={candidate.portrevision}", file=output)
               print(f"package_version={package_version}", file=output)
           PY
@@ -154,8 +155,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.candidate.outputs.package_version }}"
+          distversion="${{ steps.candidate.outputs.candidate_distversion }}"
           revision='${{ steps.candidate.outputs.portrevision }}'
-          branch="sync/bind920/${{ steps.candidate.outputs.new_version }}-$revision"
+          branch="sync/bind920/$distversion-$revision"
           git config user.name github-actions
           git config user.email github-actions@github.com
           git checkout -B "$branch"

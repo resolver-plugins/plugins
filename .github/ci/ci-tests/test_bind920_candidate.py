@@ -442,8 +442,10 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertIn("package_version=", workflow)
         self.assertIn('version="${{ steps.candidate.outputs.package_version }}"', workflow)
         self.assertIn("old_package_version = ", workflow)
+        self.assertIn("candidate_distversion=", workflow)
         self.assertIn("print(f\"old_version={old_package_version}\"", workflow)
         self.assertIn("print(f\"new_version={package_version}\"", workflow)
+        self.assertIn('branch="sync/bind920/$distversion-$revision"', workflow)
         self.assertNotIn("New BIND version: `%s_%s`", workflow)
 
 
