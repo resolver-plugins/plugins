@@ -72,6 +72,28 @@ class ChannelTagTest(unittest.TestCase):
             release_channel.snapshot_channel_tag("26.7", "1.36/2")
 
 
+class GitHubCliTest(unittest.TestCase):
+    def test_run_gh_retries_a_timed_out_command(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(command, timeout=300)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
+            release_channel.run_gh(["release", "upload", "pkg-test", "asset.pkg"])
+
+        self.assertEqual(
+            [
+                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
+                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
+            ],
+            calls,
+        )
+
+
 class PullRequestReleaseCleanupTest(unittest.TestCase):
     def test_pull_request_release_selection_rejects_near_matches(self) -> None:
         releases = [
