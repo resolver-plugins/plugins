@@ -32,6 +32,7 @@ ports_commit=$(metadata_field ports_commit) || fail 'invalid BIND profile'
 makefile_sha256=$(metadata_field makefile_sha256) || fail 'invalid BIND profile'
 distinfo_sha256=$(metadata_field distinfo_sha256) || fail 'invalid BIND profile'
 distversion=$(metadata_field distversion) || fail 'invalid BIND profile'
+portrevision=$(metadata_field portrevision) || fail 'invalid BIND profile'
 package_version=$(metadata_field package_version) || fail 'invalid BIND profile'
 freebsd_release=$("$python_command" "$script_directory/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
@@ -85,7 +86,22 @@ distinfo="$ports_directory/dns/bind920/distinfo"
 [ "$(sha256 -q "$makefile")" = "$makefile_sha256" ] || fail 'BIND Makefile hash does not match pinned metadata'
 [ "$(sha256 -q "$distinfo")" = "$distinfo_sha256" ] || fail 'BIND distinfo hash does not match pinned metadata'
 grep -Fqx "DISTVERSION=	$distversion" "$makefile" || fail 'BIND Makefile does not declare the pinned version'
-patch -d "$ports_directory" -p1 < "$script_directory/patches/bind920-portrevision.patch"
+if [ "$portrevision" -gt 0 ]
+then
+    "$python_command" - "$makefile" "$portrevision" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+revision = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+updated, count = re.subn(r"^PORTREVISION=\s*[0-9]+\s*$", f"PORTREVISION=\t{revision}", text, flags=re.MULTILINE)
+if count == 0:
+    raise SystemExit("BIND Makefile does not declare PORTREVISION")
+path.write_text(updated, encoding="utf-8")
+PY
+fi
 
 "$python_command" "$script_directory/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \

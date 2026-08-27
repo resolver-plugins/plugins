@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "bind920_candidate.py"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+CANDIDATE_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/bind920-candidate.yml"
 SPEC = importlib.util.spec_from_file_location("bind920_candidate", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 bind920_candidate = importlib.util.module_from_spec(SPEC)
@@ -94,6 +97,29 @@ class Bind920CandidateTest(unittest.TestCase):
             "+LIB_DEPENDS+= libnew.so:security/newlib\n",
         )
         self.assertEqual("risky", result.classification)
+        self.assertIn("dependency change", result.signals)
+
+    def test_assessment_classifies_continuation_dependency_drift_as_risky(self) -> None:
+        """Changes inside continued dependency assignments must not look routine."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Maintenance release.",
+            "@@ -1,3 +1,3 @@\n LIB_DEPENDS= liba.so:devel/a \\\n- libb.so:devel/b\n+ libc.so:devel/c\n",
+        )
+        self.assertEqual("risky", result.classification)
+        self.assertIn("dependency change", result.signals)
+
+    def test_assessment_keeps_secondary_dependency_signal_for_security_candidate(self) -> None:
+        """Security updates with dependency drift must surface both review concerns."""
+        result = assess_candidate(
+            "9.20.26",
+            "9.20.27",
+            "Security fix: CVE-2026-1234.",
+            "+LIB_DEPENDS+= libnew.so:security/newlib\n",
+        )
+        self.assertEqual("security", result.classification)
+        self.assertIn("CVE-2026-1234", result.signals)
         self.assertIn("dependency change", result.signals)
 
     def test_assessment_classifies_plain_patch_as_routine(self) -> None:
@@ -251,6 +277,40 @@ class Bind920CandidateTest(unittest.TestCase):
             self.assertEqual("", result.stderr)
             self.assertEqual(0, result.returncode)
             self.assertIn("classification: critical-bugfix", output.read_text(encoding="utf-8"))
+
+
+class Bind920CandidateWorkflowTest(unittest.TestCase):
+    def workflow_text(self) -> str:
+        self.assertTrue(CANDIDATE_WORKFLOW.is_file(), "candidate workflow is missing")
+        return CANDIDATE_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_candidate_workflow_uses_only_stdlib_tests_before_github_fetches(self) -> None:
+        """The candidate workflow must not add package-registry egress."""
+        workflow = self.workflow_text()
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("pip install", workflow)
+        self.assertNotIn("python -m pytest", workflow)
+        self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", workflow)
+
+    def test_candidate_workflow_never_publishes_packages(self) -> None:
+        """Candidate review PRs must not cross the publication boundary."""
+        workflow = self.workflow_text()
+        self.assertNotIn("release upload", workflow)
+        self.assertNotIn("release_channel.py publish", workflow)
+        self.assertIn("Publication: not performed by this workflow", workflow)
+
+    def test_candidate_workflow_uses_pinned_actions(self) -> None:
+        """Workflow actions must stay pinned to immutable SHAs."""
+        workflow = self.workflow_text()
+        references = re.findall(r"^\s+(?:-\s+)?uses:\s+([^\s#]+)", workflow, re.MULTILINE)
+        self.assertTrue(references)
+        self.assertTrue(all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", reference) for reference in references))
+
+    def test_candidate_workflow_checks_empty_index_before_commit(self) -> None:
+        """Only an actual empty candidate diff may skip PR branch publication."""
+        workflow = self.workflow_text()
+        self.assertIn("git diff --cached --quiet", workflow)
+        self.assertNotIn("git commit -m \"ci(bind): update bind920 to ${version}_${revision}\" || exit 0", workflow)
 
 
 if __name__ == "__main__":

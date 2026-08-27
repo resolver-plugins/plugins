@@ -161,6 +161,20 @@ def _unique_signals(signals: list[str]) -> list[str]:
     return unique
 
 
+def _has_dependency_drift(ports_diff_text: str) -> bool:
+    in_dependency_hunk = False
+    for line in ports_diff_text.splitlines():
+        content = line[1:] if line.startswith(("+", "-", " ")) else line
+        if any(field in content for field in DEPENDENCY_FIELDS):
+            in_dependency_hunk = True
+        if line.startswith("@@"):
+            in_dependency_hunk = False
+            continue
+        if in_dependency_hunk and line.startswith(("+", "-")):
+            return True
+    return False
+
+
 def assess_candidate(
     old_version: str,
     new_version: str,
@@ -171,37 +185,30 @@ def assess_candidate(
     combined_notes = "\n".join((changelog_text, security_text))
     cves = [match.group(0).upper() for match in CVE_PATTERN.finditer(combined_notes)]
     security_signals = cves + [term for term in SECURITY_TERMS if _contains_term(combined_notes, term)]
-    dependency_signals = [
-        "dependency change"
-        for line in ports_diff_text.splitlines()
-        if line.startswith(("+", "-")) and any(field in line for field in DEPENDENCY_FIELDS)
-    ]
+    dependency_signals = ["dependency change"] if _has_dependency_drift(ports_diff_text) else []
     patch_signals = [
         term
         for term in CRITICAL_TERMS
         if _contains_term(changelog_text, term)
     ]
 
+    all_signals = _unique_signals(security_signals + dependency_signals + patch_signals)
+
     if security_signals:
         classification = "security"
-        signals = security_signals
     elif dependency_signals:
         classification = "risky"
-        signals = dependency_signals
     elif patch_signals:
         classification = "critical-bugfix"
-        signals = patch_signals
     else:
         classification = "routine"
-        signals = []
 
-    signals = _unique_signals(signals)
-    signal_text = ", ".join(signals) if signals else "none"
+    signal_text = ", ".join(all_signals) if all_signals else "none"
     summary = (
         f"BIND {old_version} to {new_version} is classified as {classification}. "
         f"Signals: {signal_text}. Maintainer review is required before publication."
     )
-    return Assessment(classification, signals, summary)
+    return Assessment(classification, all_signals, summary)
 
 
 def update_profile(
