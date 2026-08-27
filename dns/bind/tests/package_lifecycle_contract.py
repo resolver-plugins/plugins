@@ -12,6 +12,18 @@ def lifecycle_required(series, version, revision):
         threshold = LIFECYCLE_THRESHOLDS[series]
     except KeyError as error:
         raise ValueError(f"unsupported BIND release series: {series}") from error
+    series_version = tuple(int(part) for part in series.split("."))
+    known_series_versions = {
+        tuple(int(part) for part in supported.split("."))
+        for supported in LIFECYCLE_THRESHOLDS
+    }
+    if tuple(version) in known_series_versions:
+        if tuple(version) != series_version:
+            raise ValueError(
+                f"series package version {'.'.join(str(part) for part in version)} "
+                f"does not match {series}"
+            )
+        return revision >= 1
     return (tuple(version), revision) >= threshold
 
 
