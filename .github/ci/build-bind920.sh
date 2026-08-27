@@ -38,7 +38,7 @@ freebsd_release=$("$python_command" "$script_directory/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
 
 "$pkg_command" update -f
-"$pkg_command" install -y git patch
+"$pkg_command" install -y git
 "$script_directory/setup-opnsense-repository.sh" "$series" >/dev/null
 pkg_creator_record=$("$python_command" "$script_directory/target_pkg.py" install \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
