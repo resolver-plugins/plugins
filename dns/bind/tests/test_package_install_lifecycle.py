@@ -13,6 +13,7 @@ BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PRE_INSTALL = BIND_ROOT / "+POST_INSTALL.pre"
 POST_INSTALL = BIND_ROOT / "+POST_INSTALL.post"
 STOP_SCRIPT = BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
+ZONE_HELPER = BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindPackageZones.py"
 MAKEFILE = BIND_ROOT / "Makefile"
 
 if MAKEFILE.is_file():
@@ -147,6 +148,10 @@ exit "$TEST_FRAMEWORK_ERROR"
         check=False,
     )
     return result, events.read_text().splitlines(), state.read_text().strip()
+
+
+def test_packaged_zone_helper_is_executable_by_post_install():
+    assert os.access(ZONE_HELPER, os.X_OK)
 
 
 def test_running_service_is_stopped_before_render_and_restarted_after(executable_tmp_path):
