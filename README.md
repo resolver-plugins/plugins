@@ -37,15 +37,16 @@ Installing os-bind-rp
 `os-bind-rp` supports OPNsense 26.1 and 26.7. Do not install it alongside the
 official `os-bind` plugin: the two packages conflict by design. The normal
 channel is self-contained and includes the `bind920`/`bind-tools` pair used to
-build the current plugin. `pkg` expands `${ABI}`, so this one repository URL
-selects the compatible FreeBSD 14 or FreeBSD 15 catalogue across an OPNsense
-major upgrade.
+build the current plugin. `pkg` expands `${ABI}` and the URL also includes the
+OPNsense series, so a newer series sharing the same FreeBSD ABI is not offered
+to an older system.
 
-From an OPNsense root shell, configure the ABI-aware current channel:
+From an OPNsense root shell, configure the ABI-plus-series current channel:
 
 ```sh
-repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
-fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
+series="$(opnsense-version -a)"
+repo_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/$series/latest"
 key=/usr/local/etc/pkg/keys/resolver-plugins.pub
 install -d -m 0755 "${key%/*}" /usr/local/etc/pkg/repos
 fetch -o "$key" "$fetch_url/resolver-plugins.pub"

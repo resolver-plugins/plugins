@@ -172,7 +172,8 @@ def worker_environment(tmp_path, *, repository_text=None, pkg_plan="upgrade", up
     installed_marker = tmp_path / "installed"
     write_opnsense_version(opnsense_version)
     write_provider(provider)
-    write_pkg(pkg, update_fails=update_fails, plan=pkg_plan)
+    candidate_plugin = os.environ.get("OS_BIND_RP_TEST_CANDIDATE_PLUGIN", "26.7_1")
+    write_pkg(pkg, update_fails=update_fails, plan=pkg_plan, candidate_plugin=candidate_plugin)
     environment = os.environ | {
         "OS_BIND_RP_REPOSITORY_CONFIG": str(config),
         "OS_BIND_RP_PENDING_MARKER": str(marker),
@@ -273,6 +274,19 @@ def test_worker_rejects_unexpected_dry_run_plan_before_live_install(tmp_path, pk
     assert any("install -n -r resolver-plugins" in call for call in calls)
     assert not any("install -y -r resolver-plugins" in call for call in calls)
     assert "dry" in worker_log.read_text(encoding="utf-8")
+
+
+def test_worker_rejects_plugin_candidate_from_another_series_before_live_install(tmp_path, monkeypatch):
+    monkeypatch.setenv("OS_BIND_RP_TEST_CANDIDATE_PLUGIN", "26.1_1")
+
+    result, _, marker, log, worker_log = run_worker(tmp_path)
+
+    assert result.returncode != 0
+    assert marker.exists()
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert any("rquery -r resolver-plugins" in call and "%n = os-bind-rp" in call for call in calls)
+    assert not any("install -y -r resolver-plugins" in call for call in calls)
+    assert "series" in worker_log.read_text(encoding="utf-8")
 
 
 def test_worker_retry_mode_has_bounded_attempt_count(tmp_path):

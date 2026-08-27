@@ -1,22 +1,31 @@
 # Package repository
 
-`os-bind-rp` is published at an ABI-aware GitHub Pages path backed by verified,
-signed channel bytes from `resolver-plugins/repository`. The distribution
-repository also retains GitHub Release channels for transition and rollback;
-source releases contain only the plugin archive and build metadata.
+`os-bind-rp` is published at an ABI-plus-OPNsense-series GitHub Pages path
+backed by verified, signed channel bytes from `resolver-plugins/repository`.
+The distribution repository also retains GitHub Release channels for
+transition and rollback; source releases contain only the plugin archive and
+build metadata.
 
 ## Channels
 
-Clients use one current repository URL:
+Clients use one current repository URL per installed OPNsense series:
 
 ```text
-https://resolver-plugins.github.io/repository/pkg/${ABI}/latest
+https://resolver-plugins.github.io/repository/pkg/${ABI}/<series>/latest
+```
+
+For example, OPNsense 26.7 on FreeBSD 15 uses:
+
+```text
+https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/26.7/latest
 ```
 
 `pkg` expands `${ABI}` to select `FreeBSD:14:amd64` for OPNsense 26.1 or
-`FreeBSD:15:amd64` for OPNsense 26.7. Every published ABI path is
-self-contained. The distribution repository also keeps transition and up to
-five immutable rollback Releases per supported OPNsense series:
+`FreeBSD:15:amd64` for OPNsense 26.7. The explicit series segment prevents a
+future series sharing the same FreeBSD ABI from being offered to an older
+system. Every published ABI-plus-series path is self-contained. The
+distribution repository also keeps transition and up to five immutable
+rollback Releases per supported OPNsense series:
 
 | Purpose | Display title | Release tag | Default state |
 | --- | --- | --- | --- |
@@ -28,13 +37,18 @@ Display titles are concise labels only. GitHub requires one repository-wide
 for the highest numeric OPNsense series. Archive releases never receive it.
 These series-specific Release URLs are not used by new client configuration.
 
-The ABI current channel and every rollback snapshot contain exactly one
-`os-bind-rp` package, the matching `bind920`/`bind-tools` pair, BIND
+The current channel and every rollback snapshot contain exactly one
+series-versioned plugin package such as `os-bind-rp-26.1_1` or
+`os-bind-rp-26.7_1`, the matching `bind920`/`bind-tools` pair, BIND
 provenance, `channel.json`, and the signed catalogue. `pkg` catalogues expose
 one selected version per package name, so rollback temporarily selects a
 retained snapshot URL from the same distribution repository. Publication
 retains the five newest snapshots and reuses a compatible BIND pair instead
 of rebuilding it for every plugin release.
+
+BIND packages keep upstream versions, for example `bind920-9.20.26_1` and
+`bind-tools-9.20.26_1`; only `os-bind-rp` uses the OPNsense series as its
+package version.
 
 All channels include the signed `pkg` catalogue and `resolver-plugins.pub`.
 Clients verify both using that public key.
@@ -44,8 +58,9 @@ Clients verify both using that public key.
 Configure the ABI-aware current plugin channel:
 
 ```sh
-repo_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
-fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/latest"
+series="$(opnsense-version -a)"
+repo_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/$series/latest"
 install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
 fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$fetch_url/resolver-plugins.pub"
 test "$(sha256 -q /usr/local/etc/pkg/keys/resolver-plugins.pub)" = \
@@ -63,17 +78,29 @@ pkg update -r resolver-plugins
 scripts/install-os-bind-rp.sh
 ```
 
-The package post-install hook migrates only the exact documented legacy form
-above when its URL ends in `releases/download/pkg-26.1` or
-`releases/download/pkg-26.7`. It preserves the file's mode and owner and
-atomically replaces only that known shape. A custom URL, alternate key,
-disabled repository, different mirror mode, symlink, or non-regular path is
-left byte-for-byte unchanged and produces a `manual migration` warning.
+The package installs `ResolverPlugins.sh`, an OPNsense firmware repository
+provider. It migrates only exact managed Resolver repository shapes: legacy
+GitHub Release URLs, the older ABI-only URL, or a prior ABI-plus-series URL.
+It reads `opnsense-version -a`, writes the literal `${ABI}` URL for that
+series, preserves the file's mode and owner, and atomically replaces only that
+known shape. A custom URL, alternate key, disabled repository, different
+mirror mode, symlink, or non-regular path is left byte-for-byte unchanged and
+produces a `manual migration` warning.
+
+The package also installs `bindRepositoryReconcile.py`. The upgrade hook only
+marks reconciliation pending and returns; it performs no network or package
+operations. The start hook launches the worker in the background after boot.
+The worker validates the exact managed repository, package ABI, candidate
+identity, installed identity, and dry-run plan before any live package
+mutation. A failure retains the pending marker and does not abort OPNsense upgrade or boot.
+
+In short, the upgrade hook only marks reconciliation pending and the start
+hook launches the validated retry after boot.
 
 Systems already upgraded from 26.1 to 26.7 before receiving the migration
 package cannot be repaired retrospectively. On those systems, back up and
 review `/usr/local/etc/pkg/repos/resolver-plugins.conf`, change only its URL to
-the literal `${ABI}` URL above, then run:
+the literal `${ABI}` plus series URL above, then run:
 
 ```sh
 pkg update -f -r resolver-plugins
@@ -89,8 +116,9 @@ installed `pkg` package for the transaction, attempts to restore its original
 lock state on every exit, and reports failure if restoration does not succeed.
 The installer does not upgrade the host package manager.
 It does not enable BIND or change its user configuration. Package-transaction
-zone preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1 and
-1.36_4 on OPNsense 26.7. The package lifecycle detects whether BIND is
+zone preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1,
+1.36_4 on OPNsense 26.7, and all series-versioned packages beginning at
+revision 1. The package lifecycle detects whether BIND is
 running and, if so, freezes each enabled dynamic primary and reverse zone,
 stops BIND, and preserves the effective zone masters before the OPNsense
 package framework regenerates managed templates and zone files. It atomically
