@@ -76,11 +76,18 @@ def source_release_tag(series: str, version: str) -> str:
     return f"os-bind-rp-{series}-{version}"
 
 
-def abi_path(abi: str) -> str:
-    """Return the ABI-indexed repository path for one supported package ABI."""
+def validate_package_abi(abi: str) -> None:
+    """Accept only package ABIs supported by the static package channel."""
     if not isinstance(abi, str) or PACKAGE_ABI_PATTERN.fullmatch(abi) is None:
         raise ValueError("invalid package ABI")
-    return f"pkg/{abi}/latest"
+
+
+def series_abi_path(abi: str, series: str) -> str:
+    """Return the ABI-and-series-indexed repository path for one channel."""
+    validate_package_abi(abi)
+    if not isinstance(series, str) or SERIES_PATTERN.fullmatch(series) is None:
+        raise ValueError("invalid series")
+    return f"pkg/{abi}/{series}/latest"
 
 
 def package_release_title(tag: str) -> str:
@@ -256,7 +263,7 @@ def validate_channel_package_manifests(
         raise ValueError("plugin package does not declare the required BIND dependency formula")
     if common_abi is None:
         raise ValueError("channel does not contain package ABIs")
-    abi_path(common_abi)
+    validate_package_abi(common_abi)
     return common_abi
 
 
@@ -486,7 +493,7 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
     validate_channel_directory(directory)
     try:
         channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
-        target = abi_path(channel["package_abi"])
+        target = series_abi_path(channel["package_abi"], channel["series"])
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise ValueError("static channel audit metadata is invalid") from error
     assets = sorted(directory.iterdir(), key=lambda path: path.name)
@@ -550,7 +557,7 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
             f"repos/{repository}/git/commits",
             method="POST",
             payload={
-                "message": f"Publish package channel {channel['package_abi']}",
+                "message": f"Publish package channel {channel['package_abi']} {channel['series']}",
                 "tree": new_tree,
                 "parents": [old_head],
             },
@@ -622,7 +629,7 @@ def validate_channel_directory(directory: Path) -> None:
         else:
             package_abi = channel["package_abi"]
         if package_abi is not None:
-            abi_path(package_abi)
+            validate_package_abi(package_abi)
     except (AttributeError, KeyError, ValueError) as error:
         raise ValueError("prior channel audit metadata is inconsistent") from error
     if (

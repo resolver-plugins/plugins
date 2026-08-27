@@ -18,6 +18,7 @@ TARGET_STATIC_BYTES = (
     b'#!/bin/sh\n'
     b'printf \'%s\\n\' "$*" >> "$PKG_STATIC_CALL_LOG"\n'
     b'if [ "$1" = -v ]; then printf \'%s\\n\' \'2.3.1\'; exit 0; fi\n'
+    b'if [ "$1" = query ] && [ "$4" = %v ]; then package=${3##*/}; version=${package#os-bind-rp-}; printf \'%s\\n\' "${version%.pkg}"; exit 0; fi\n'
     b'if [ "$1" = query ]; then printf \'%s\\n\' \'/usr/local/opnsense/mvc/app/models/OPNsense/Bind/Menu/Menu.xml|1$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\'; exit 0; fi\n'
     b'exit 64\n'
 )
@@ -123,6 +124,44 @@ def materialize_build_repository(request) -> pathlib.Path:
     return build_repository
 
 
+def set_plugin_version(build_repository: pathlib.Path, version: str, revision: str) -> None:
+    makefile = build_repository / 'dns/bind/Makefile'
+    lines = []
+    for line in makefile.read_text(encoding='utf-8').splitlines(keepends=True):
+        if line.startswith('PLUGIN_VERSION='):
+            lines.append(f'PLUGIN_VERSION=\t\t{version}\n')
+        elif line.startswith('PLUGIN_REVISION='):
+            lines.append(f'PLUGIN_REVISION=\t{revision}\n')
+        else:
+            lines.append(line)
+    makefile.write_text(''.join(lines), encoding='utf-8')
+
+
+def build_environment(
+    tmp_path: pathlib.Path, build_repository: pathlib.Path, core: pathlib.Path
+) -> dict[str, str]:
+    core_commit = create_core_repository(core)
+    environment = os.environ.copy()
+    environment['MAKE_COMMAND'] = str(
+        build_repository / '.github/ci/ci-tests/make-package-fixture.sh'
+    )
+    environment['PKG_COMMAND'] = str(
+        build_repository / '.github/ci/ci-tests/pkg-build-fixture.sh'
+    )
+    environment['PYTHON_COMMAND'] = 'python3'
+    environment['GIT_CONFIG_GLOBAL'] = str(tmp_path / 'gitconfig')
+    environment['OPNSENSE_CORE_REPOSITORY'] = str(core)
+    environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
+    environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
+    metadata_path = tmp_path / 'upstream.json'
+    write_upstream_metadata(metadata_path, core_commit)
+    environment['RP_UPSTREAM_METADATA'] = str(metadata_path)
+    package_call_log = tmp_path / 'pkg-calls.log'
+    environment['PKG_CALL_LOG'] = str(package_call_log)
+    configure_target_pkg_fixture(environment, tmp_path, build_repository)
+    return environment
+
+
 def test_materialize_build_repository_creates_a_disposable_copy(request):
     build_repository = materialize_build_repository(request)
 
@@ -135,6 +174,7 @@ def test_materialize_build_repository_creates_a_disposable_copy(request):
 
 def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
     build_repository = materialize_build_repository(request)
+    set_plugin_version(build_repository, '26.1', '1')
     build_script = build_repository / '.github/ci/build-os-bind-rp.sh'
     core = tmp_path / 'core'
     core_commit = create_core_repository(core)
@@ -170,7 +210,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
 
     assert result.returncode == 0, result.stderr
     assert python_command.is_file()
-    assert (tmp_path / 'os-bind-rp-1.36_3.pkg').is_file()
+    assert (tmp_path / 'os-bind-rp-26.1_1.pkg').is_file()
     assert (tmp_path / 'repos' / 'OPNsense.conf').is_file()
     metadata = (tmp_path / 'build-metadata.txt').read_text()
     assert 'series=26.1\n' in metadata
@@ -213,6 +253,44 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
     )
     assert safe_directories.returncode == 0, safe_directories.stderr
     assert build_repository.as_posix() in safe_directories.stdout.splitlines()
+
+
+def test_build_wrapper_requires_plugin_version_to_match_release_series(tmp_path, request):
+    cases = (
+        ('26.1', '1', True),
+        ('26.1', '12', True),
+        ('26.7', '1', False),
+        ('26.1', '0', False),
+        ('1.36', '12', False),
+        ('26.1', '1x', False),
+    )
+
+    for version, revision, allowed in cases:
+        with tempfile.TemporaryDirectory(dir=tmp_path) as case_directory:
+            case_path = pathlib.Path(case_directory)
+            build_repository = materialize_build_repository(request)
+            set_plugin_version(build_repository, version, revision)
+            environment = build_environment(case_path, build_repository, case_path / 'core')
+            result = subprocess.run(
+                [
+                    build_repository / '.github/ci/build-os-bind-rp.sh',
+                    '26.1',
+                    str(case_path / 'artifacts'),
+                ],
+                cwd=build_repository,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+            artifact = case_path / 'artifacts' / f'os-bind-rp-{version}_{revision}.pkg'
+            if allowed:
+                assert result.returncode == 0, result.stderr
+                assert artifact.is_file()
+            else:
+                assert result.returncode != 0
+                assert not artifact.exists()
+                assert 'plugin version' in result.stderr
 
 
 def test_build_wrapper_requests_resolver_fallback_for_an_ineligible_opnsense_bind(tmp_path, request):

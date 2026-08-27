@@ -20,17 +20,19 @@ SPEC.loader.exec_module(release_channel)
 
 
 class ChannelTagTest(unittest.TestCase):
-    def test_abi_path_uses_the_exact_freebsd_amd64_package_abi(self) -> None:
-        """A package ABI selects only its own ABI-indexed repository path."""
+    def test_series_abi_path_uses_exact_freebsd_amd64_package_abi_and_series(self) -> None:
+        """A package ABI and OPNsense series select one static repository path."""
         self.assertEqual(
-            "pkg/FreeBSD:15:amd64/latest",
-            release_channel.abi_path("FreeBSD:15:amd64"),
+            "pkg/FreeBSD:15:amd64/26.7/latest",
+            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7"),
         )
 
-    def test_abi_path_rejects_an_unsupported_architecture(self) -> None:
-        """An unsupported package ABI must not become a repository path."""
+    def test_series_abi_path_rejects_unsupported_inputs(self) -> None:
+        """Unsupported ABI or series values must not become repository paths."""
         with self.assertRaisesRegex(ValueError, "invalid package ABI"):
-            release_channel.abi_path("FreeBSD:15:arm64")
+            release_channel.series_abi_path("FreeBSD:15:arm64", "26.7")
+        with self.assertRaisesRegex(ValueError, "invalid series"):
+            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7/archive")
 
     def test_package_release_title_names_current_and_archive_purpose(self) -> None:
         self.assertEqual("26.1-latest", release_channel.package_release_title("pkg-26.1"))
@@ -490,15 +492,16 @@ class AbiStaticPublicationTest(unittest.TestCase):
         channel = root / "channel"
         channel.mkdir()
         (channel / "channel.json").write_text(
-            json.dumps({"package_abi": "FreeBSD:15:amd64"}), encoding="utf-8"
+            json.dumps({"series": "26.7", "package_abi": "FreeBSD:15:amd64"}),
+            encoding="utf-8",
         )
         (channel / "meta.conf").write_bytes(b"meta")
         (channel / "packagesite.pkg").write_bytes(b"catalogue")
         (channel / "os-bind-rp-1.36_7.pkg").write_bytes(b"package")
         return channel
 
-    def test_publication_replaces_only_the_channel_declared_abi_path(self) -> None:
-        """A static publish cannot remove another ABI or retain stale same-ABI bytes."""
+    def test_publication_replaces_only_the_channel_declared_series_abi_path(self) -> None:
+        """A static publish cannot remove sibling ABI or same-ABI series bytes."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             channel = self._channel(root)
@@ -521,8 +524,9 @@ class AbiStaticPublicationTest(unittest.TestCase):
                         "truncated": False,
                         "tree": [
                             {"path": "pages-health", "mode": "100644", "type": "blob", "sha": "3" * 40},
-                            {"path": "pkg/FreeBSD:14:amd64/latest/meta.conf", "mode": "100644", "type": "blob", "sha": "4" * 40},
-                            {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": "5" * 40},
+                            {"path": "pkg/FreeBSD:14:amd64/26.1/latest/meta.conf", "mode": "100644", "type": "blob", "sha": "4" * 40},
+                            {"path": "pkg/FreeBSD:15:amd64/26.7/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": "5" * 40},
+                            {"path": "pkg/FreeBSD:15:amd64/27.1/latest/meta.conf", "mode": "100644", "type": "blob", "sha": "6" * 40},
                         ],
                     }
                 elif endpoint.endswith("/git/blobs"):
@@ -554,14 +558,17 @@ class AbiStaticPublicationTest(unittest.TestCase):
             assert isinstance(tree_payload, dict)
             changes = tree_payload["tree"]
             self.assertIn(
-                {"path": "pkg/FreeBSD:15:amd64/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": None},
+                {"path": "pkg/FreeBSD:15:amd64/26.7/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": None},
                 changes,
             )
             self.assertFalse(
                 any(change["path"].startswith("pkg/FreeBSD:14:amd64/") for change in changes)
             )
+            self.assertFalse(
+                any(change["path"].startswith("pkg/FreeBSD:15:amd64/27.1/") for change in changes)
+            )
             self.assertEqual(
-                {f"pkg/FreeBSD:15:amd64/latest/{path.name}" for path in channel.iterdir()},
+                {f"pkg/FreeBSD:15:amd64/26.7/latest/{path.name}" for path in channel.iterdir()},
                 {change["path"] for change in changes if change.get("sha") is not None},
             )
             self.assertEqual(old_head + "\n", (root / "recovery/gh-pages-head.txt").read_text())
