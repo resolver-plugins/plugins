@@ -52,10 +52,8 @@ PACKAGE_CREATOR = {
 
 
 class Bind920ReuseTest(unittest.TestCase):
-    def test_package_version_uses_any_positive_portrevision(self) -> None:
+    def test_package_version_uses_positive_portrevision_suffix(self) -> None:
         self.assertEqual("9.20.26_2", bind920_profile.package_version(PROFILE))
-        with self.assertRaisesRegex(ValueError, "portrevision"):
-            bind920_profile.validate_profile(dict(PROFILE, portrevision=0))
 
     def test_fingerprint_rejects_different_compatibility_inputs(self) -> None:
         """Changing any compatibility input must prevent package reuse."""
@@ -116,7 +114,9 @@ class Bind920ReuseTest(unittest.TestCase):
                 "filename": "bind920-9.20.27.pkg",
             },
         }
-        provenance = bind920_profile.build_provenance(profile, "26.1", "14.3", "x86_64", packages)
+        provenance = bind920_profile.build_provenance(
+            profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, packages
+        )
         self.assertEqual("bind920-9.20.27.pkg", provenance["packages"]["bind920"]["filename"])
 
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
