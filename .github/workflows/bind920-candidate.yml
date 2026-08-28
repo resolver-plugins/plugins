@@ -141,6 +141,16 @@ jobs:
             --output "$RUNNER_TEMP/assessment.md"
           {
             cat "$RUNNER_TEMP/assessment.md"
+            printf '\n### FreeBSD Ports Changes\n\n'
+            if [ -s "$PORTS_LOG" ]; then
+              while read -r commit subject; do
+                if [ -n "$commit" ]; then
+                  printf -- '- `%s` %s\n' "$commit" "$subject"
+                fi
+              done < "$PORTS_LOG"
+            else
+              printf -- '- No dns/bind920 commits found between the pinned and candidate Ports commits.\n'
+            fi
             printf '\n### Candidate Inputs\n\n'
             printf -- '- FreeBSD Ports commit: `%s`\n' "$CANDIDATE_COMMIT"
             printf -- '- Previous FreeBSD Ports commit: `%s`\n' '${{ steps.ports.outputs.current_commit }}'

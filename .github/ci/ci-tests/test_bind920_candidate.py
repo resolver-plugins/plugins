@@ -423,6 +423,14 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertNotIn("release_channel.py publish", workflow)
         self.assertIn("Publication: not performed by this workflow", workflow)
 
+    def test_candidate_workflow_includes_ports_commit_subjects_in_pr_body(self) -> None:
+        """Review PRs must show the FreeBSD Ports commits behind the candidate."""
+        workflow = self.workflow_text()
+        self.assertIn("### FreeBSD Ports Changes", workflow)
+        self.assertIn("while read -r commit subject; do", workflow)
+        self.assertIn("printf -- '- `%s` %s\\n' \"$commit\" \"$subject\"", workflow)
+        self.assertIn("No dns/bind920 commits found between the pinned and candidate Ports commits.", workflow)
+
     def test_candidate_workflow_uses_pinned_actions(self) -> None:
         """Workflow actions must stay pinned to immutable SHAs."""
         workflow = self.workflow_text()
