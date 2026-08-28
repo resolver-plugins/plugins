@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 BIND_SERIES = (9, 20)
+BIND_UPSTREAM_REPOSITORY = "https://github.com/isc-projects/bind9.git"
 DISTVERSION_PATTERN = re.compile(r"^DISTVERSION[?+]?=\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.MULTILINE)
 PORTREVISION_PATTERN = re.compile(r"^PORTREVISION[?+]?=\s*([0-9]+)\s*$", re.MULTILINE)
 DISTINFO_SHA256_PATTERN = re.compile(r"^SHA256\s+\(bind-([0-9]+\.[0-9]+\.[0-9]+)\.tar\.[^)]+\)\s+=\s+(\S+)\s*$", re.MULTILINE)
@@ -275,6 +276,27 @@ def render_assessment_markdown(assessment: Assessment) -> str:
     )
 
 
+def upstream_bind_release_tag(version: str) -> str:
+    distversion = version.split("_", maxsplit=1)[0]
+    _version_tuple(distversion)
+    return f"v{distversion}"
+
+
+def render_commit_log_markdown(title: str, commit_log_text: str, empty_message: str) -> str:
+    lines: list[str] = []
+    for raw_line in commit_log_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        commit = parts[0]
+        subject = parts[1] if len(parts) > 1 else ""
+        lines.append(f"- `{commit}` {subject}".rstrip())
+    if not lines:
+        lines = [f"- {empty_message}"]
+    return f"### {title}\n\n" + "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -295,6 +317,13 @@ def main() -> None:
     assess_parser.add_argument("--old-makefile", type=Path)
     assess_parser.add_argument("--new-makefile", type=Path)
     assess_parser.add_argument("--output", type=Path, required=True)
+    tag_parser = subparsers.add_parser("upstream-tag")
+    tag_parser.add_argument("--version", required=True)
+    render_parser = subparsers.add_parser("render-commit-log")
+    render_parser.add_argument("--title", required=True)
+    render_parser.add_argument("--commits", type=Path, required=True)
+    render_parser.add_argument("--empty-message", required=True)
+    render_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.command == "update-profile":
         update_profile(
@@ -326,6 +355,17 @@ def main() -> None:
             new_makefile_text,
         )
         arguments.output.write_text(render_assessment_markdown(assessment), encoding="utf-8")
+    elif arguments.command == "upstream-tag":
+        print(upstream_bind_release_tag(arguments.version))
+    elif arguments.command == "render-commit-log":
+        arguments.output.write_text(
+            render_commit_log_markdown(
+                arguments.title,
+                arguments.commits.read_text(encoding="utf-8"),
+                arguments.empty_message,
+            ),
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":
