@@ -390,3 +390,18 @@ def test_all_freebsd_install_gates_pin_pkg_and_test_the_official_replacement_pat
     ]
     assert '/usr/local/sbin/pkg-static install -y -r resolver-plugins' in verifiers['staged']
     assert 'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static' in verifiers['published']
+
+
+def test_all_runtime_dependencies_must_resolve_from_the_target_opnsense_repository():
+    workflow = workflow_text()
+    development = workflow.split('  verify-development:', 1)[1].split(
+        '  publish-development:', 1
+    )[0]
+    staged = workflow.split('  verify:', 1)[1].split('  verify-published:', 1)[0]
+    published = workflow.split('  verify-published:', 1)[1].split(
+        '  source-release:', 1
+    )[0]
+
+    assert 'pkg install -y -r OPNsense $dependencies' in development
+    assert 'pkg install -y -r OPNsense $dependencies' in staged
+    assert 'pkg install -y -r OPNsense "$dependency"' in published
