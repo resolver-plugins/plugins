@@ -173,5 +173,12 @@ jobs:
           if [ -n "$number" ]; then
             gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
           else
-            gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+            if ! gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"; then
+              url="https://github.com/$GITHUB_REPOSITORY/pull/new/$branch"
+              {
+                printf '### Candidate PR branch created\n\n'
+                printf 'GitHub Actions could not create the pull request automatically. Open it manually: %s\n' "$url"
+              } >> "$GITHUB_STEP_SUMMARY"
+              printf 'Candidate PR branch created. Open it manually: %s\n' "$url"
+            fi
           fi

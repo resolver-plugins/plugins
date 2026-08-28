@@ -446,6 +446,8 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertIn("print(f\"old_version={old_package_version}\"", workflow)
         self.assertIn("print(f\"new_version={package_version}\"", workflow)
         self.assertIn('branch="sync/bind920/$distversion-$revision"', workflow)
+        self.assertIn("GitHub Actions could not create the pull request automatically", workflow)
+        self.assertIn("GITHUB_STEP_SUMMARY", workflow)
         self.assertNotIn("New BIND version: `%s_%s`", workflow)
 
 
