@@ -6,6 +6,15 @@ name: Publish os-bind-rp package release
 # install the publisher App on resolver-plugins/repository with Contents: write.
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/ci/**'
+      - '.github/workflows/package-release.yml'
+      - '.resolver-plugins/**'
+      - 'docs/package-repository/resolver-plugins.pub'
+      - 'dns/bind/**'
+      - 'Mk/**'
   workflow_dispatch:
     inputs:
       mode:
@@ -26,7 +35,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: package-release-${{ inputs.series }}
+  group: package-release-${{ inputs.series || '26.7' }}
   cancel-in-progress: false
 
 jobs:
@@ -61,8 +70,8 @@ jobs:
         env:
           GITHUB_REF: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
-          INPUT_MODE: ${{ inputs.mode }}
-          INPUT_SERIES: ${{ inputs.series }}
+          INPUT_MODE: ${{ github.event_name == 'push' && 'production' || inputs.mode }}
+          INPUT_SERIES: ${{ github.event_name == 'push' && '26.7' || inputs.series }}
           INPUT_PULL_NUMBER: ${{ inputs.pull_number }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -384,11 +393,14 @@ jobs:
         run: |
           set -euo pipefail
           output="artifacts/$SERIES"
+          grep -Fqx "source_commit=$SOURCE_COMMIT" "$output/build-metadata.txt"
+          python3 .github/ci/release_channel.py validate-bind-provenance --provenance "$output/bind920-provenance.json" --profile .resolver-plugins/bind920.json --series "$SERIES" --freebsd-release '${{ needs.profile.outputs.freebsd_release }}' --target-pkg-metadata .resolver-plugins/target-pkg.json
+          python3 .github/ci/release_channel.py validate-build-metadata --metadata "$output/build-metadata.txt" --upstream "$output/trusted-upstream.json" --provenance "$output/bind920-provenance.json" --series "$SERIES" --source-commit "$SOURCE_COMMIT" --target-pkg-metadata .resolver-plugins/target-pkg.json
           set -- "$output"/os-bind-rp-*.pkg
           [[ "$#" -eq 1 && -f "$1" ]]
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          reused=$(python3 .github/ci/release_channel.py reuse-snapshot --repository resolver-plugins/repository --series "$SERIES" --version "$version" --source-commit "$SOURCE_COMMIT" --output "$output/repository" --public-key docs/package-repository/resolver-plugins.pub)
+          reused=$(python3 .github/ci/release_channel.py reuse-snapshot --repository resolver-plugins/repository --series "$SERIES" --version "$version" --source-commit "$SOURCE_COMMIT" --output "$output/repository" --public-key docs/package-repository/resolver-plugins.pub --target-pkg-metadata .resolver-plugins/target-pkg.json --provenance "$output/bind920-provenance.json")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
       - name: Sign package repository
         if: steps.reuse-snapshot.outputs.reused != 'true'
@@ -412,9 +424,6 @@ jobs:
             trap 'rm -f "$key"' EXIT HUP INT TERM
             printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
             output="artifacts/${{ needs.select.outputs.series }}"
-            grep -Fqx 'source_commit=${{ needs.profile.outputs.source_commit }}' "$output/build-metadata.txt"
-            python3 .github/ci/release_channel.py validate-bind-provenance --provenance "$output/bind920-provenance.json" --profile .resolver-plugins/bind920.json --series '${{ needs.select.outputs.series }}' --freebsd-release '${{ needs.profile.outputs.freebsd_release }}' --target-pkg-metadata .resolver-plugins/target-pkg.json
-            python3 .github/ci/release_channel.py validate-build-metadata --metadata "$output/build-metadata.txt" --upstream "$output/trusted-upstream.json" --provenance "$output/bind920-provenance.json" --series '${{ needs.select.outputs.series }}' --source-commit '${{ needs.profile.outputs.source_commit }}' --target-pkg-metadata .resolver-plugins/target-pkg.json
             mkdir -p "$output/repository"
             python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json
             cp -R "$output/repository/current" "$output/repository/snapshot"
@@ -482,7 +491,7 @@ jobs:
           set -- "$root"/snapshot/os-bind-rp-*.pkg
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          snapshot_tag=$(python3 .github/ci/release_channel.py snapshot-tag "$SERIES" "$version")
+          snapshot_tag=$(python3 .github/ci/release_channel.py snapshot-tag "$SERIES" "$version" --provenance "$root/current/bind920-provenance.json")
           channels=(--channel "$snapshot_tag=$root/snapshot")
           channels+=(--channel "pkg-$SERIES=$root/current")
           python3 .github/ci/release_channel.py publish-channels --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" "${channels[@]}"
@@ -769,7 +778,7 @@ jobs:
           [ "$#" -eq 1 ] && [ -f "$1" ]
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          tag=$(python3 .github/ci/release_channel.py source-release-tag "$SERIES" "$version")
+          tag=$(python3 .github/ci/release_channel.py source-release-tag "$SERIES" "$version" --provenance "$output/bind920-provenance.json")
           source_output="$RUNNER_TEMP/source-release"
           mkdir "$source_output"
           cp "$1" "$output/build-metadata.txt" "$source_output/"

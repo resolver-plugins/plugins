@@ -111,11 +111,14 @@ baseline.
 
 ## Publication and retention
 
-1. A reviewed change lands on `release/bind-rp/<series>`.
-2. A maintainer explicitly dispatches the production workflow from `master`
-   for that series. CI validates immutable source provenance and builds a production
-   `os-bind-rp` package from that exact source. It reuses a compatible BIND
-   pair or performs the pinned BIND build only on an expected cache miss.
+1. A reviewed change lands on `release/bind-rp/<series>` or changes a package
+   control input on `master`.
+2. A package-affecting push to `master` automatically starts production for
+   the active `26.7` series. A maintainer can also dispatch production from
+   `master` for an explicit series. CI validates immutable source provenance
+   and builds an `os-bind-rp` package from that exact release source. It reuses
+   a compatible BIND pair or performs the pinned BIND build only on an expected
+   cache miss.
 3. The build obtains the BIND pair from the current distribution channel when
    its provenance matches, or builds the pinned pair once on a cache miss. It
    does so in a clean BIND-materialization environment rather than installing
@@ -126,7 +129,10 @@ baseline.
    archive whose file checksums are not fully readable by that target. The
    trusted signing job then stages one complete current channel, writes
    `channel.json`, runs `pkg repo` with the private key, and copies those exact
-   signed bytes to the immutable snapshot publication path.
+   signed bytes to the immutable snapshot publication path. Immutable package
+   and source release tags contain the full BIND compatibility fingerprint, so
+   a BIND-only or package-creator change receives a new identity even when the
+   plugin package version is unchanged.
 5. It verifies that the generated catalogue, public key, manifest checksums,
    and package dependency graph exactly match the intended set.
 6. A final distribution job writes the staged assets to

@@ -188,11 +188,15 @@ cp /conf/config.xml "/conf/config.xml.os-bind-rp.$(date +%Y%m%d%H%M%S).bak"
 ```
 
 Configure `resolver-plugins-rollback` with the same key and the exact snapshot
-URL, for example `pkg-26.7-os-bind-rp-26.7_1`. Dry-run and then install the
-only plugin package exposed by that snapshot:
+URL. Snapshot tags include the plugin version and full BIND compatibility
+fingerprint, for example
+`pkg-26.7-os-bind-rp-26.7_5-bind-<64-character-fingerprint>`. Copy the complete
+tag from the `resolver-plugins/repository` GitHub Releases page; the fingerprint
+also appears in that snapshot's `bind920-provenance.json`. Then dry-run and
+install the only plugin package exposed by that snapshot:
 
 ```sh
-snapshot="pkg-26.7-os-bind-rp-26.7_1"
+snapshot="pkg-26.7-os-bind-rp-26.7_5-bind-<64-character-fingerprint>"
 cat > /usr/local/etc/pkg/repos/resolver-plugins-rollback.conf <<EOF
 resolver-plugins-rollback: {
   url: "https://github.com/resolver-plugins/repository/releases/download/$snapshot",
@@ -234,21 +238,24 @@ The `Publish os-bind-rp package release` workflow builds from the selected
 from the current distribution channel or builds the pinned pair on a verified
 cache miss. The plugin is built against that exact pair.
 
-Production publication is an explicit `workflow_dispatch` from the `master`
-branch after the release-source change has been reviewed and merged. Select
-`production` and the target series; a production dispatch from any other ref
-is rejected. Release branches supply immutable build inputs only and never run
-publication helpers. Runs are serialized per series so two promotions cannot
-replace or restore the same current channel concurrently.
+Package-affecting pushes to `master` automatically publish the active `26.7`
+series after review and merge. The trigger covers the BIND plugin, release
+helpers and workflow, control-plane metadata, package framework, and committed
+repository public key. `workflow_dispatch` remains available for development
+builds and explicit production rebuilds or series selection; a production
+dispatch from any ref other than `master` is rejected. Release branches supply
+immutable build inputs only and never run publication helpers. Runs are
+serialized per series so two promotions cannot replace or restore the same
+current channel concurrently.
 
 The source repository must define this Actions variable and these Actions
 secrets before production:
 
 The `Propose bind920 candidate` workflow may open PRs that update only the
-pinned BIND profile. Those PRs provide review evidence and CI status; they do
-not alter a stable package channel. Stable channel publication still happens
-only through this release workflow after the relevant source branch has been
-reviewed and selected for production publication.
+pinned BIND profile. Those PRs provide review evidence and CI status and do not
+alter a stable package channel while open. Merging a package-affecting candidate
+to `master` starts the automatic `26.7` production run; maintainers can still
+dispatch another series explicitly.
 
 The `RP_PKG_SIGNING_KEY` GitHub Actions secret contains the base64-encoded
 private key. It is decoded only in the disposable FreeBSD VM, used by `pkg
