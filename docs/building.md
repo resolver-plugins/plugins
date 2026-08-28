@@ -41,9 +41,9 @@ scripts. In particular, the release `Mk` files prevent a development-branch
 marker from adding an unintended `-devel` package suffix.
 
 Package-affecting pushes to `master` automatically run production for the
-active `26.7` series. Manual dispatch remains available for an explicit series
-or development build. Release-source branches provide immutable inputs and do
-not execute publication helpers themselves.
+newest numeric `release/bind-rp/<series>` branch. Manual dispatch remains
+available for an explicit series or development build. Release-source branches
+provide immutable inputs and do not execute publication helpers themselves.
 
 Reproduce that split in a disposable worktree when building locally. Start
 from `master`, fetch the selected release branch, and overlay only its release

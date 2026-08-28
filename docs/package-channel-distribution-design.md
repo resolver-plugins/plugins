@@ -114,9 +114,10 @@ baseline.
 1. A reviewed change lands on `release/bind-rp/<series>` or changes a package
    control input on `master`.
 2. A package-affecting push to `master` automatically starts production for
-   the active `26.7` series. A maintainer can also dispatch production from
-   `master` for an explicit series. CI validates immutable source provenance
-   and builds an `os-bind-rp` package from that exact release source. It reuses
+   the newest numeric `release/bind-rp/<series>` branch. A maintainer can also
+   dispatch production from `master` for an explicit series. CI validates
+   immutable source provenance and builds an `os-bind-rp` package from that
+   exact release source. It reuses
    a compatible BIND pair or performs the pinned BIND build only on an expected
    cache miss.
 3. The build obtains the BIND pair from the current distribution channel when
@@ -164,9 +165,9 @@ existing channel is malformed, package checksums differ unexpectedly, source
 provenance is invalid, a dependency is unavailable, or the generated
 catalogue is incomplete.
 
-Production runs are serialized per series. Before mutation, the publisher
-checks that the remote assets still match the locally preserved recovery
-snapshot; after upload, it downloads every asset and verifies its checksum.
+Production runs share one global lock. Before mutation, the publisher checks
+that the remote assets still match the locally preserved recovery snapshot;
+after upload, it downloads every asset and verifies its checksum.
 
 No rollback snapshot is removed until it falls outside the newest-five set and
 the current/snapshot publication has succeeded.

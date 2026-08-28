@@ -35,7 +35,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: package-release-${{ inputs.series || '26.7' }}
+  group: package-release
   cancel-in-progress: false
 
 jobs:
@@ -70,14 +70,24 @@ jobs:
         env:
           GITHUB_REF: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
-          INPUT_MODE: ${{ github.event_name == 'push' && 'production' || inputs.mode }}
-          INPUT_SERIES: ${{ github.event_name == 'push' && '26.7' || inputs.series }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_SERIES: ${{ inputs.series }}
           INPUT_PULL_NUMBER: ${{ inputs.pull_number }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mode="$INPUT_MODE"
-          series="$INPUT_SERIES"
+          if [[ "$EVENT_NAME" == push ]]; then
+            [[ "$GITHUB_REF" == refs/heads/master ]]
+            mode=production
+            series=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/release/bind-rp/" --jq '.[].ref' |
+              sed -nE 's#^refs/heads/release/bind-rp/([0-9]+\.[0-9]+)$#\1#p' |
+              sort -V |
+              tail -n 1)
+          else
+            mode="$INPUT_MODE"
+            series="$INPUT_SERIES"
+          fi
           [[ "$mode" == development || "$mode" == production ]]
           [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]]
           if [[ "$mode" == development ]]; then
