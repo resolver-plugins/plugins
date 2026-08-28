@@ -19,6 +19,26 @@ release_channel = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release_channel)
 
 
+def target_creator_record(digest: str = "a" * 64) -> dict[str, str]:
+    return {
+        "abi": "FreeBSD:15:amd64",
+        "filename": "pkg-2.3.1_1.pkg",
+        "name": "pkg",
+        "origin": "ports-mgmt/pkg",
+        "pkg_static_sha256": digest,
+        "sha256": digest,
+        "version": "2.3.1_1",
+    }
+
+
+def bind_provenance_record(fingerprint: str = "f" * 64) -> dict[str, object]:
+    return {
+        "architecture": "x86_64",
+        "fingerprint": fingerprint,
+        "freebsd_release": "15.1",
+    }
+
+
 class ChannelTagTest(unittest.TestCase):
     def test_series_abi_path_uses_exact_freebsd_amd64_package_abi_and_series(self) -> None:
         """A package ABI and OPNsense series select one static repository path."""
@@ -51,17 +71,20 @@ class ChannelTagTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid package release tag"):
                     release_channel.package_release_title(tag)
 
-    def test_source_release_tag_identifies_the_series_and_plugin_version(self) -> None:
+    def test_source_release_tag_identifies_the_series_plugin_and_bind_build(self) -> None:
+        fingerprint = "f" * 64
         self.assertEqual(
-            "os-bind-rp-26.7-1.36_7", release_channel.source_release_tag("26.7", "1.36_7")
+            f"os-bind-rp-26.7-1.36_7-bind-{fingerprint}",
+            release_channel.source_release_tag("26.7", "1.36_7", fingerprint),
         )
 
     def test_channel_tags_are_series_scoped(self) -> None:
         """Current and immutable snapshot channels must never share a tag."""
+        fingerprint = "f" * 64
         self.assertEqual("pkg-26.7", release_channel.channel_tag("26.7"))
         self.assertEqual(
-            "pkg-26.7-os-bind-rp-1.36_2",
-            release_channel.snapshot_channel_tag("26.7", "1.36_2"),
+            f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+            release_channel.snapshot_channel_tag("26.7", "1.36_2", fingerprint),
         )
 
     def test_channel_tags_reject_invalid_series(self) -> None:
@@ -69,7 +92,9 @@ class ChannelTagTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid series"):
             release_channel.channel_tag("26.7/archive")
         with self.assertRaisesRegex(ValueError, "invalid package version"):
-            release_channel.snapshot_channel_tag("26.7", "1.36/2")
+            release_channel.snapshot_channel_tag("26.7", "1.36/2", "f" * 64)
+        with self.assertRaisesRegex(ValueError, "invalid BIND fingerprint"):
+            release_channel.snapshot_channel_tag("26.7", "1.36_2", "not-a-fingerprint")
 
 
 class GitHubCliTest(unittest.TestCase):
@@ -805,6 +830,8 @@ class PublicationRecoveryTest(unittest.TestCase):
             (remote / "channel.json").write_text(
                 json.dumps(
                     {
+                        "bind": bind_provenance_record(),
+                        "package_creator": target_creator_record(),
                         "series": "26.7",
                         "plugin_version": "1.36_2",
                         "source_commit": "a" * 40,
@@ -816,12 +843,18 @@ class PublicationRecoveryTest(unittest.TestCase):
             public_key = root / "resolver-plugins.pub"
             public_key.write_bytes(b"trusted key")
             (remote / public_key.name).write_bytes(public_key.read_bytes())
+            fingerprint = bind_provenance_record()["fingerprint"]
             snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
+                f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                True,
+                remote,
+                root / "manifest.json",
             )
 
             with (
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
+                patch.object(
+                    release_channel, "snapshot_release", return_value=snapshot
+                ) as snapshot_release,
                 patch.object(release_channel, "validate_channel_directory") as validate,
             ):
                 reused = release_channel.materialize_existing_snapshot(
@@ -831,9 +864,18 @@ class PublicationRecoveryTest(unittest.TestCase):
                     "a" * 40,
                     root / "repository",
                     public_key,
+                    target_creator_record(),
+                    bind_provenance_record(),
                 )
 
             self.assertTrue(reused)
+            self.assertEqual(
+                (
+                    "resolver-plugins/repository",
+                    f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                ),
+                snapshot_release.call_args.args[:2],
+            )
             validate.assert_called_once_with(remote)
             for channel in ("current", "snapshot"):
                 self.assertEqual(
@@ -860,6 +902,8 @@ class PublicationRecoveryTest(unittest.TestCase):
                     "b" * 40,
                     root / "repository",
                     public_key,
+                    target_creator_record(),
+                    bind_provenance_record(),
                 )
 
             self.assertFalse(reused)
@@ -873,6 +917,8 @@ class PublicationRecoveryTest(unittest.TestCase):
             (remote / "channel.json").write_text(
                 json.dumps(
                     {
+                        "bind": bind_provenance_record(),
+                        "package_creator": target_creator_record(),
                         "series": "26.7",
                         "plugin_version": "1.36_2",
                         "source_commit": "a" * 40,
@@ -898,6 +944,86 @@ class PublicationRecoveryTest(unittest.TestCase):
                         "b" * 40,
                         root / "repository",
                         public_key,
+                        target_creator_record(),
+                        bind_provenance_record(),
+                    )
+
+    def test_snapshot_reuse_rejects_different_bind_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            remote = root / "remote"
+            remote.mkdir()
+            (remote / "channel.json").write_text(
+                json.dumps(
+                    {
+                        "bind": bind_provenance_record("b" * 64),
+                        "package_creator": target_creator_record(),
+                        "series": "26.7",
+                        "plugin_version": "1.36_2",
+                        "source_commit": "a" * 40,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            public_key = root / "resolver-plugins.pub"
+            public_key.write_bytes(b"trusted key")
+            (remote / public_key.name).write_bytes(public_key.read_bytes())
+            snapshot = release_channel.ReleaseSnapshot(
+                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
+            )
+            with (
+                patch.object(release_channel, "snapshot_release", return_value=snapshot),
+                patch.object(release_channel, "validate_channel_directory"),
+            ):
+                with self.assertRaisesRegex(ValueError, "does not match requested release"):
+                    release_channel.materialize_existing_snapshot(
+                        "resolver-plugins/repository",
+                        "26.7",
+                        "1.36_2",
+                        "a" * 40,
+                        root / "repository",
+                        public_key,
+                        target_creator_record(),
+                        bind_provenance_record("c" * 64),
+                    )
+
+    def test_snapshot_reuse_rejects_different_target_pkg_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            remote = root / "remote"
+            remote.mkdir()
+            (remote / "channel.json").write_text(
+                json.dumps(
+                    {
+                        "bind": bind_provenance_record(),
+                        "package_creator": target_creator_record("b" * 64),
+                        "series": "26.7",
+                        "plugin_version": "1.36_2",
+                        "source_commit": "a" * 40,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            public_key = root / "resolver-plugins.pub"
+            public_key.write_bytes(b"trusted key")
+            (remote / public_key.name).write_bytes(public_key.read_bytes())
+            snapshot = release_channel.ReleaseSnapshot(
+                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
+            )
+            with (
+                patch.object(release_channel, "snapshot_release", return_value=snapshot),
+                patch.object(release_channel, "validate_channel_directory"),
+            ):
+                with self.assertRaisesRegex(ValueError, "does not match requested release"):
+                    release_channel.materialize_existing_snapshot(
+                        "resolver-plugins/repository",
+                        "26.7",
+                        "1.36_2",
+                        "a" * 40,
+                        root / "repository",
+                        public_key,
+                        target_creator_record("c" * 64),
+                        bind_provenance_record(),
                     )
 
     def test_recovery_channel_rejects_an_audit_checksum_mismatch(self) -> None:
@@ -1315,8 +1441,16 @@ class PublicationRecoveryTest(unittest.TestCase):
 
     def test_snapshot_pruning_keeps_the_newest_five_immutable_tags(self) -> None:
         """Only a successful promotion may remove the sixth-oldest snapshot."""
+        fingerprint = "f" * 64
         releases = [
-            {"tag_name": f"pkg-26.7-os-bind-rp-1.36_{number}", "created_at": f"2026-01-0{number}T00:00:00Z"}
+            {
+                "tag_name": (
+                    f"pkg-26.7-os-bind-rp-1.36_{number}-bind-{fingerprint}"
+                    if number % 2 == 0
+                    else f"pkg-26.7-os-bind-rp-1.36_{number}"
+                ),
+                "created_at": f"2026-01-0{number}T00:00:00Z",
+            }
             for number in range(1, 7)
         ]
         # `gh api --paginate --slurp` returns one JSON array per fetched page.

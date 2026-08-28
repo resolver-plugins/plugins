@@ -30,6 +30,24 @@ def test_workflow_selects_an_immutable_release_source():
     assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in workflow
 
 
+def test_package_affecting_master_pushes_publish_the_active_series():
+    workflow = workflow_text()
+
+    assert 'push:\n    branches: [master]' in workflow
+    for path in (
+        "'.github/ci/**'",
+        "'.github/workflows/package-release.yml'",
+        "'.resolver-plugins/**'",
+        "'docs/package-repository/resolver-plugins.pub'",
+        "'dns/bind/**'",
+        "'Mk/**'",
+    ):
+        assert path in workflow
+    assert "group: package-release-${{ inputs.series || '26.7' }}" in workflow
+    assert "INPUT_MODE: ${{ github.event_name == 'push' && 'production' || inputs.mode }}" in workflow
+    assert "INPUT_SERIES: ${{ github.event_name == 'push' && '26.7' || inputs.series }}" in workflow
+
+
 def test_production_runs_only_from_the_master_control_plane():
     workflow = workflow_text()
     select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
@@ -43,7 +61,7 @@ def test_production_runs_only_from_the_master_control_plane():
     assert 'ref: ${{ needs.select.outputs.control_ref }}' in profile
     for job in (test, bind, build):
         assert 'ref: ${{ needs.profile.outputs.control_commit }}' in job
-    assert 'group: package-release-${{ inputs.series }}' in workflow
+    assert "group: package-release-${{ inputs.series || '26.7' }}" in workflow
     assert 'cancel-in-progress: false' in workflow
 
 
@@ -99,7 +117,7 @@ def test_production_signing_and_publication_are_separate_from_builds():
     assert 'python3 .github/ci/release_channel.py stage-channel' in workflow
     assert 'python3 .github/ci/release_channel.py validate-bind-provenance' in workflow
     assert '--profile .resolver-plugins/bind920.json' in workflow
-    assert "--series '${{ needs.select.outputs.series }}'" in workflow
+    assert '--series "$SERIES"' in workflow
     assert "--freebsd-release '${{ needs.profile.outputs.freebsd_release }}'" in workflow
     assert 'python3 .github/ci/release_channel.py publish-channels' in workflow
     assert 'permissions:\n      contents: write' in workflow
@@ -121,9 +139,16 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     assert 'cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub"' in signer
     assert 'trusted-upstream.json' in signer
     assert 'validate-build-metadata' in signer
-    assert signer.count('--target-pkg-metadata .resolver-plugins/target-pkg.json') == 3
+    assert signer.count('--target-pkg-metadata .resolver-plugins/target-pkg.json') == 4
     assert 'id: reuse-snapshot' in signer
     assert 'reuse-snapshot --repository resolver-plugins/repository' in signer
+    assert '--provenance "$output/bind920-provenance.json"' in signer
+    reuse = signer.split('- name: Reuse existing immutable snapshot', 1)[1].split(
+        '- name: Sign package repository', 1
+    )[0]
+    reuse_command = 'release_channel.py reuse-snapshot'
+    assert reuse.index('validate-bind-provenance') < reuse.index(reuse_command)
+    assert reuse.index('validate-build-metadata') < reuse.index(reuse_command)
     assert "if: steps.reuse-snapshot.outputs.reused != 'true'" in signer
     assert '--public-key docs/package-repository/resolver-plugins.pub' in signer
     assert 'repository/bind920' not in signer
@@ -311,9 +336,17 @@ def test_source_release_contains_only_plugin_and_build_metadata():
     assert 'gh release view "$tag"' not in source_release
     assert 'gh release create "$tag"' not in source_release
     assert 'set -- "$output"/os-bind-rp-*.pkg' in source_release
+    assert 'source-release-tag "$SERIES" "$version" --provenance "$output/bind920-provenance.json"' in source_release
     assert 'cp "$1" "$output/build-metadata.txt" "$source_output/"' in source_release
     assert 'bind920-*.pkg' not in source_release
     assert 'os-bind-rp-build-production-' not in source_release
+
+
+def test_immutable_package_snapshot_is_scoped_to_the_bind_build():
+    workflow = workflow_text()
+    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
+
+    assert 'snapshot-tag "$SERIES" "$version" --provenance "$root/current/bind920-provenance.json"' in publisher
 
 
 def test_all_freebsd_install_gates_pin_pkg_and_test_the_official_replacement_path():

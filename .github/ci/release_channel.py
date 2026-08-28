@@ -29,6 +29,7 @@ DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)")
 PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
 PROVENANCE_NAME = "bind920-provenance.json"
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 SERIES_PLUGIN_VERSION_PATTERN = re.compile(r"(?P<series>[0-9]+\.[0-9]+)_(?P<revision>[1-9][0-9]*)")
 PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
@@ -61,20 +62,29 @@ def channel_tag(series: str) -> str:
     return f"pkg-{series}"
 
 
-def snapshot_channel_tag(series: str, version: str) -> str:
+def validate_bind_fingerprint(fingerprint: object) -> str:
+    """Return one canonical BIND compatibility fingerprint."""
+    if not isinstance(fingerprint, str) or SHA256_PATTERN.fullmatch(fingerprint) is None:
+        raise ValueError("invalid BIND fingerprint")
+    return fingerprint
+
+
+def snapshot_channel_tag(series: str, version: str, fingerprint: object) -> str:
     """Return an immutable, self-contained rollback snapshot tag."""
     if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError("invalid package version")
-    return f"{channel_tag(series)}-os-bind-rp-{version}"
+    fingerprint = validate_bind_fingerprint(fingerprint)
+    return f"{channel_tag(series)}-os-bind-rp-{version}-bind-{fingerprint}"
 
 
-def source_release_tag(series: str, version: str) -> str:
+def source_release_tag(series: str, version: str, fingerprint: object) -> str:
     """Return the immutable, human-facing plugin release tag."""
     if SERIES_PATTERN.fullmatch(series) is None:
         raise ValueError("invalid series")
     if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError("invalid package version")
-    return f"os-bind-rp-{series}-{version}"
+    fingerprint = validate_bind_fingerprint(fingerprint)
+    return f"os-bind-rp-{series}-{version}-bind-{fingerprint}"
 
 
 def validate_package_abi(abi: str) -> None:
@@ -718,9 +728,15 @@ def materialize_existing_snapshot(
     source_commit: str,
     output: Path,
     public_key: Path,
+    package_creator: dict[str, str],
+    provenance: dict[str, object],
 ) -> bool:
     """Reuse the signed immutable bytes for an already-published package version."""
-    tag = snapshot_channel_tag(series, version)
+    expected_bind = {
+        field: provenance.get(field)
+        for field in ("fingerprint", "freebsd_release", "architecture")
+    }
+    tag = snapshot_channel_tag(series, version, expected_bind["fingerprint"])
     with tempfile.TemporaryDirectory() as temporary_directory:
         snapshot = snapshot_release(repository, tag, Path(temporary_directory))
         if not snapshot.existed:
@@ -737,6 +753,9 @@ def materialize_existing_snapshot(
             or channel.get("series") != series
             or channel.get("plugin_version") != version
             or channel.get("source_commit") != source_commit
+            or channel.get("package_creator") != package_creator
+            or channel.get("bind") != expected_bind
+            or any(value is None for value in expected_bind.values())
         ):
             raise ValueError("immutable snapshot does not match requested release")
         try:
@@ -1222,9 +1241,11 @@ def main() -> None:
     snapshot_tag = commands.add_parser("snapshot-tag")
     snapshot_tag.add_argument("series")
     snapshot_tag.add_argument("version")
+    snapshot_tag.add_argument("--provenance", type=Path, required=True)
     source_tag = commands.add_parser("source-release-tag")
     source_tag.add_argument("series")
     source_tag.add_argument("version")
+    source_tag.add_argument("--provenance", type=Path, required=True)
     stage_channel = commands.add_parser("stage-channel")
     stage_channel.add_argument("--packages-directory", type=Path, required=True)
     stage_channel.add_argument("--output", type=Path, required=True)
@@ -1238,6 +1259,8 @@ def main() -> None:
     reuse_snapshot.add_argument("--source-commit", required=True)
     reuse_snapshot.add_argument("--output", type=Path, required=True)
     reuse_snapshot.add_argument("--public-key", type=Path, required=True)
+    reuse_snapshot.add_argument("--target-pkg-metadata", type=Path, required=True)
+    reuse_snapshot.add_argument("--provenance", type=Path, required=True)
     publish_parser = commands.add_parser("publish")
     publish_parser.add_argument("--repository", required=True)
     publish_parser.add_argument("--series", required=True)
@@ -1300,9 +1323,19 @@ def main() -> None:
             arguments.source_commit,
         )
     elif arguments.command == "snapshot-tag":
-        print(snapshot_channel_tag(arguments.series, arguments.version))
+        provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
+        print(
+            snapshot_channel_tag(
+                arguments.series, arguments.version, provenance.get("fingerprint")
+            )
+        )
     elif arguments.command == "source-release-tag":
-        print(source_release_tag(arguments.series, arguments.version))
+        provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
+        print(
+            source_release_tag(
+                arguments.series, arguments.version, provenance.get("fingerprint")
+            )
+        )
     elif arguments.command == "stage-channel":
         for asset in stage_channel_repository(
             arguments.packages_directory,
@@ -1320,6 +1353,10 @@ def main() -> None:
             arguments.source_commit,
             arguments.output,
             arguments.public_key,
+            target_pkg.load_target(
+                arguments.target_pkg_metadata, arguments.series
+            ).record(),
+            json.loads(arguments.provenance.read_text(encoding="utf-8")),
         )
         print("true" if reused else "false")
     elif arguments.command == "publish":
