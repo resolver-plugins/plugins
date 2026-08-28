@@ -29,6 +29,8 @@ assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
 parse_bind920_makefile = bind920_candidate.parse_bind920_makefile
 render_updated_profile = bind920_candidate.render_updated_profile
+render_commit_log_markdown = bind920_candidate.render_commit_log_markdown
+upstream_bind_release_tag = bind920_candidate.upstream_bind_release_tag
 
 
 class Bind920CandidateTest(unittest.TestCase):
@@ -186,6 +188,41 @@ CONFIGURE_ARGS+= --enable-fixed
             "BIND 9.20.26 to 9.20.27 is classified as critical-bugfix. "
             "Signals: crash, resolver. Maintainer review is required before publication.",
             result.summary,
+        )
+
+    def test_upstream_bind_release_tag_strips_portrevision(self) -> None:
+        """Upstream BIND tags must be based on BIND versions, not FreeBSD package revisions."""
+        self.assertEqual("v9.20.26", upstream_bind_release_tag("9.20.26_2"))
+        self.assertEqual("v9.20.27", upstream_bind_release_tag("9.20.27"))
+
+    def test_render_commit_log_markdown_lists_commit_subjects(self) -> None:
+        """Candidate PRs should summarize upstream release commits without full commit bodies."""
+        rendered = render_commit_log_markdown(
+            "Upstream BIND Changes",
+            "abc1234 Fix resolver crash\n"
+            "def5678 Improve DNSSEC validation\n",
+            "No upstream commits were found.",
+        )
+
+        self.assertEqual(
+            "### Upstream BIND Changes\n\n"
+            "- `abc1234` Fix resolver crash\n"
+            "- `def5678` Improve DNSSEC validation\n",
+            rendered,
+        )
+
+    def test_render_commit_log_markdown_uses_fallback_when_empty(self) -> None:
+        """PR bodies should explain missing upstream history instead of showing a blank section."""
+        rendered = render_commit_log_markdown(
+            "Upstream BIND Changes",
+            "\n",
+            "Could not resolve upstream BIND release tags.",
+        )
+
+        self.assertEqual(
+            "### Upstream BIND Changes\n\n"
+            "- Could not resolve upstream BIND release tags.\n",
+            rendered,
         )
 
     def test_render_updated_profile_preserves_key_order_and_updates_candidate_values(self) -> None:
@@ -426,10 +463,19 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
     def test_candidate_workflow_includes_ports_commit_subjects_in_pr_body(self) -> None:
         """Review PRs must show the FreeBSD Ports commits behind the candidate."""
         workflow = self.workflow_text()
-        self.assertIn("### FreeBSD Ports Changes", workflow)
-        self.assertIn("while read -r commit subject; do", workflow)
-        self.assertIn("printf -- '- `%s` %s\\n' \"$commit\" \"$subject\"", workflow)
+        self.assertIn("render-commit-log", workflow)
+        self.assertIn("--title \"FreeBSD Ports Changes\"", workflow)
         self.assertIn("No dns/bind920 commits found between the pinned and candidate Ports commits.", workflow)
+
+    def test_candidate_workflow_includes_upstream_bind_commit_subjects_in_pr_body(self) -> None:
+        """Review PRs must show upstream BIND commits between the old and new release tags."""
+        workflow = self.workflow_text()
+        self.assertIn("https://github.com/isc-projects/bind9.git", workflow)
+        self.assertIn("old_distversion=", workflow)
+        self.assertIn("--title \"Upstream BIND Changes\"", workflow)
+        self.assertIn("upstream-tag", workflow)
+        self.assertIn("git -C \"$RUNNER_TEMP/bind9\" log --format='%h %s' \"$old_tag..$new_tag\"", workflow)
+        self.assertIn("Could not resolve upstream BIND release tags.", workflow)
 
     def test_candidate_workflow_uses_pinned_actions(self) -> None:
         """Workflow actions must stay pinned to immutable SHAs."""

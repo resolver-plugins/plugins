@@ -97,6 +97,7 @@ jobs:
                   package_version = f"{candidate.distversion}_{candidate.portrevision}"
               print(f"newer={'true' if newer else 'false'}", file=output)
               print(f"old_version={old_package_version}", file=output)
+              print(f"old_distversion={current.distversion}", file=output)
               print(f"new_version={package_version}", file=output)
               print(f"candidate_distversion={candidate.distversion}", file=output)
               print(f"portrevision={candidate.portrevision}", file=output)
@@ -115,6 +116,7 @@ jobs:
           PORTS_DIFF: ${{ steps.ports.outputs.ports_diff }}
           PORTS_LOG: ${{ steps.ports.outputs.ports_log }}
           CURRENT_MAKEFILE: ${{ steps.ports.outputs.current_makefile }}
+          BIND_UPSTREAM_REPOSITORY: https://github.com/isc-projects/bind9.git
         run: |
           set -euo pipefail
           printf '%s\n' "$CHANGELOG_TEXT" > "$RUNNER_TEMP/maintainer-notes.txt"
@@ -139,18 +141,36 @@ jobs:
             --old-makefile "$CURRENT_MAKEFILE" \
             --new-makefile "$PORTS_DIR/dns/bind920/Makefile" \
             --output "$RUNNER_TEMP/assessment.md"
+          old_tag=$(python3 .github/ci/bind920_candidate.py upstream-tag \
+            --version '${{ steps.candidate.outputs.old_distversion }}')
+          new_tag=$(python3 .github/ci/bind920_candidate.py upstream-tag \
+            --version '${{ steps.candidate.outputs.candidate_distversion }}')
+          upstream_empty_message="No upstream BIND commits were found between $old_tag and $new_tag."
+          if git clone --filter=blob:none --no-checkout "$BIND_UPSTREAM_REPOSITORY" "$RUNNER_TEMP/bind9" \
+              && git -C "$RUNNER_TEMP/bind9" fetch --no-tags origin \
+                "refs/tags/$old_tag:refs/tags/$old_tag" \
+                "refs/tags/$new_tag:refs/tags/$new_tag"; then
+            git -C "$RUNNER_TEMP/bind9" log --format='%h %s' "$old_tag..$new_tag" > "$RUNNER_TEMP/upstream.log"
+          else
+            upstream_empty_message="Could not resolve upstream BIND release tags."
+            : > "$RUNNER_TEMP/upstream.log"
+          fi
+          python3 .github/ci/bind920_candidate.py render-commit-log \
+            --title "Upstream BIND Changes" \
+            --commits "$RUNNER_TEMP/upstream.log" \
+            --empty-message "$upstream_empty_message" \
+            --output "$RUNNER_TEMP/upstream-changes.md"
+          python3 .github/ci/bind920_candidate.py render-commit-log \
+            --title "FreeBSD Ports Changes" \
+            --commits "$PORTS_LOG" \
+            --empty-message "No dns/bind920 commits found between the pinned and candidate Ports commits." \
+            --output "$RUNNER_TEMP/ports-changes.md"
           {
             cat "$RUNNER_TEMP/assessment.md"
-            printf '\n### FreeBSD Ports Changes\n\n'
-            if [ -s "$PORTS_LOG" ]; then
-              while read -r commit subject; do
-                if [ -n "$commit" ]; then
-                  printf -- '- `%s` %s\n' "$commit" "$subject"
-                fi
-              done < "$PORTS_LOG"
-            else
-              printf -- '- No dns/bind920 commits found between the pinned and candidate Ports commits.\n'
-            fi
+            printf '\n'
+            cat "$RUNNER_TEMP/upstream-changes.md"
+            printf '\n'
+            cat "$RUNNER_TEMP/ports-changes.md"
             printf '\n### Candidate Inputs\n\n'
             printf -- '- FreeBSD Ports commit: `%s`\n' "$CANDIDATE_COMMIT"
             printf -- '- Previous FreeBSD Ports commit: `%s`\n' '${{ steps.ports.outputs.current_commit }}'
