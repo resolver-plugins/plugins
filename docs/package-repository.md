@@ -238,15 +238,15 @@ The `Publish os-bind-rp package release` workflow builds from the selected
 from the current distribution channel or builds the pinned pair on a verified
 cache miss. The plugin is built against that exact pair.
 
-Package-affecting pushes to `master` automatically publish the active `26.7`
-series after review and merge. The trigger covers the BIND plugin, release
-helpers and workflow, control-plane metadata, package framework, and committed
-repository public key. `workflow_dispatch` remains available for development
-builds and explicit production rebuilds or series selection; a production
+Package-affecting pushes to `master` automatically publish the newest numeric
+`release/bind-rp/<series>` branch after review and merge. The trigger covers
+the BIND plugin, release helpers and workflow, control-plane metadata, package
+framework, and committed repository public key. `workflow_dispatch` remains
+available for development builds and explicit production rebuilds or series selection; a production
 dispatch from any ref other than `master` is rejected. Release branches supply
-immutable build inputs only and never run publication helpers. Runs are
-serialized per series so two promotions cannot replace or restore the same
-current channel concurrently.
+immutable build inputs only and never run publication helpers. Publication
+runs share one global lock so automatic and manual promotions cannot replace
+or restore the same current channel concurrently.
 
 The source repository must define this Actions variable and these Actions
 secrets before production:
@@ -254,8 +254,8 @@ secrets before production:
 The `Propose bind920 candidate` workflow may open PRs that update only the
 pinned BIND profile. Those PRs provide review evidence and CI status and do not
 alter a stable package channel while open. Merging a package-affecting candidate
-to `master` starts the automatic `26.7` production run; maintainers can still
-dispatch another series explicitly.
+to `master` starts production for the newest numeric release branch;
+maintainers can still dispatch another series explicitly.
 
 The `RP_PKG_SIGNING_KEY` GitHub Actions secret contains the base64-encoded
 private key. It is decoded only in the disposable FreeBSD VM, used by `pkg
@@ -307,9 +307,12 @@ plugin version, release-source commit, and the committed public key, then uses
 those exact bytes for both staged paths. An existing current channel must also
 be byte-identical; different bytes fail before any channel is changed,
 preventing an older retry from moving current backward.
-When the target snapshot is absent and current differs, the staged release
-source must be a strict descendant of current's recorded source commit. This
-allows a new promotion while rejecting stale runs even after snapshot pruning.
+When the target snapshot is absent and current differs, the staged source and
+control commits must each be equal to or descend from current, and at least one
+lineage must advance. The one-time migration from a legacy channel without a
+control commit to schema 4 permits an equal source commit. This allows
+BIND-only and source promotions while rejecting stale runs even after snapshot
+pruning.
 
 After promotion, a fresh FreeBSD VM configures the pinned OPNsense repository,
 installs its matching core package, and runs `scripts/install-os-bind-rp.sh`

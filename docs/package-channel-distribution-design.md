@@ -114,9 +114,10 @@ baseline.
 1. A reviewed change lands on `release/bind-rp/<series>` or changes a package
    control input on `master`.
 2. A package-affecting push to `master` automatically starts production for
-   the active `26.7` series. A maintainer can also dispatch production from
-   `master` for an explicit series. CI validates immutable source provenance
-   and builds an `os-bind-rp` package from that exact release source. It reuses
+   the newest numeric `release/bind-rp/<series>` branch. A maintainer can also
+   dispatch production from `master` for an explicit series. CI validates
+   immutable source provenance and builds an `os-bind-rp` package from that
+   exact release source. It reuses
    a compatible BIND pair or performs the pinned BIND build only on an expected
    cache miss.
 3. The build obtains the BIND pair from the current distribution channel when
@@ -132,7 +133,11 @@ baseline.
    signed bytes to the immutable snapshot publication path. Immutable package
    and source release tags contain the full BIND compatibility fingerprint, so
    a BIND-only or package-creator change receives a new identity even when the
-   plugin package version is unchanged.
+   plugin package version is unchanged. Schema 4 channels also record the
+   trusted `master` control commit. When the release-source commit is unchanged,
+   promotion requires the staged control commit to descend from the current
+   one; this permits BIND-only updates without allowing stale workflow retries
+   to roll the channel back.
 5. It verifies that the generated catalogue, public key, manifest checksums,
    and package dependency graph exactly match the intended set.
 6. A final distribution job writes the staged assets to
@@ -161,12 +166,12 @@ configuration changes to propagate to the active peer during the canary.
 
 The publisher fails before changing the distribution repository if the
 existing channel is malformed, package checksums differ unexpectedly, source
-provenance is invalid, a dependency is unavailable, or the generated
-catalogue is incomplete.
+or control provenance is invalid, a dependency is unavailable, or the
+generated catalogue is incomplete.
 
-Production runs are serialized per series. Before mutation, the publisher
-checks that the remote assets still match the locally preserved recovery
-snapshot; after upload, it downloads every asset and verifies its checksum.
+Production runs share one global lock. Before mutation, the publisher checks
+that the remote assets still match the locally preserved recovery snapshot;
+after upload, it downloads every asset and verifies its checksum.
 
 No rollback snapshot is removed until it falls outside the newest-five set and
 the current/snapshot publication has succeeded.
@@ -174,9 +179,12 @@ An existing immutable snapshot may be reused by a full workflow retry only
 when its complete asset set is byte-identical to the staged snapshot. If the
 current channel exists, it must also be byte-identical; a mismatch is a hard
 failure so an older retry cannot roll current back.
-If the snapshot is absent and current differs, the staged source commit must
-be a strict descendant of the source recorded by current. This preserves
-forward promotion while rejecting stale runs after recovery or pruning.
+If the snapshot is absent and current differs, the staged source and control
+commits must each be equal to or descend from the commits recorded by current,
+and at least one lineage must advance. The one-time migration from a legacy
+channel without control lineage to schema 4 permits an equal source commit.
+This preserves BIND-only and source promotions while rejecting stale runs
+after recovery or pruning.
 
 ## Migration
 

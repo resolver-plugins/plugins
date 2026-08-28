@@ -30,7 +30,7 @@ def test_workflow_selects_an_immutable_release_source():
     assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in workflow
 
 
-def test_package_affecting_master_pushes_publish_the_active_series():
+def test_package_affecting_master_pushes_publish_the_newest_release_series():
     workflow = workflow_text()
 
     assert 'push:\n    branches: [master]' in workflow
@@ -43,9 +43,14 @@ def test_package_affecting_master_pushes_publish_the_active_series():
         "'Mk/**'",
     ):
         assert path in workflow
-    assert "group: package-release-${{ inputs.series || '26.7' }}" in workflow
-    assert "INPUT_MODE: ${{ github.event_name == 'push' && 'production' || inputs.mode }}" in workflow
-    assert "INPUT_SERIES: ${{ github.event_name == 'push' && '26.7' || inputs.series }}" in workflow
+    assert '  group: package-release\n' in workflow
+    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
+    assert 'EVENT_NAME: ${{ github.event_name }}' in select
+    assert 'git/matching-refs/heads/release/bind-rp/' in select
+    assert "sed -nE 's#^refs/heads/release/bind-rp/([0-9]+\\.[0-9]+)$#\\1#p'" in select
+    assert 'sort -V' in select
+    assert 'mode=production' in select
+    assert "'26.7'" not in select
 
 
 def test_production_runs_only_from_the_master_control_plane():
@@ -61,7 +66,7 @@ def test_production_runs_only_from_the_master_control_plane():
     assert 'ref: ${{ needs.select.outputs.control_ref }}' in profile
     for job in (test, bind, build):
         assert 'ref: ${{ needs.profile.outputs.control_commit }}' in job
-    assert "group: package-release-${{ inputs.series || '26.7' }}" in workflow
+    assert '  group: package-release\n' in workflow
     assert 'cancel-in-progress: false' in workflow
 
 
@@ -135,6 +140,7 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     assert 'repository/current' in signer
     assert 'repository/snapshot' in signer
     assert signer.count('stage-channel') == 1
+    assert "--control-commit '${{ needs.profile.outputs.control_commit }}'" in signer
     assert 'cp -R "$output/repository/current" "$output/repository/snapshot"' in signer
     assert 'cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub"' in signer
     assert 'trusted-upstream.json' in signer
