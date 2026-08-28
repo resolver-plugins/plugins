@@ -118,6 +118,27 @@ class GitHubCliTest(unittest.TestCase):
             calls,
         )
 
+    def test_release_asset_download_retries_after_removing_partial_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            downloaded = directory / "meta.conf"
+            calls: list[list[str]] = []
+
+            def fake_run_gh(arguments: list[str]) -> None:
+                calls.append(arguments)
+                if len(calls) == 1:
+                    downloaded.write_bytes(b"partial")
+                    raise subprocess.CalledProcessError(1, ["gh", *arguments])
+                downloaded.write_bytes(b"complete")
+
+            with patch.object(release_channel, "run_gh", side_effect=fake_run_gh):
+                release_channel.download_release_asset(
+                    "resolver-plugins/repository", "pkg-26.7", "meta.conf", directory
+                )
+
+            self.assertEqual(b"complete", downloaded.read_bytes())
+            self.assertEqual(2, len(calls))
+
 
 class PullRequestReleaseCleanupTest(unittest.TestCase):
     def test_pull_request_release_selection_rejects_near_matches(self) -> None:
@@ -363,7 +384,12 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 patch.object(release_channel.subprocess, "run", side_effect=fake_repo),
             ):
                 assets = release_channel.stage_channel_repository(
-                    packages, root / "channel", key, "pkg", target_metadata
+                    packages,
+                    root / "channel",
+                    key,
+                    "pkg",
+                    target_metadata,
+                    "c" * 40,
                 )
 
             names = {asset.name for asset in assets}
@@ -380,7 +406,8 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 names,
             )
             manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
-            self.assertEqual(3, manifest["schema"])
+            self.assertEqual(4, manifest["schema"])
+            self.assertEqual("c" * 40, manifest["control_commit"])
             self.assertEqual("26.7", manifest["series"])
             self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
             self.assertEqual("26.7_1", manifest["plugin_version"])
@@ -397,14 +424,21 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             (root / "channel/packagesite.pkg").touch()
             release_channel.validate_channel_directory(root / "channel")
 
-            legacy_v2_manifest = dict(manifest, schema=2)
+            legacy_v3_manifest = dict(manifest, schema=3)
+            legacy_v3_manifest.pop("control_commit")
+            (root / "channel/channel.json").write_text(
+                json.dumps(legacy_v3_manifest), encoding="utf-8"
+            )
+            release_channel.validate_channel_directory(root / "channel")
+
+            legacy_v2_manifest = dict(legacy_v3_manifest, schema=2)
             legacy_v2_manifest.pop("package_abi")
             (root / "channel/channel.json").write_text(
                 json.dumps(legacy_v2_manifest), encoding="utf-8"
             )
             release_channel.validate_channel_directory(root / "channel")
 
-            legacy_manifest = dict(manifest, schema=1)
+            legacy_manifest = dict(legacy_v3_manifest, schema=1)
             legacy_manifest.pop("package_creator")
             legacy_manifest.pop("package_abi")
             (root / "channel/channel.json").write_text(
@@ -503,7 +537,12 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             ), patch.object(release_channel, "stage_selected_repository"):
                 with self.assertRaisesRegex(ValueError, "trusted target package profile"):
                     release_channel.stage_channel_repository(
-                        packages, root / "channel", key, "pkg", target_metadata
+                        packages,
+                        root / "channel",
+                        key,
+                        "pkg",
+                        target_metadata,
+                        "c" * 40,
                     )
 
     def test_asset_order_puts_repository_metadata_after_packages(self) -> None:
@@ -1289,6 +1328,166 @@ class PublicationRecoveryTest(unittest.TestCase):
                     ],
                 ],
                 mutations,
+            )
+
+    def test_schema_four_migration_allows_new_control_for_the_same_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current"
+            staged = root / "staged"
+            current.mkdir()
+            staged.mkdir()
+            source_commit = "a" * 40
+            (current / "channel.json").write_text(
+                json.dumps({"schema": 3, "source_commit": source_commit}), encoding="utf-8"
+            )
+            (staged / "channel.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 4,
+                        "source_commit": source_commit,
+                        "control_commit": "c" * 40,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(release_channel.subprocess, "run") as run:
+                self.assertTrue(
+                    release_channel.staged_source_descends_from_current(current, staged)
+                )
+
+            run.assert_not_called()
+
+    def test_same_source_uses_control_commit_ancestry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current"
+            staged = root / "staged"
+            current.mkdir()
+            staged.mkdir()
+            source_commit = "a" * 40
+            current_control = "b" * 40
+            staged_control = "c" * 40
+            for directory, control_commit in (
+                (current, current_control),
+                (staged, staged_control),
+            ):
+                (directory / "channel.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": 4,
+                            "source_commit": source_commit,
+                            "control_commit": control_commit,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            result = subprocess.CompletedProcess(["git"], 0)
+            with patch.object(release_channel.subprocess, "run", return_value=result) as run:
+                self.assertTrue(
+                    release_channel.staged_source_descends_from_current(current, staged)
+                )
+
+            run.assert_called_once_with(
+                ["git", "merge-base", "--is-ancestor", current_control, staged_control],
+                capture_output=True,
+                text=True,
+            )
+
+    def test_identical_source_and_control_cannot_replace_different_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current"
+            staged = root / "staged"
+            current.mkdir()
+            staged.mkdir()
+            channel = {
+                "schema": 4,
+                "source_commit": "a" * 40,
+                "control_commit": "b" * 40,
+            }
+            for directory in (current, staged):
+                (directory / "channel.json").write_text(
+                    json.dumps(channel), encoding="utf-8"
+                )
+
+            with patch.object(release_channel.subprocess, "run") as run:
+                self.assertFalse(
+                    release_channel.staged_source_descends_from_current(current, staged)
+                )
+
+            run.assert_not_called()
+
+    def test_source_advance_cannot_hide_a_control_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current"
+            staged = root / "staged"
+            current.mkdir()
+            staged.mkdir()
+            current_source = "a" * 40
+            staged_source = "b" * 40
+            current_control = "d" * 40
+            staged_control = "c" * 40
+            for directory, source_commit, control_commit in (
+                (current, current_source, current_control),
+                (staged, staged_source, staged_control),
+            ):
+                (directory / "channel.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": 4,
+                            "source_commit": source_commit,
+                            "control_commit": control_commit,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            results = [
+                subprocess.CompletedProcess(["git"], 0),
+                subprocess.CompletedProcess(["git"], 1),
+            ]
+            with patch.object(release_channel.subprocess, "run", side_effect=results) as run:
+                self.assertFalse(
+                    release_channel.staged_source_descends_from_current(current, staged)
+                )
+
+            self.assertEqual(
+                [
+                    ["git", "merge-base", "--is-ancestor", current_source, staged_source],
+                    ["git", "merge-base", "--is-ancestor", current_control, staged_control],
+                ],
+                [call.args[0] for call in run.call_args_list],
+            )
+
+    def test_legacy_staged_channel_cannot_replace_schema_four_current(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current"
+            staged = root / "staged"
+            current.mkdir()
+            staged.mkdir()
+            current_source = "a" * 40
+            staged_source = "b" * 40
+            (current / "channel.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 4,
+                        "source_commit": current_source,
+                        "control_commit": "c" * 40,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (staged / "channel.json").write_text(
+                json.dumps({"schema": 3, "source_commit": staged_source}), encoding="utf-8"
+            )
+
+            self.assertFalse(
+                release_channel.staged_source_descends_from_current(current, staged)
             )
 
     def test_absent_snapshot_cannot_let_a_stale_run_replace_current(self) -> None:

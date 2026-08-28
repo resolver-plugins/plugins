@@ -30,6 +30,7 @@ PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
 PROVENANCE_NAME = "bind920-provenance.json"
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SERIES_PLUGIN_VERSION_PATTERN = re.compile(r"(?P<series>[0-9]+\.[0-9]+)_(?P<revision>[1-9][0-9]*)")
 PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
@@ -381,8 +382,11 @@ def stage_channel_repository(
     private_key: Path,
     pkg_command: str,
     target_pkg_metadata: Path,
+    control_commit: str,
 ) -> list[Path]:
     """Create one signed, self-contained current or rollback channel."""
+    if COMMIT_PATTERN.fullmatch(control_commit) is None:
+        raise ValueError("invalid control commit")
     provenance = packages_directory / PROVENANCE_NAME
     if not provenance.is_file():
         raise ValueError("BIND provenance does not exist")
@@ -421,7 +425,8 @@ def stage_channel_repository(
         packages, output, private_key, pkg_command, [provenance, build_metadata]
     )
     channel_manifest = {
-        "schema": 3,
+        "schema": 4,
+        "control_commit": control_commit,
         "series": metadata["series"],
         "package_abi": package_abi,
         "plugin_version": packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"),
@@ -461,13 +466,20 @@ def run_gh(arguments: list[str]) -> None:
                 raise
 
 
-def upload_release_assets(repository: str, tag: str, assets: list[Path]) -> None:
-    """Upload release assets one at a time to avoid partial multi-asset CLI failures."""
-    for asset in assets:
-        run_gh([
-            "release", "upload", tag, str(asset),
-            "--clobber", "--repo", repository,
-        ])
+def download_release_asset(repository: str, tag: str, name: str, directory: Path) -> None:
+    """Download one Release asset, discarding partial bytes before a retry."""
+    downloaded = directory / name
+    for attempt in range(1, GH_ATTEMPTS + 1):
+        try:
+            run_gh([
+                "release", "download", tag, "--repo", repository, "--pattern", name,
+                "--dir", str(directory),
+            ])
+            return
+        except subprocess.CalledProcessError:
+            downloaded.unlink(missing_ok=True)
+            if attempt == GH_ATTEMPTS:
+                raise
 
 
 def upload_release_assets(repository: str, tag: str, assets: list[Path]) -> None:
@@ -664,8 +676,12 @@ def validate_channel_directory(directory: Path) -> None:
         required_channel_fields = base_channel_fields
     elif schema == 2:
         required_channel_fields = base_channel_fields | {"package_creator"}
-    else:
+    elif schema == 3:
         required_channel_fields = base_channel_fields | {"package_creator", "package_abi"}
+    else:
+        required_channel_fields = base_channel_fields | {
+            "control_commit", "package_creator", "package_abi",
+        }
     required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
     expected_bind = {
         field: provenance.get(field)
@@ -684,7 +700,14 @@ def validate_channel_directory(directory: Path) -> None:
         raise ValueError("prior channel audit metadata is inconsistent") from error
     if (
         set(channel) != required_channel_fields
-        or schema not in {1, 2, 3}
+        or schema not in {1, 2, 3, 4}
+        or (
+            schema == 4
+            and (
+                not isinstance(channel.get("control_commit"), str)
+                or COMMIT_PATTERN.fullmatch(channel["control_commit"]) is None
+            )
+        )
         or channel["series"] != metadata["series"]
         or channel["plugin_version"]
         != packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg")
@@ -695,11 +718,11 @@ def validate_channel_directory(directory: Path) -> None:
         or channel["bind"] != expected_bind
         or any(value is None for value in expected_bind.values())
         or (
-            schema in {2, 3}
+            schema in {2, 3, 4}
             and (
                 channel.get("package_creator") != provenance.get("package_creator")
                 or (
-                    schema == 3
+                    schema in {3, 4}
                     and package_abi != channel.get("package_creator", {}).get("abi")
                 )
                 or metadata.get("pkg_creator")
@@ -806,26 +829,10 @@ def snapshot_matches_directory(snapshot: ReleaseSnapshot, directory: Path) -> bo
     return checksums == directory_checksums(directory)
 
 
-def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
-    """Return whether staged source is a strict descendant of current source."""
-    try:
-        current_commit = json.loads(
-            (current / "channel.json").read_text(encoding="utf-8")
-        )["source_commit"]
-        staged_commit = json.loads(
-            (staged / "channel.json").read_text(encoding="utf-8")
-        )["source_commit"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise RuntimeError("cannot compare package channel source history") from error
-    commit_pattern = re.compile(r"[0-9a-f]{40}")
-    if (
-        not isinstance(current_commit, str)
-        or not isinstance(staged_commit, str)
-        or commit_pattern.fullmatch(current_commit) is None
-        or commit_pattern.fullmatch(staged_commit) is None
-        or current_commit == staged_commit
-    ):
-        return False
+def commit_is_ancestor_or_equal(current_commit: str, staged_commit: str) -> bool:
+    """Return whether one validated commit is equal to or precedes another."""
+    if current_commit == staged_commit:
+        return True
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", current_commit, staged_commit],
         capture_output=True,
@@ -836,6 +843,46 @@ def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
             result.stderr.strip() or "cannot compare package channel source history"
         )
     return result.returncode == 0
+
+
+def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
+    """Return whether staged source and control lineages are non-decreasing."""
+    try:
+        current_channel = json.loads(
+            (current / "channel.json").read_text(encoding="utf-8")
+        )
+        staged_channel = json.loads(
+            (staged / "channel.json").read_text(encoding="utf-8")
+        )
+        current_commit = current_channel["source_commit"]
+        staged_commit = staged_channel["source_commit"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise RuntimeError("cannot compare package channel source history") from error
+    if (
+        not isinstance(current_commit, str)
+        or not isinstance(staged_commit, str)
+        or COMMIT_PATTERN.fullmatch(current_commit) is None
+        or COMMIT_PATTERN.fullmatch(staged_commit) is None
+    ):
+        return False
+    if staged_channel.get("schema") != 4:
+        return False
+    staged_control = staged_channel.get("control_commit")
+    if not isinstance(staged_control, str) or COMMIT_PATTERN.fullmatch(staged_control) is None:
+        return False
+    if not commit_is_ancestor_or_equal(current_commit, staged_commit):
+        return False
+    if current_channel.get("schema") in {1, 2, 3}:
+        return True
+    current_control = current_channel.get("control_commit")
+    if (
+        current_channel.get("schema") != 4
+        or not isinstance(current_control, str)
+        or COMMIT_PATTERN.fullmatch(current_control) is None
+        or not commit_is_ancestor_or_equal(current_control, staged_control)
+    ):
+        return False
+    return current_commit != staged_commit or current_control != staged_control
 
 
 def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapshot:
@@ -862,10 +909,7 @@ def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapsh
     checksums = {}
     for asset in assets:
         name = asset["name"]
-        run_gh([
-            "release", "download", tag, "--repo", repository, "--pattern", name,
-            "--dir", str(directory),
-        ])
+        download_release_asset(repository, tag, name, directory)
         downloaded = directory / name
         if not downloaded.is_file():
             raise RuntimeError(f"cannot preserve GitHub Release asset {tag}/{name}")
@@ -1252,6 +1296,7 @@ def main() -> None:
     stage_channel.add_argument("--private-key", type=Path, required=True)
     stage_channel.add_argument("--pkg-command", default="pkg")
     stage_channel.add_argument("--target-pkg-metadata", type=Path, required=True)
+    stage_channel.add_argument("--control-commit", required=True)
     reuse_snapshot = commands.add_parser("reuse-snapshot")
     reuse_snapshot.add_argument("--repository", required=True)
     reuse_snapshot.add_argument("--series", required=True)
@@ -1343,6 +1388,7 @@ def main() -> None:
             arguments.private_key,
             arguments.pkg_command,
             arguments.target_pkg_metadata,
+            arguments.control_commit,
         ):
             print(asset)
     elif arguments.command == "reuse-snapshot":

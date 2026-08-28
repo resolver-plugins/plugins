@@ -435,7 +435,7 @@ jobs:
             printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
             output="artifacts/${{ needs.select.outputs.series }}"
             mkdir -p "$output/repository"
-            python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json
+            python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json --control-commit '${{ needs.profile.outputs.control_commit }}'
             cp -R "$output/repository/current" "$output/repository/snapshot"
             openssl pkey -in "$key" -pubout -out "$output/resolver-plugins.pub"
             cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub" || {

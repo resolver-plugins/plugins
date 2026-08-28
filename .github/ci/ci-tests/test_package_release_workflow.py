@@ -140,6 +140,7 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     assert 'repository/current' in signer
     assert 'repository/snapshot' in signer
     assert signer.count('stage-channel') == 1
+    assert "--control-commit '${{ needs.profile.outputs.control_commit }}'" in signer
     assert 'cp -R "$output/repository/current" "$output/repository/snapshot"' in signer
     assert 'cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub"' in signer
     assert 'trusted-upstream.json' in signer

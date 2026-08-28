@@ -307,9 +307,12 @@ plugin version, release-source commit, and the committed public key, then uses
 those exact bytes for both staged paths. An existing current channel must also
 be byte-identical; different bytes fail before any channel is changed,
 preventing an older retry from moving current backward.
-When the target snapshot is absent and current differs, the staged release
-source must be a strict descendant of current's recorded source commit. This
-allows a new promotion while rejecting stale runs even after snapshot pruning.
+When the target snapshot is absent and current differs, the staged source and
+control commits must each be equal to or descend from current, and at least one
+lineage must advance. The one-time migration from a legacy channel without a
+control commit to schema 4 permits an equal source commit. This allows
+BIND-only and source promotions while rejecting stale runs even after snapshot
+pruning.
 
 After promotion, a fresh FreeBSD VM configures the pinned OPNsense repository,
 installs its matching core package, and runs `scripts/install-os-bind-rp.sh`
