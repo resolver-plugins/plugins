@@ -1,0 +1,177 @@
+name: Propose bind920 candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      ports_ref:
+        description: FreeBSD Ports ref to inspect
+        required: false
+        default: main
+        type: string
+      changelog_text:
+        description: Optional maintainer-supplied BIND changelog or security notes
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.13'
+      - name: Run candidate helper tests
+        run: |
+          python -m py_compile .github/ci/*.py
+          python .github/ci/ci-tests/test_bind920_candidate.py
+          python .github/ci/ci-tests/test_bind920_reuse.py
+          python .github/ci/ci-tests/test_release_channel_provenance.py
+      - name: Fetch FreeBSD Ports candidate
+        id: ports
+        shell: bash
+        env:
+          PORTS_REF: ${{ inputs.ports_ref }}
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/freebsd/freebsd-ports.git "$RUNNER_TEMP/freebsd-ports"
+          git -C "$RUNNER_TEMP/freebsd-ports" fetch --no-tags origin "$PORTS_REF"
+          candidate_commit=$(git -C "$RUNNER_TEMP/freebsd-ports" rev-parse FETCH_HEAD)
+          git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout init --cone
+          git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout set dns/bind920
+          git -C "$RUNNER_TEMP/freebsd-ports" checkout "$candidate_commit"
+          current_commit=$(python3 .github/ci/bind920_profile.py .resolver-plugins/bind920.json ports_commit)
+          git -C "$RUNNER_TEMP/freebsd-ports" show "$current_commit:dns/bind920/Makefile" > "$RUNNER_TEMP/current.Makefile"
+          git -C "$RUNNER_TEMP/freebsd-ports" diff --no-ext-diff "$current_commit" "$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.diff"
+          git -C "$RUNNER_TEMP/freebsd-ports" log --format='%h %s' "$current_commit..$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.log"
+          {
+            printf 'candidate_commit=%s\n' "$candidate_commit"
+            printf 'current_commit=%s\n' "$current_commit"
+            printf 'ports_dir=%s\n' "$RUNNER_TEMP/freebsd-ports"
+            printf 'ports_diff=%s\n' "$RUNNER_TEMP/ports.diff"
+            printf 'ports_log=%s\n' "$RUNNER_TEMP/ports.log"
+            printf 'current_makefile=%s\n' "$RUNNER_TEMP/current.Makefile"
+          } >> "$GITHUB_OUTPUT"
+      - name: Evaluate candidate
+        id: candidate
+        shell: bash
+        env:
+          PORTS_REPOSITORY: https://github.com/freebsd/freebsd-ports.git
+          CANDIDATE_COMMIT: ${{ steps.ports.outputs.candidate_commit }}
+          PORTS_DIR: ${{ steps.ports.outputs.ports_dir }}
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          import pathlib
+          import sys
+
+          sys.path.insert(0, ".github/ci")
+          from bind920_candidate import candidate_from_files, candidate_is_newer, load_current_profile
+
+          output_path = pathlib.Path(sys.argv[1])
+          ports_dir = pathlib.Path(__import__("os").environ["PORTS_DIR"])
+          current = load_current_profile(pathlib.Path(".resolver-plugins/bind920.json"))
+          candidate = candidate_from_files(
+              __import__("os").environ["PORTS_REPOSITORY"],
+              __import__("os").environ["CANDIDATE_COMMIT"],
+              ports_dir / "dns/bind920/Makefile",
+              ports_dir / "dns/bind920/distinfo",
+              __import__("os").environ["CANDIDATE_COMMIT"],
+          )
+          newer = candidate_is_newer(current, candidate)
+          with output_path.open("a", encoding="utf-8") as output:
+              old_package_version = current.distversion
+              if current.portrevision:
+                  old_package_version = f"{current.distversion}_{current.portrevision}"
+              package_version = candidate.distversion
+              if candidate.portrevision:
+                  package_version = f"{candidate.distversion}_{candidate.portrevision}"
+              print(f"newer={'true' if newer else 'false'}", file=output)
+              print(f"old_version={old_package_version}", file=output)
+              print(f"new_version={package_version}", file=output)
+              print(f"candidate_distversion={candidate.distversion}", file=output)
+              print(f"portrevision={candidate.portrevision}", file=output)
+              print(f"package_version={package_version}", file=output)
+          PY
+      - name: Stop when no newer candidate exists
+        if: steps.candidate.outputs.newer != 'true'
+        run: echo "No newer BIND 9.20 candidate found."
+      - name: Update profile and create assessment
+        if: steps.candidate.outputs.newer == 'true'
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.ports.outputs.candidate_commit }}
+          CHANGELOG_TEXT: ${{ inputs.changelog_text }}
+          PORTS_DIR: ${{ steps.ports.outputs.ports_dir }}
+          PORTS_DIFF: ${{ steps.ports.outputs.ports_diff }}
+          PORTS_LOG: ${{ steps.ports.outputs.ports_log }}
+          CURRENT_MAKEFILE: ${{ steps.ports.outputs.current_makefile }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$CHANGELOG_TEXT" > "$RUNNER_TEMP/maintainer-notes.txt"
+          {
+            printf 'FreeBSD Ports dns/bind920 commits:\n'
+            cat "$PORTS_LOG"
+            printf '\nMaintainer-supplied notes:\n'
+            cat "$RUNNER_TEMP/maintainer-notes.txt"
+          } > "$RUNNER_TEMP/changelog.txt"
+          python3 .github/ci/bind920_candidate.py update-profile \
+            --current .resolver-plugins/bind920.json \
+            --ports-repository https://github.com/freebsd/freebsd-ports.git \
+            --ports-commit "$CANDIDATE_COMMIT" \
+            --makefile "$PORTS_DIR/dns/bind920/Makefile" \
+            --distinfo "$PORTS_DIR/dns/bind920/distinfo" \
+            --output .resolver-plugins/bind920.json
+          python3 .github/ci/bind920_candidate.py assess \
+            --old-version '${{ steps.candidate.outputs.old_version }}' \
+            --new-version '${{ steps.candidate.outputs.new_version }}' \
+            --changelog "$RUNNER_TEMP/changelog.txt" \
+            --ports-diff "$PORTS_DIFF" \
+            --old-makefile "$CURRENT_MAKEFILE" \
+            --new-makefile "$PORTS_DIR/dns/bind920/Makefile" \
+            --output "$RUNNER_TEMP/assessment.md"
+          {
+            cat "$RUNNER_TEMP/assessment.md"
+            printf '\n### Candidate Inputs\n\n'
+            printf -- '- FreeBSD Ports commit: `%s`\n' "$CANDIDATE_COMMIT"
+            printf -- '- Previous FreeBSD Ports commit: `%s`\n' '${{ steps.ports.outputs.current_commit }}'
+            printf -- '- New BIND version: `%s`\n' '${{ steps.candidate.outputs.package_version }}'
+            printf -- '- Publication: not performed by this workflow\n'
+          } > "$RUNNER_TEMP/pr-body.md"
+      - name: Open or update candidate PR
+        if: steps.candidate.outputs.newer == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.candidate.outputs.package_version }}"
+          distversion="${{ steps.candidate.outputs.candidate_distversion }}"
+          revision='${{ steps.candidate.outputs.portrevision }}'
+          branch="sync/bind920/$distversion-$revision"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout -B "$branch"
+          git add .resolver-plugins/bind920.json
+          if git diff --cached --quiet; then
+            echo "Candidate profile is unchanged."
+            exit 0
+          fi
+          git commit -m "ci(bind): update bind920 to ${version}"
+          git push --force-with-lease origin "$branch"
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[0].number // empty')
+          title="ci(bind): update bind920 to ${version}"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+          fi

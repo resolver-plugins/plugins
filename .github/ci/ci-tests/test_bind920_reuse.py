@@ -52,10 +52,8 @@ PACKAGE_CREATOR = {
 
 
 class Bind920ReuseTest(unittest.TestCase):
-    def test_package_version_uses_any_positive_portrevision(self) -> None:
+    def test_package_version_uses_positive_portrevision_suffix(self) -> None:
         self.assertEqual("9.20.26_2", bind920_profile.package_version(PROFILE))
-        with self.assertRaisesRegex(ValueError, "portrevision"):
-            bind920_profile.validate_profile(dict(PROFILE, portrevision=0))
 
     def test_fingerprint_rejects_different_compatibility_inputs(self) -> None:
         """Changing any compatibility input must prevent package reuse."""
@@ -82,6 +80,44 @@ class Bind920ReuseTest(unittest.TestCase):
             bind920_profile.build_provenance(
                 PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, invalid
             )
+
+    def test_profile_accepts_fresh_ports_version_without_portrevision(self) -> None:
+        """A new upstream BIND release commonly starts at PORTREVISION zero."""
+        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
+        self.assertEqual(0, bind920_profile.validate_profile(profile)["portrevision"])
+
+    def test_profile_rejects_negative_portrevision(self) -> None:
+        """Package identities must not be generated from impossible revisions."""
+        profile = dict(PROFILE, portrevision=-1)
+        with self.assertRaisesRegex(ValueError, "portrevision"):
+            bind920_profile.validate_profile(profile)
+
+    def test_package_version_omits_zero_portrevision(self) -> None:
+        """Fresh Ports releases must use normal pkg versions without a _0 suffix."""
+        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
+        self.assertEqual("9.20.27", bind920_profile.package_version(profile))
+
+    def test_provenance_accepts_zero_portrevision_package_names(self) -> None:
+        """Reusable provenance must match the package names a fresh Ports release emits."""
+        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
+        packages = {
+            "bind-tools": {
+                "name": "bind-tools",
+                "version": "9.20.27",
+                "origin": "dns/bind-tools",
+                "filename": "bind-tools-9.20.27.pkg",
+            },
+            "bind920": {
+                "name": "bind920",
+                "version": "9.20.27",
+                "origin": "dns/bind920",
+                "filename": "bind920-9.20.27.pkg",
+            },
+        }
+        provenance = bind920_profile.build_provenance(
+            profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, packages
+        )
+        self.assertEqual("bind920-9.20.27.pkg", provenance["packages"]["bind920"]["filename"])
 
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
         """The shell build wrapper must be able to write reusable provenance."""

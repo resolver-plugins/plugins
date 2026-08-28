@@ -7,6 +7,7 @@ on:
       - '.github/ci/**'
       - '.resolver-plugins/target-pkg.json'
       - '.github/workflows/bind-tests.yml'
+      - '.resolver-plugins/bind920.json'
   workflow_call:
     inputs:
       pull_request_base:
@@ -20,7 +21,68 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      bind_source: ${{ steps.paths.outputs.bind_source }}
+      ci_helpers: ${{ steps.paths.outputs.ci_helpers }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.pull_request_sha || github.sha }}
+          persist-credentials: false
+      - id: paths
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ inputs.pull_request_sha || github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_call ]; then
+            printf 'bind_source=true\nci_helpers=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bind_source=false
+          ci_helpers=false
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
+          while IFS= read -r path; do
+            case "$path" in
+              dns/bind/*|.github/ci/*|.github/workflows/bind-tests.yml)
+                bind_source=true
+                ci_helpers=true
+                ;;
+              .resolver-plugins/bind920.json)
+                ci_helpers=true
+                ;;
+            esac
+          done < "$RUNNER_TEMP/changed-paths"
+          printf 'bind_source=%s\nci_helpers=%s\n' "$bind_source" "$ci_helpers" >> "$GITHUB_OUTPUT"
+
+  ci-helpers:
+    needs: changes
+    if: needs.changes.outputs.ci_helpers == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.pull_request_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.13'
+      - name: Run stdlib CI helper tests
+        run: |
+          python -m py_compile .github/ci/*.py
+          python .github/ci/bind920_profile.py .resolver-plugins/bind920.json package_version
+          python .github/ci/ci-tests/test_bind920_candidate.py
+          python .github/ci/ci-tests/test_bind920_reuse.py
+          python .github/ci/ci-tests/test_release_channel_provenance.py
+
   discover:
+    needs: changes
+    if: needs.changes.outputs.bind_source == 'true'
     runs-on: ubuntu-24.04
     outputs:
       series: ${{ steps.releases.outputs.series }}
@@ -54,8 +116,8 @@ jobs:
           PY
 
   test:
-    needs: discover
-    if: needs.discover.outputs.series != '[]'
+    needs: [changes, discover]
+    if: needs.changes.outputs.bind_source == 'true' && needs.discover.outputs.series != '[]'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

@@ -21,6 +21,15 @@ Do not substitute a moving branch, a current tools checkout, or an unverified
 core commit for these values. `.github/ci/metadata_profile.py` rejects profiles
 that do not meet the required schema and provenance checks.
 
+The BIND runtime package recipe is pinned separately in
+`.resolver-plugins/bind920.json`. That profile records the FreeBSD Ports
+repository, exact Ports commit, `dns/bind920` `Makefile` and `distinfo`
+SHA-256 values, BIND `DISTVERSION`, and `PORTREVISION`. Resolver Plugins owns
+this pin for `os-bind-rp`; OPNsense's bundled BIND package remains the
+compatibility baseline, but this repository may carry a newer reviewed BIND
+9.20 package when a security fix, critical bugfix, or maintainer-approved
+routine update warrants it.
+
 ## Local build
 
 The GitHub Actions workflow is the canonical build path. It keeps the CI
@@ -48,17 +57,20 @@ git cat-file -e "$source_commit:Mk/devel.mk" 2>/dev/null || rm -f Mk/devel.mk
 ```
 
 The runner checks out the pinned OPNsense core commit and configures its
-package repository and fingerprints. A separate BIND job first checks the
-self-contained `pkg-<series>` channel in `resolver-plugins/repository` for a
-pair whose signed provenance matches `.resolver-plugins/bind920.json`. On a
-cache miss, it builds the exact pinned FreeBSD Ports recipe. The plugin build
-then installs that exact pair before packaging `os-bind-rp`, so the current
-channel and its rollback snapshot contain the BIND packages actually used by
-the build. The pinned recipe builds `bind-tools` followed by `bind920` at
-`9.20.26_2`.
-Documentation is excluded because it is not needed at runtime; this keeps the
-source build from pulling in the large Sphinx documentation toolchain. The
-plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
+package repository and fingerprints. Before compiling, it checks the
+self-contained `pkg-<series>` channel in `resolver-plugins/repository` for
+`bind920-provenance.json`. If the complete BIND profile, series, FreeBSD
+release, architecture, and target package-creator identity match, it downloads
+the two BIND packages through the signed package channel and installs them in
+the build VM. A first build or changed compatibility identity is a normal cache
+miss and uses the exact FreeBSD Ports recipe pinned in
+`.resolver-plugins/bind920.json`, verifies its hashes, and builds `bind-tools`
+followed by `bind920` at the pinned BIND package version. Documentation is
+excluded because it is not needed at runtime; this keeps the source build from
+pulling in the large Sphinx documentation toolchain. The plugin build then
+installs that exact pair before packaging `os-bind-rp`, so the current channel
+and its rollback snapshot contain the BIND packages actually used by the build.
+The plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
 built BIND revision, and the builder verifies the OPNsense version floor.
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
 `make clean` target after materializing a release source, because that target
@@ -137,9 +149,36 @@ the FreeBSD VM's package repository configuration.
 
 The `Test BIND plugin` pull-request workflow discovers every active
 `release/bind-rp/<series>` branch, materializes its `dns/bind/src` tree, and
-runs the canonical `dns/bind/tests` suite from the pull request. Do not add a
-static release matrix: a newly created release branch is included
-automatically.
+runs the canonical `dns/bind/tests` suite from the pull request. It also runs
+the CI helper tests for BIND profile changes, including generated
+`.resolver-plugins/bind920.json` candidate PRs. Do not add a static release
+matrix: a newly created release branch is included automatically.
+
+## BIND candidate updates
+
+The `Propose bind920 candidate` workflow is manual-only. It inspects a
+FreeBSD Ports ref, defaults to `main`, and compares `dns/bind920` with the
+current `.resolver-plugins/bind920.json` pin. If it finds a newer BIND 9.20
+candidate, it updates the pin on a `sync/bind920/<version>-<portrevision>`
+branch and opens or updates a PR against `master`.
+
+The workflow's assessment is deterministic. It classifies a candidate as:
+
+- `security` when maintainer-supplied notes or security text contain CVE,
+  vulnerability, advisory, or related security signals.
+- `risky` when the Ports diff changes dependency or configuration inputs such
+  as `LIB_DEPENDS`, `RUN_DEPENDS`, `USES`, `OPTIONS_DEFAULT`, or
+  `CONFIGURE_ARGS`.
+- `critical-bugfix` when notes mention resolver-impacting issues such as
+  crash, assertion, SERVFAIL, DNSSEC validation, DoT, TLS, cache corruption,
+  or data loss.
+- `routine` when none of those signals are present.
+
+The workflow may receive maintainer-supplied changelog/security notes through
+its `changelog_text` input. It does not fetch ISC or VuXML pages directly,
+because adding non-GitHub egress destinations requires explicit approval under
+the workspace security policy. The generated PR is evidence for review only;
+it does not publish packages.
 
 ## Before approving a build change
 

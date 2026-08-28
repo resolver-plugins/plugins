@@ -20,6 +20,10 @@ For example, OPNsense 26.7 on FreeBSD 15 uses:
 https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/26.7/latest
 ```
 
+Every channel includes `meta.conf`, catalogue data, `resolver-plugins.pub`,
+`bind920-provenance.json`, the pinned `bind-tools`/`bind920` package pair,
+and the current `os-bind-rp-*.pkg`.
+
 `pkg` expands `${ABI}` to select `FreeBSD:14:amd64` for OPNsense 26.1 or
 `FreeBSD:15:amd64` for OPNsense 26.7. The explicit series segment prevents a
 future series sharing the same FreeBSD ABI from being offered to an older
@@ -52,6 +56,14 @@ package version.
 
 All channels include the signed `pkg` catalogue and `resolver-plugins.pub`.
 Clients verify both using that public key.
+
+The BIND packages deliberately retain the normal FreeBSD names and origins
+(`bind920`/`dns/bind920` and `bind-tools`/`dns/bind-tools`), so they replace
+OPNsense's older BIND packages. Resolver Plugins maintains this BIND package
+pin independently when a reviewed security fix, critical bugfix, or
+maintainer-approved routine update is needed. An official package with a higher
+normal `pkg` version still wins package version ordering and can supersede the
+replacement.
 
 ## Host operation
 
@@ -228,6 +240,21 @@ branch after the release-source change has been reviewed and merged. Select
 is rejected. Release branches supply immutable build inputs only and never run
 publication helpers. Runs are serialized per series so two promotions cannot
 replace or restore the same current channel concurrently.
+
+The source repository must define this Actions variable and these Actions
+secrets before production:
+
+The `Propose bind920 candidate` workflow may open PRs that update only the
+pinned BIND profile. Those PRs provide review evidence and CI status; they do
+not alter a stable package channel. Stable channel publication still happens
+only through this release workflow after the relevant source branch has been
+reviewed and selected for production publication.
+
+The `RP_PKG_SIGNING_KEY` GitHub Actions secret contains the base64-encoded
+private key. It is decoded only in the disposable FreeBSD VM, used by `pkg
+repo`, and removed before the VM copyback. The committed public key is
+`docs/package-repository/resolver-plugins.pub`; its SHA-256 fingerprint is
+`bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e`.
 
 The source repository must define this Actions variable and these Actions
 secrets before production:
