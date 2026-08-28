@@ -39,11 +39,12 @@ PACKAGE_CREATOR = {
     "pkg_static_sha256": "b" * 64,
 }
 PROVENANCE = {
-    "schema": 2,
+    "schema": reuse_bind920.bind920_profile.PROVENANCE_SCHEMA,
     "fingerprint": "",
     "series": "26.1",
     "freebsd_release": "14.3",
     "architecture": "x86_64",
+    "build_recipe_sha256": reuse_bind920.bind920_profile.build_recipe_sha256(),
     "package_creator": PACKAGE_CREATOR,
     "packages": {
         "bind-tools": {
@@ -116,6 +117,20 @@ class ReuseBind920Test(unittest.TestCase):
         with self.assertRaises(reuse_bind920.CacheMiss):
             reuse_bind920.select_candidate(
                 changed, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
+            )
+
+    def test_schema_two_provenance_is_a_cache_miss_after_build_recipe_versioning(self) -> None:
+        legacy = dict(
+            PROVENANCE,
+            schema=2,
+            fingerprint=reuse_bind920.bind920_profile.compatibility_fingerprint(
+                PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
+            ),
+        )
+
+        with self.assertRaises(reuse_bind920.CacheMiss):
+            reuse_bind920.select_candidate(
+                legacy, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
             )
 
     def test_invalid_package_identity_is_rejected(self) -> None:

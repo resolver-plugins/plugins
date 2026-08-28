@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "bind920_profile.py"
@@ -67,6 +68,22 @@ class Bind920ReuseTest(unittest.TestCase):
         self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(changed_profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR))
         self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(PROFILE, "26.1", "14.3", "x86_64", dict(PACKAGE_CREATOR, sha256="c" * 64)))
 
+    def test_fingerprint_changes_when_the_bind_build_recipe_changes(self) -> None:
+        """A build-policy change must force fresh BIND package archives."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            recipe = Path(temporary_directory) / "build-bind920.sh"
+            recipe.write_text("pkg install lmdb\n", encoding="utf-8")
+            with patch.object(bind920_profile, "BUILD_RECIPE_PATH", recipe):
+                baseline = bind920_profile.compatibility_fingerprint(
+                    PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
+                )
+                recipe.write_text("pkg install lmdb0\n", encoding="utf-8")
+                corrected = bind920_profile.compatibility_fingerprint(
+                    PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
+                )
+
+        self.assertNotEqual(baseline, corrected)
+
     def test_provenance_requires_exact_bind_package_identities(self) -> None:
         """A cache candidate must identify both BIND package archives exactly."""
         provenance = bind920_profile.build_provenance(
@@ -74,6 +91,8 @@ class Bind920ReuseTest(unittest.TestCase):
         )
         self.assertEqual("dns/bind920", provenance["packages"]["bind920"]["origin"])
         self.assertEqual(PACKAGE_CREATOR, provenance["package_creator"])
+        self.assertEqual(3, provenance["schema"])
+        self.assertRegex(provenance["build_recipe_sha256"], r"^[0-9a-f]{64}$")
         invalid = dict(PACKAGES)
         invalid["bind920"] = dict(PACKAGES["bind920"], origin="dns/bind918")
         with self.assertRaisesRegex(ValueError, "bind920 package"):

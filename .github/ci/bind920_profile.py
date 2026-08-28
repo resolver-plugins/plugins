@@ -24,7 +24,8 @@ DISTVERSION_PATTERN = re.compile(r"9\.20\.[0-9]+")
 SERIES_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
 FREEBSD_RELEASE_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
 ARCHITECTURE_PATTERN = re.compile(r"[a-z0-9_]+")
-PROVENANCE_SCHEMA = 2
+PROVENANCE_SCHEMA = 3
+BUILD_RECIPE_PATH = Path(__file__).with_name("build-bind920.sh")
 PACKAGE_CREATOR_FIELDS = {
     "name",
     "version",
@@ -102,6 +103,14 @@ def validate_package_creator(package_creator: object) -> dict[str, str]:
     return package_creator
 
 
+def build_recipe_sha256() -> str:
+    """Identify the local build policy that produces the reusable BIND pair."""
+    try:
+        return hashlib.sha256(BUILD_RECIPE_PATH.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError(f"cannot read BIND build recipe: {error}") from error
+
+
 def compatibility_fingerprint(
     profile: object,
     series: str,
@@ -124,6 +133,7 @@ def compatibility_fingerprint(
         "freebsd_release": freebsd_release,
         "architecture": architecture,
         "bind_profile": profile,
+        "build_recipe_sha256": build_recipe_sha256(),
         "package_creator": package_creator,
     }
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -167,6 +177,7 @@ def build_provenance(
         "series": series,
         "freebsd_release": freebsd_release,
         "architecture": architecture,
+        "build_recipe_sha256": build_recipe_sha256(),
         "package_creator": package_creator,
         "packages": validated_packages,
     }

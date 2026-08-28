@@ -26,7 +26,7 @@ REPOSITORY_NAME = "resolver-plugins"
 PACKAGE_FIELDS = {"name", "version", "origin", "filename"}
 PROVENANCE_FIELDS = {
     "schema", "fingerprint", "series", "freebsd_release", "architecture",
-    "package_creator", "packages",
+    "build_recipe_sha256", "package_creator", "packages",
 }
 
 
@@ -45,10 +45,9 @@ def select_candidate(
     """Validate and select a compatible BIND package pair from provenance."""
     if not isinstance(provenance, dict):
         raise ValueError("BIND provenance has an invalid schema")
-    if (
-        provenance.get("schema") != bind920_profile.PROVENANCE_SCHEMA
-        or provenance.get("package_creator") != package_creator
-    ):
+    if provenance.get("schema") != bind920_profile.PROVENANCE_SCHEMA:
+        raise CacheMiss("stable BIND provenance schema differs")
+    if provenance.get("package_creator") != package_creator:
         raise CacheMiss("stable BIND package creator differs")
     if not isinstance(provenance, dict) or set(provenance) != PROVENANCE_FIELDS:
         raise ValueError("BIND provenance has an invalid schema")
