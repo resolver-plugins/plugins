@@ -238,7 +238,7 @@ jobs:
               done | awk '$0 != "bind-tools" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
-              pkg install -y $dependencies
+              pkg install -y -r OPNsense $dependencies
             fi
             pkg add "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg
             if [ "$mode" = development ]; then
@@ -307,7 +307,7 @@ jobs:
               done | awk '$0 != "bind-tools" && $0 != "bind920" && $0 != "os-bind-rp" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
-              pkg install -y $dependencies
+              pkg install -y -r OPNsense $dependencies
             fi
             python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             python3 .github/ci/package_checksums.py \
@@ -567,7 +567,7 @@ jobs:
               done | awk '$0 != "bind-tools" && $0 != "bind920" && $0 != "os-bind-rp" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
-              pkg install -y $dependencies
+              pkg install -y -r OPNsense $dependencies
             fi
             python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             python3 .github/ci/package_checksums.py \
@@ -718,7 +718,7 @@ jobs:
             )
             if [ -n "$dependencies" ]; then
               printf '%s\n' "$dependencies" | while IFS= read -r dependency; do
-                pkg install -y "$dependency"
+                pkg install -y -r OPNsense "$dependency"
               done
             fi
             python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
