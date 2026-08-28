@@ -16,8 +16,8 @@
       "origin": "ports-mgmt/pkg",
       "abi": "FreeBSD:15:amd64",
       "filename": "pkg-2.3.1_1.pkg",
-      "sha256": "cac4fba478adbaffdcccb3c3ef80899c85d88ca45b3bf6b47b5b54e064512d94",
-      "pkg_static_sha256": "9636e459feac6e45b83cbe087a8a2e7e5e56235ca5fffa91acf129f4456911ab"
+      "sha256": "11f4eeb2e93b3bf621d5e9a5dbe42d5b748e2462168571a4fa93799d8e18cbb7",
+      "pkg_static_sha256": "406774d610e27f83cbfdb30a6d711e9d4deff25cc0e67c8f08c6294649b91a36"
     }
   }
 }
