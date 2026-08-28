@@ -40,7 +40,6 @@ def installer_environment(
     os_bind_rp_candidate_version: str | None = None,
     confirmation: str | None = None,
     key_sha256: str = PUBLIC_KEY_SHA256,
-    fetch_failure: bool = False,
     archive_checksum: str = "2$" + "a" * 64,
     install_failure: bool = False,
     plugin_install_failure: bool = False,
@@ -53,6 +52,7 @@ def installer_environment(
     dry_run_plan: str = "valid",
     break_dry_run_output: bool = False,
     query_fault: str = "",
+    temporary_directory: Path | str | None = None,
 ) -> tuple[dict[str, str], Path, Path]:
     log = tmp_path / "commands.log"
     tty = tmp_path / "tty"
@@ -67,12 +67,16 @@ def installer_environment(
     if pkg_locked:
         lock_marker.touch()
 
-    environment = os.environ.copy()
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("RP_")}
     environment.update(
         {
             "RP_PKG_REPOSITORY_DIR": str(tmp_path / "repos"),
             "RP_PKG_KEYS_DIR": str(tmp_path / "keys"),
-            "RP_TEMPORARY_DIRECTORY": str(tmp_path / "temporary"),
+            "RP_TEMPORARY_DIRECTORY": str(
+                temporary_directory
+                if temporary_directory is not None
+                else tmp_path / "temporary"
+            ),
             "RP_TTY_PATH": str(tty),
             "RP_TEST_BIND920": bind920,
             "RP_TEST_BIND_TOOLS": bind_tools,
@@ -82,7 +86,6 @@ def installer_environment(
                 os_bind_rp_candidate_version
                 or plugin_candidate_for_opnsense_version(opnsense_version)
             ),
-            "RP_TEST_FETCH_FAILURE": "yes" if fetch_failure else "no",
             "RP_TEST_INSTALL_FAILURE": "yes" if install_failure else "no",
             "RP_TEST_PLUGIN_INSTALL_FAILURE": "yes" if plugin_install_failure else "no",
             "RP_TEST_FETCH_LAYOUT": fetch_layout,
@@ -119,7 +122,7 @@ def write_command_fixtures(directory: Path) -> None:
         directory / "fetch",
         "#!/bin/sh\n"
         "{ printf 'fetch'; for argument in \"$@\"; do printf ' %s' \"$argument\"; done; printf '\\n'; } >> \"$RP_TEST_LOG\"\n"
-        "[ \"${RP_TEST_FETCH_FAILURE:-no}\" = yes ] && exit 1\n"
+        "[ \"${RP_TEMPORARY_DIRECTORY:-}\" = / ] && exit 97\n"
         "[ \"$1\" = -o ] || exit 64\n"
         "printf 'test public key\\n' > \"$2\"\n",
     )
@@ -134,7 +137,6 @@ def write_command_fixtures(directory: Path) -> None:
     write_executable(
         directory / "pkg",
         r'''#!/usr/bin/env python3
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -201,8 +203,6 @@ elif command == "rquery":
         if f"%n = {name}" in expression:
             print(f"{name}|{version}|{origin}")
 elif command == "fetch":
-    if os.environ.get("RP_TEST_FETCH_FAILURE") == "yes":
-        raise SystemExit(1)
     destination = Path(args[args.index("-o") + 1])
     if os.environ.get("RP_TEST_FETCH_LAYOUT", "all") == "all":
         destination /= "All"
@@ -287,8 +287,11 @@ elif command == "create":
             )
 elif command == "install":
     if "-n" in args:
-        plan = os.environ.get("RP_TEST_DRY_RUN_PLAN", "valid")
-        if plan == "all_current":
+        repository = args[args.index("-r") + 1]
+        verified_plan = repository == "resolver-verified"
+        plan = os.environ.get("RP_TEST_DRY_RUN_PLAN", "valid") if verified_plan else "valid"
+        requested = {argument for argument in args if re.search(r"-[0-9]", argument)}
+        if plan in {"all_current", "missing"}:
             print("The most recent versions of packages are already installed")
         elif plan == "repository_warning_noop":
             print(
@@ -298,16 +301,10 @@ elif command == "install":
             print("The most recent versions of packages are already installed")
         elif plan == "outside_identity":
             print(f"notice: requested archive {args[-1]} was not selected")
-            print("The following package(s) will be affected:")
+            print("The most recent versions of packages are already installed")
         else:
             print("The following package(s) will be affected:")
-        if plan == "outside_identity":
-            print("New packages to be INSTALLED:")
-            print("\tbind920-9.20.26_2")
-        elif plan == "missing":
-            print("New packages to be INSTALLED:")
-            print("\tbind920-9.20.26_2")
-        elif plan == "wrong_result_version":
+        if plan == "wrong_result_version":
             print("Installed packages to be UPGRADED:")
             print("\tos-bind-rp: 1.36_9 -> 1.36_100")
         elif plan == "requested_only_on_old_side":
@@ -316,7 +313,12 @@ elif command == "install":
         elif plan == "requested_removal":
             print("Installed packages to be REMOVED:")
             print(f"\tos-bind-rp-{os.environ['RP_TEST_OS_BIND_RP_CANDIDATE_VERSION']}")
-        elif plan not in {"missing", "all_current", "repository_warning_noop"}:
+        elif plan not in {
+            "missing",
+            "all_current",
+            "outside_identity",
+            "repository_warning_noop",
+        }:
             if plan == "unknown_section":
                 print("Packages selected for CHANGE:")
             else:
@@ -324,6 +326,13 @@ elif command == "install":
             for argument in args:
                 if re.search(r"-[0-9]", argument):
                     print(f"\t{argument}")
+        if (
+            verified_plan
+            and any(identity.startswith("os-bind-rp-") for identity in requested)
+            and os.environ.get("RP_TEST_OS_BIND")
+        ):
+            print("Installed packages to be REMOVED:")
+            print("\tos-bind-1.34_3")
         if plan == "pkg_colon":
             print("Installed packages to be UPGRADED:")
             print("\tpkg: 2.3.1_1 -> 2.4.0")
@@ -345,6 +354,35 @@ elif command == "install":
         elif plan == "unrelated_removal":
             print("Installed packages to be REMOVED:")
             print("\tpython311-3.11.13")
+        elif verified_plan and plan == "unrequested_bind_install":
+            print("New packages to be INSTALLED:")
+            print("\tbind920-9.20.26_2")
+        elif verified_plan and plan == "unrequested_bind_upgrade":
+            print("Installed packages to be UPGRADED:")
+            print("\tbind920: 9.20.25 -> 9.20.26_2")
+        elif verified_plan and plan == "unrequested_bind_downgrade":
+            print("Installed packages to be DOWNGRADED:")
+            print("\tbind920: 9.20.27 -> 9.20.26_2")
+        elif verified_plan and plan == "unrequested_bind_reinstall":
+            print("Installed packages to be REINSTALLED:")
+            print("\tbind920-9.20.26_2")
+        elif verified_plan and plan == "unrequested_bind_removal":
+            print("Installed packages to be REMOVED:")
+            print("\tbind920-9.20.26_2")
+        elif verified_plan and plan == "unrequested_os_bind_install":
+            print("New packages to be INSTALLED:")
+            print("\tos-bind-1.34_3")
+        elif verified_plan and plan == "unobserved_os_bind_removal":
+            print("Installed packages to be REMOVED:")
+            print("\tos-bind-1.34_3")
+        elif (
+            verified_plan
+            and plan == "plugin_unrequested_bind_after_fallback"
+            and any(identity.startswith("os-bind-rp-") for identity in requested)
+            and marker("RP_TEST_FALLBACK_MARKER").exists()
+        ):
+            print("Installed packages to be REINSTALLED:")
+            print("\tbind920-9.20.26_2")
         elif plan == "malformed_entry":
             print("\t???")
         elif plan == "blank_continuation":
@@ -399,6 +437,15 @@ else:
         directory / "dry-run-awk",
         "#!/bin/sh\nprintf '%s\\n' 'simulated dry-run parser failure' >&2\nexit 2\n",
     )
+    for command in ("configctl", "service"):
+        write_executable(
+            directory / command,
+            "#!/bin/sh\n"
+            f"printf '{command}' >> \"$RP_TEST_LOG\"\n"
+            "for argument in \"$@\"; do printf ' %s' \"$argument\" >> \"$RP_TEST_LOG\"; done\n"
+            "printf '\\n' >> \"$RP_TEST_LOG\"\n"
+            "exit 97\n",
+        )
 
 
 def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -505,6 +552,44 @@ def test_preserves_a_trusted_key_when_the_replacement_fails_verification(tmp_pat
     assert "pkg install" not in calls
 
 
+def test_stages_the_repository_key_in_a_dedicated_private_child(tmp_path: Path) -> None:
+    result, log, _ = run_installer(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8")
+    assert f"fetch -o {tmp_path}/temporary/key-stage/resolver-plugins.pub " in calls
+
+
+@pytest.mark.parametrize("scratch_kind", ["directory", "symlink"])
+def test_rejects_an_existing_scratch_path_without_changing_its_target(
+    tmp_path: Path, scratch_kind: str
+) -> None:
+    target = tmp_path / "existing-target"
+    target.mkdir(mode=0o755)
+    sentinel = target / "sentinel"
+    sentinel.write_text("preserve me\n", encoding="utf-8")
+    scratch = target
+    if scratch_kind == "symlink":
+        scratch = tmp_path / "temporary-link"
+        scratch.symlink_to(target, target_is_directory=True)
+
+    result, _, _ = run_installer(tmp_path, temporary_directory=scratch)
+
+    assert result.returncode != 0
+    assert "could not exclusively create temporary directory" in result.stderr
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+    assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
+    assert [path.name for path in target.iterdir()] == ["sentinel"]
+
+
+def test_rejects_the_root_directory_as_scratch_before_fetching(tmp_path: Path) -> None:
+    result, log, _ = run_installer(tmp_path, temporary_directory="/")
+
+    assert result.returncode != 0
+    assert "refusing unsafe temporary directory: /" in result.stderr
+    assert not log.exists() or "fetch " not in log.read_text(encoding="utf-8")
+
+
 def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path: Path) -> None:
     result, log, repositories = run_installer(
         tmp_path,
@@ -528,6 +613,63 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
     live_installs = [line for line in calls.splitlines() if " install -y " in line]
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[0]
     assert "os-bind-rp-26.1_1" in live_installs[1]
+
+
+def test_dry_runs_each_fallback_transaction_immediately_before_applying_it(
+    tmp_path: Path,
+) -> None:
+    result, log, _ = run_installer(
+        tmp_path,
+        bind920="bind920|9.20.25|dns/bind920",
+        bind_tools="bind-tools|9.20.25|dns/bind-tools",
+        confirmation="y",
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    verified_dry_runs = [
+        line
+        for line in calls
+        if " install -n " in line and "-r resolver-verified" in line
+    ]
+    recovery_dry_run = next(
+        line
+        for line in calls
+        if " install -n -f " in line and "-r resolver-recovery" in line
+    )
+    live_installs = [line for line in calls if " install -y " in line]
+    assert len(verified_dry_runs) == 2
+    assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in verified_dry_runs[0]
+    assert "os-bind-rp-26.1_1" not in verified_dry_runs[0]
+    assert "os-bind-rp-26.1_1" in verified_dry_runs[1]
+    assert "bind920-9.20.26_2" not in verified_dry_runs[1]
+    assert calls.index(recovery_dry_run) < calls.index(verified_dry_runs[0])
+    assert calls.index(verified_dry_runs[0]) < calls.index(live_installs[0])
+    assert calls.index(live_installs[0]) < calls.index(verified_dry_runs[1])
+    assert calls.index(verified_dry_runs[1]) < calls.index(live_installs[1])
+
+
+def test_revalidates_the_plugin_plan_after_the_approved_bind_transaction(
+    tmp_path: Path,
+) -> None:
+    result, log, _ = run_installer(
+        tmp_path,
+        bind920="bind920|9.20.25|dns/bind920",
+        bind_tools="bind-tools|9.20.25|dns/bind-tools",
+        confirmation="y",
+        dry_run_plan="plugin_unrequested_bind_after_fallback",
+    )
+
+    assert result.returncode != 0
+    assert "unexpected package change: bind920" in result.stderr
+    live_installs = [
+        line
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if " install -y " in line
+    ]
+    assert len(live_installs) == 1
+    assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[0]
+    assert "os-bind-rp-26.1_1" not in live_installs[0]
 
 
 def test_prompts_when_bind_tools_are_missing_or_from_the_wrong_origin(tmp_path: Path) -> None:
@@ -744,6 +886,37 @@ def test_rejects_unrelated_pkg_dry_run_mutations(tmp_path: Path, plan: str) -> N
 
     assert result.returncode != 0
     assert "unexpected package change: python311" in result.stderr
+    assert " install -y " not in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        "unrequested_bind_install",
+        "unrequested_bind_upgrade",
+        "unrequested_bind_downgrade",
+        "unrequested_bind_reinstall",
+        "unrequested_bind_removal",
+    ],
+)
+def test_rejects_unapproved_bind_mutations_when_only_the_plugin_was_requested(
+    tmp_path: Path, plan: str
+) -> None:
+    result, log, _ = run_installer(tmp_path, dry_run_plan=plan)
+
+    assert result.returncode != 0
+    assert "unexpected package change: bind920" in result.stderr
+    assert " install -y " not in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "plan", ["unrequested_os_bind_install", "unobserved_os_bind_removal"]
+)
+def test_rejects_unapproved_official_plugin_mutations(tmp_path: Path, plan: str) -> None:
+    result, log, _ = run_installer(tmp_path, dry_run_plan=plan)
+
+    assert result.returncode != 0
+    assert "unexpected package change: os-bind" in result.stderr
     assert " install -y " not in log.read_text(encoding="utf-8")
 
 

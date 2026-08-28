@@ -73,16 +73,31 @@ Configure the ABI-aware current plugin channel:
 series="$(opnsense-version -a)"
 repo_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
 fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/$series/latest"
-install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
-fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub "$fetch_url/resolver-plugins.pub"
-test "$(sha256 -q /usr/local/etc/pkg/keys/resolver-plugins.pub)" = \
-  bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e || exit 1
+key=/usr/local/etc/pkg/keys/resolver-plugins.pub
+install -d -m 0755 "${key%/*}" /usr/local/etc/pkg/repos
+key_sha256=bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e
+umask 077
+key_stage="$(mktemp "${key%/*}/.resolver-plugins.pub.XXXXXX")" || exit 1
+cleanup_key_stage() {
+  [ -z "${key_stage:-}" ] || rm -f "$key_stage"
+}
+trap cleanup_key_stage EXIT HUP INT TERM
+chmod 0600 "$key_stage" || exit 1
+fetch -o "$key_stage" "$fetch_url/resolver-plugins.pub" || exit 1
+test "$(sha256 -q "$key_stage")" = "$key_sha256" || {
+  echo 'resolver-plugins public-key fingerprint verification failed' >&2
+  exit 1
+}
+chmod 0644 "$key_stage" || exit 1
+mv -f "$key_stage" "$key" || exit 1
+key_stage=
+trap - EXIT HUP INT TERM
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
 resolver-plugins: {
   url: "$repo_url",
   mirror_type: "none",
   signature_type: "pubkey",
-  pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
+  pubkey: "$key",
   enabled: yes
 }
 EOF
@@ -123,9 +138,12 @@ pkg update -f -r resolver-plugins
 Use `scripts/install-os-bind-rp.sh` for the official `os-bind` to
 `os-bind-rp` transition. Before mutation, it fetches exact candidate archives,
 requires non-null per-file checksums, records their SHA-256 values, creates a
-local isolated repository, and dry-runs the frozen transaction. It locks the
-installed `pkg` package for the transaction, attempts to restore its original
-lock state on every exit, and reports failure if restoration does not succeed.
+local isolated repository, and dry-runs each frozen transaction with only its
+approved package transitions. When a BIND update is approved, it dry-runs and
+applies that exact pair first, then obtains a fresh plugin-only dry run. It
+locks the installed `pkg` package for the transaction, attempts to restore its
+original lock state on every exit, and reports failure if restoration does not
+succeed.
 The installer does not upgrade the host package manager.
 It does not enable BIND or change its user configuration. Package-transaction
 zone preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1,
@@ -152,9 +170,12 @@ hashes. It also recreates the currently installed BIND/plugin packages in a
 validated local recovery repository and proves an exact recovery dry run
 before the first live package transaction. Set `RP_STATE_DIRECTORY` to choose
 an explicit new directory or `RP_BACKUP_ROOT` to change only its parent. A
-caller-supplied `RP_TEMPORARY_DIRECTORY` is never deleted. On failure, the script retains and
+caller-supplied `RP_TEMPORARY_DIRECTORY` must name a new path: the installer
+creates it privately and rejects `/`, existing directories, and symlinks. That
+caller-supplied directory is never deleted. On failure, the script retains and
 prints both the durable state directory and temporary verified archives for
-diagnosis; on success, it removes only temporary storage that it created.
+diagnosis; on success, it removes only default temporary storage that it
+created.
 If a live transaction fails, the diagnostic names the recovery repository and
 prints an exact dry-run command; stop BIND and review that dry run before an
 approved recovery, then restore `config.xml.bak`, validate configuration, and

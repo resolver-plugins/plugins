@@ -66,7 +66,7 @@ Or install the signed repository and package end-to-end with the interactive
 installer:
 
 ```sh
-fetch -o - https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
+curl -fsSL https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
 ```
 
 The installer does not enable the BIND plugin or service or change its user

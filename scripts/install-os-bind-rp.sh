@@ -172,7 +172,8 @@ package_dry_run() {
     repository_config=$2
     repository_name=$3
     force=$4
-    shift 4
+    allowed_removals=$5
+    shift 5
     set +e
     if [ "$force" = yes ]
     then
@@ -207,12 +208,18 @@ package_dry_run() {
     # shellcheck disable=SC2016 # The single-quoted text is an awk program.
     unexpected_change=$("$dry_run_awk_command" \
         -v "requested_identities=$requested_identities" \
+        -v "allowed_removals=$allowed_removals" \
         -v "exact_installed_identities=$exact_installed_identities" '
         BEGIN {
             requested_count = split(requested_identities, requested, " ")
             for (item = 1; item <= requested_count; item++) {
                 requested_name[item] = requested[item]
                 sub(/-[0-9].*/, "", requested_name[item])
+                requested_package[requested_name[item]] = 1
+            }
+            removal_count = split(allowed_removals, removal, " ")
+            for (item = 1; item <= removal_count; item++) {
+                if (removal[item] != "") may_remove[removal[item]] = 1
             }
             if (exact_installed_identities != "") {
                 exact_count = split(exact_installed_identities, exact, " ")
@@ -220,10 +227,6 @@ package_dry_run() {
                     may_be_omitted[exact[item]] = 1
                 }
             }
-        }
-        function allowed(name) {
-            return name == "bind-tools" || name == "bind920" || \
-                name == "os-bind" || name == "os-bind-rp"
         }
         function mutation_action(line) {
             if (line == "New packages to be INSTALLED:") return "install"
@@ -293,7 +296,9 @@ package_dry_run() {
                         }
                     }
                 }
-                if (!allowed(name)) {
+                if ((section_action == "remove" && !may_remove[name] && \
+                    !requested_package[name]) || \
+                    (section_action != "remove" && !requested_package[name])) {
                     print name
                     unexpected_package = 1
                     exit
@@ -400,7 +405,6 @@ create_state_directory() {
     cp -p "$config_file" "$state_directory/config.xml.bak"
     "$pkg_command" info -a > "$state_directory/packages.before.txt"
     "$pkg_command" query '%n|%v|%o' | sort > "$state_directory/package-identities.before.txt"
-    cp "$state_directory/package-identities.before.txt" "$state_directory/installed-packages.txt"
     set +e
     "$pkg_command" lock -l > "$state_directory/package-locks.before.txt"
     lock_status=$?
@@ -412,15 +416,25 @@ create_state_directory() {
 }
 
 prepare_temporary_directory() {
+    umask 077
     if [ -n "${RP_TEMPORARY_DIRECTORY:-}" ]
     then
-        temporary_directory=$RP_TEMPORARY_DIRECTORY
-        mkdir -p "$temporary_directory"
+        requested_temporary_directory=$RP_TEMPORARY_DIRECTORY
+        [ "$requested_temporary_directory" != / ] || \
+            fail 'refusing unsafe temporary directory: /'
+        mkdir -m 0700 "$requested_temporary_directory" 2>/dev/null || \
+            fail "could not exclusively create temporary directory: $requested_temporary_directory"
+        temporary_directory=$requested_temporary_directory
     else
-        temporary_directory=$(mktemp -d /tmp/os-bind-rp-install.XXXXXX)
+        temporary_directory=$(mktemp -d /tmp/os-bind-rp-install.XXXXXX) || \
+            fail 'could not create a temporary directory'
         temporary_directory_owned=yes
     fi
-    chmod 0700 "$temporary_directory"
+    if [ ! -d "$temporary_directory" ] || [ -L "$temporary_directory" ] || \
+        [ "$temporary_directory" = / ]
+    then
+        fail "unsafe temporary directory: $temporary_directory"
+    fi
     archive_root="$temporary_directory/verified-repository"
     archive_all="$archive_root/All"
     isolated_repository_directory="$temporary_directory/isolated-repos"
@@ -547,7 +561,7 @@ capture_recovery_packages() {
     write_repository resolver-recovery "file://$recovery_repository" yes \
         "$recovery_repository_directory/resolver-recovery.conf"
     package_dry_run "$state_directory/pkg-recovery.dry-run.txt" \
-        "$recovery_repository_directory" resolver-recovery yes "$@"
+        "$recovery_repository_directory" resolver-recovery yes '' "$@"
 }
 
 installed_record() {
@@ -622,6 +636,7 @@ dry_run_awk_command=${RP_DRY_RUN_AWK_COMMAND:-awk}
 repository_directory=${RP_PKG_REPOSITORY_DIR:-/usr/local/etc/pkg/repos}
 key_directory=${RP_PKG_KEYS_DIR:-/usr/local/etc/pkg/keys}
 mkdir -p "$repository_directory" "$key_directory"
+prepare_temporary_directory
 
 series=$(series_from_opnsense_version)
 repository_abi=$("$pkg_command" config ABI) || fail 'could not determine the pkg ABI'
@@ -631,14 +646,9 @@ esac
 repository_url="$repository_base_url/\${ABI}/$series/latest"
 repository_fetch_url="$repository_base_url/$repository_abi/$series/latest"
 public_key="$key_directory/resolver-plugins.pub"
-if [ -n "${RP_TEMPORARY_DIRECTORY:-}" ]
-then
-    key_stage_directory=$RP_TEMPORARY_DIRECTORY
-else
-    key_stage_directory=$(mktemp -d /tmp/os-bind-rp-key.XXXXXX)
-    key_stage_owned=yes
-fi
-mkdir -p "$key_stage_directory"
+key_stage_directory="$temporary_directory/key-stage"
+mkdir -m 0700 "$key_stage_directory" || fail 'could not create the public-key staging directory'
+key_stage_owned=yes
 public_key_candidate="$key_stage_directory/resolver-plugins.pub"
 
 fetch -o "$public_key_candidate" "$repository_fetch_url/resolver-plugins.pub"
@@ -693,15 +703,16 @@ fi
 
 official_plugin=$(installed_record os-bind)
 installed_plugin=$(installed_record os-bind-rp)
+plugin_allowed_removals=
 if [ -n "$official_plugin" ]
 then
+    plugin_allowed_removals=os-bind
     printf '%s\n' "Replacing official os-bind ($(package_description "$official_plugin")) with os-bind-rp." >&2
 elif [ -n "$installed_plugin" ]
 then
     printf '%s\n' "Upgrading installed os-bind-rp ($(package_description "$installed_plugin"))." >&2
 fi
 
-prepare_temporary_directory
 fetch_and_verify_archive bind920 "$candidate_bind920_version" dns/bind920
 fetch_and_verify_archive bind-tools "$candidate_bind_tools_version" dns/bind-tools
 fetch_and_verify_archive os-bind-rp "$candidate_plugin_version" opnsense/os-bind-rp
@@ -718,7 +729,6 @@ verify_archive_hashes
 create_state_directory
 cp "$temporary_directory/package-file-checksums.txt" "$state_directory/package-file-checksums.txt"
 cp "$temporary_directory/package-archives.txt" "$state_directory/package-archives.txt"
-cp "$temporary_directory/package-archives.txt" "$state_directory/candidate-sha256.txt"
 printf '%s\n' "$candidate_bind920" "$candidate_bind_tools" "$candidate_plugin" \
     > "$state_directory/candidates.txt"
 
@@ -736,24 +746,45 @@ fi
 printf 'pkg_was_locked=%s\npkg_identity=%s\n' "$pkg_was_locked" "$pkg_identity_before" \
     > "$state_directory/transaction.txt"
 
-set -- "os-bind-rp-$candidate_plugin_version"
-if [ "$bind_update_required" = yes ]
-then
-    set -- "bind920-$candidate_bind920_version" "bind-tools-$candidate_bind_tools_version" "$@"
-fi
-package_dry_run "$state_directory/pkg-install.dry-run.txt" \
-    "$isolated_repository_directory" resolver-verified no "$@"
 verify_archive_hashes
 capture_recovery_packages
 [ "$(installed_record pkg)" = "$pkg_identity_before" ] || \
     fail 'pkg identity changed before the verified package transaction'
 
-transaction_started=yes
 if [ "$bind_update_required" = yes ]
 then
+    package_dry_run "$state_directory/pkg-bind-install.dry-run.txt" \
+        "$isolated_repository_directory" resolver-verified no '' \
+        "bind920-$candidate_bind920_version" "bind-tools-$candidate_bind_tools_version"
+else
+    package_dry_run "$state_directory/pkg-plugin-install.dry-run.txt" \
+        "$isolated_repository_directory" resolver-verified no "$plugin_allowed_removals" \
+        "os-bind-rp-$candidate_plugin_version"
+fi
+verify_archive_hashes
+
+if [ "$bind_update_required" = yes ]
+then
+    [ "$(installed_record pkg)" = "$pkg_identity_before" ] || \
+        fail 'pkg identity changed before the verified BIND transaction'
+    transaction_started=yes
     verified_pkg install -y -r resolver-verified \
         "bind920-$candidate_bind920_version" "bind-tools-$candidate_bind_tools_version"
+    verify_installed_record "$candidate_bind920"
+    verify_installed_record "$candidate_bind_tools"
+    [ "$(installed_record os-bind)" = "$official_plugin" ] || \
+        fail 'official os-bind changed during the BIND transaction'
+    [ "$(installed_record os-bind-rp)" = "$installed_plugin" ] || \
+        fail 'os-bind-rp changed during the BIND transaction'
+    package_dry_run "$state_directory/pkg-plugin-install.dry-run.txt" \
+        "$isolated_repository_directory" resolver-verified no "$plugin_allowed_removals" \
+        "os-bind-rp-$candidate_plugin_version"
 fi
+
+verify_archive_hashes
+[ "$(installed_record pkg)" = "$pkg_identity_before" ] || \
+    fail 'pkg identity changed before the verified plugin transaction'
+transaction_started=yes
 verified_pkg install -y -r resolver-verified "os-bind-rp-$candidate_plugin_version"
 
 [ -z "$(installed_record os-bind)" ] || fail 'official os-bind remains installed after replacement'
@@ -762,6 +793,9 @@ if [ "$bind_update_required" = yes ]
 then
     verify_installed_record "$candidate_bind920"
     verify_installed_record "$candidate_bind_tools"
+else
+    verify_installed_record "$bind920"
+    verify_installed_record "$bind_tools"
 fi
 verify_archive_ownership
 for installed_package in bind-tools bind920 os-bind-rp
