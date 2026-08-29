@@ -6,12 +6,15 @@ It currently maintains `os-bind-rp`, a community-maintained BIND plugin based
 on the upstream `os-bind` plugin with a small set of additional features.
 
 `os-bind-rp` is intentionally separate from OPNsense's official `os-bind`
-package. They conflict and must not be installed together. The current package
-build requires OPNsense `26.1.11_10` or newer, which includes the BIND fix
-needed for DNS-over-TLS operation.
+package. They conflict and must not be installed together. The installer will
+prompt for its removal if present. However, configuration should be similar
+and carry over.
 
-Packages are published through a signed, ABI-aware package channel. Maintainers
-should start with the [maintainer documentation](docs/README.md).
+The current package build requires OPNsense `26.1.11_10` or newer.
+
+This plugin bundles BIND internally. This happened because the version bundled
+in Opnsense at the time had DoT related bugs. I decided to just have this plugin
+manage BIND itself, rather than depend on Opnsense releases to get BIND updates.
 
 Custom BIND functionality
 ==========================
@@ -30,13 +33,6 @@ management features:
 
 Installing os-bind-rp
 =====================
-
-`os-bind-rp` supports OPNsense 26.1 and 26.7. Do not install it alongside the
-official `os-bind` plugin: the two packages conflict by design. The normal
-channel is self-contained and includes the `bind920`/`bind-tools` pair used to
-build the current plugin. `pkg` expands `${ABI}` and the URL also includes the
-OPNsense series, so a newer series sharing the same FreeBSD ABI is not offered
-to an older system.
 
 From an OPNsense root shell, configure the ABI-plus-series current channel:
 
@@ -66,29 +62,9 @@ installer:
 fetch -o - https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
 ```
 
-The installer does not enable the BIND plugin or service or change its user
-configuration. It checks the installed OPNsense BIND packages first. If they
-are incompatible, it explains the DNS-over-TLS issue, shows the installed and
-channel versions, and asks before installing the channel's BIND packages.
-Declining the prompt leaves `os-bind-rp` uninstalled. Package-transaction zone
-preservation begins with `os-bind-rp` 1.36_11 on OPNsense 26.1 and 1.36_4 on
-OPNsense 26.7. Those versions briefly stop an already-running BIND service,
-preserve effective dynamic zone masters while the package framework
-regenerates managed files, and restart it afterward. A service that was
-stopped remains stopped. Separately, an ordinary plugin configure or restart
-does not regenerate zone files unless its managed stop confirms that BIND is
-stopped.
+----
 
-The package migrates only the exact legacy Resolver Plugins repository shape.
-It does not rewrite a custom URL, key, mirror mode, enabled state, symlink, or
-non-regular file; follow its `manual migration` warning to review and set the
-ABI-aware URL yourself. A system already upgraded from 26.1 to 26.7 before the
-migration package was installed also needs this one-time manual correction.
-
-The repository catalogue and package are signed by the public key above.
-Signed GitHub Release URLs remain available only for transition and retained
-rollback snapshots. See the [package repository guide](docs/package-repository.md)
-before changing a repository URL or signing key.
+# Original Readme Follows:
 
 About the OPNsense plugins
 ==========================
