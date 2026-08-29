@@ -28,9 +28,6 @@ management features:
   `named.conf.d` includes, and forward-zone support.
 * HTTPS, SVCB, and NAPTR record support in the BIND record editor.
 
-These additions are implemented for both supported OPNsense release series:
-26.1 and 26.7.
-
 Installing os-bind-rp
 =====================
 
