@@ -17,11 +17,11 @@ is a reviewed build source for one OPNsense series. The release branch records
 immutable plugin, tools, FreeBSD, core archive, and checksum provenance in
 `.resolver-plugins/upstream.json`.
 
-Automation is deliberately conservative. An upstream BIND change becomes a
-review PR; it does not silently advance a release branch. An unchanged BIND
-tree for a new series can receive a temporary build artifact. No package
-repository, GitHub Release, Pages site, signing, or end-user installation
-mechanism exists yet.
+Automation is deliberately conservative. Any newly discovered OPNsense series
+becomes a review PR; it does not silently advance a release branch or receive
+a package artifact before review. An upstream BIND change also becomes a
+review PR. No package repository, GitHub Release, Pages site, signing, or
+end-user installation mechanism exists yet.
 
 ## Repository map
 
