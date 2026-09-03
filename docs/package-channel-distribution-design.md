@@ -1,0 +1,232 @@
+# Package-channel distribution design
+
+## Goal
+
+Separate human-facing `os-bind-rp` releases from operational `pkg`
+repositories while keeping every supported OPNsense series easy to install
+and able to roll back five plugin versions.
+
+This is the approved target design. It supersedes the current convention of
+using source-repository GitHub Releases as the per-series package channels.
+
+## Decisions
+
+- `resolver-plugins/plugins` remains the source and control-plane repository.
+  It owns source, release-source branches, CI, documentation, and public
+  signing-key material.
+- `https://github.com/resolver-plugins/repository` is the dedicated
+  distribution repository. It contains generated signed package-channel
+  assets only; it is not a source or development repository.
+- Each OPNsense series has one self-contained, rolling current channel under
+  `pkg/<FreeBSD ABI>/<series>/latest`, for example
+  `pkg/FreeBSD:15:amd64/26.7/latest`. It also has up to five immutable,
+  self-contained rollback snapshots named
+  `pkg-<series>-os-bind-rp-<version>`.
+- Source-repository GitHub Releases are ordinary, immutable, human-facing
+  `os-bind-rp` version releases. Their assets are limited to the plugin
+  package and small release metadata; they never contain a `pkg` catalogue,
+  BIND package pair, signing material, or repository bootstrap files.
+- The distribution repository retains the five newest rollback snapshots for
+  each series. The current channel carries the newest plugin; each snapshot
+  carries its own plugin and BIND baseline.
+
+## Repository boundaries
+
+### Source repository: `resolver-plugins/plugins`
+
+`master` remains the CI and documentation control plane. Each
+`release/bind-rp/<series>` branch remains a reviewed, immutable build source
+with matching `.resolver-plugins/upstream.json` provenance. Neither a
+release-source branch nor `master` contains generated package catalogues or
+package-repository release assets.
+
+The source repository owns the trusted publication workflow. Its build job
+selects a release source but cannot read the signing key. A separate trusted
+signing job receives only built artifacts, generates the signed repository,
+and publishes it to the distribution repository. The source repository also
+creates an immutable human-facing release record for the newly published
+`os-bind-rp` version.
+
+### Distribution repository: `resolver-plugins/repository`
+
+The distribution repository exposes stable GitHub Pages paths used directly
+as OPNsense package base URLs:
+
+```text
+https://resolver-plugins.github.io/repository/pkg/${ABI}/<series>/latest
+```
+
+Legacy transition GitHub Release tags such as `pkg-26.7` remain available for
+older clients until they migrate, but new client configuration does not use
+them. Current paths are operational channels rather than product releases. An
+immutable snapshot URL uses
+`pkg-<series>-os-bind-rp-<version>` in place of `pkg-<series>`. This layout is
+necessary because `pkg` publishes only one selected version of a package name
+in a catalogue. Every current or snapshot channel is fully self-contained.
+
+## Channel contents
+
+For example, the current `pkg-26.7` channel contains:
+
+```text
+os-bind-rp-26.7_1.pkg
+bind920-9.20.26_1.pkg
+bind-tools-9.20.26_1.pkg
+packagesite/meta catalogue files
+resolver-plugins.pub
+channel.json
+```
+
+The exact names of the `packagesite` and `meta` files are produced by `pkg
+repo`; the workflow does not invent them independently.
+
+`channel.json` is a human- and automation-readable audit record. It contains
+the series, plugin version, each package's SHA-256, selected release-source
+commit, BIND compatibility fingerprint, and upstream/tools/FreeBSD/core
+provenance identity. It is supplementary information: the signed `pkg`
+catalogue and package manifests remain the installation authority.
+
+Normal package operations use the current channel. An administrator rolls
+back by temporarily changing the configured URL to a retained immutable
+snapshot in the same distribution repository, then selecting its only plugin
+package.
+
+## BIND baseline policy
+
+The BIND pair is a compatibility payload, not a per-plugin-release product.
+BIND packages keep upstream versions; only `os-bind-rp` uses the OPNsense
+series as its package version, such as `os-bind-rp-26.1_1` and
+`os-bind-rp-26.7_1`.
+The workflow reuses the signed pair already present in the target channel when
+its compatibility fingerprint matches. It builds a new BIND pair only when
+the pinned BIND version/profile, OPNsense series, FreeBSD release,
+architecture, or an explicit security or maintenance decision requires it.
+
+Each current channel and immutable snapshot carries the BIND pair used for its
+own build. A new BIND baseline therefore does not need an inferred package
+dependency closure: pre-existing snapshots retain their old pair, and new
+current/snapshot channels carry the replacement pair. The plugin's package
+formula remains the compatibility floor, not an assertion of an exact BIND
+baseline.
+
+## Publication and retention
+
+1. A reviewed change lands on `release/bind-rp/<series>` or changes a package
+   control input on `master`.
+2. A package-affecting push to `master` automatically starts production for
+   the newest numeric `release/bind-rp/<series>` branch. A maintainer can also
+   dispatch production from `master` for an explicit series. CI validates
+   immutable source provenance and builds an `os-bind-rp` package from that
+   exact release source. It reuses
+   a compatible BIND pair or performs the pinned BIND build only on an expected
+   cache miss.
+3. The build obtains the BIND pair from the current distribution channel when
+   its provenance matches, or builds the pinned pair once on a cache miss. It
+   does so in a clean BIND-materialization environment rather than installing
+   a competing BIND package over the normal plugin build environment.
+4. Builders select and lock the immutable per-series target package manager,
+   record `pkg_creator` and `pkg_creator_sha256` in plugin build metadata and
+   the full `package_creator` record in BIND/channel provenance, and reject any
+   archive whose file checksums are not fully readable by that target. The
+   trusted signing job then stages one complete current channel, writes
+   `channel.json`, runs `pkg repo` with the private key, and copies those exact
+   signed bytes to the immutable snapshot publication path. Immutable package
+   and source release tags contain the full BIND compatibility fingerprint, so
+   a BIND-only or package-creator change receives a new identity even when the
+   plugin package version is unchanged. Schema 4 channels also record the
+   trusted `master` control commit. When the release-source commit is unchanged,
+   promotion requires the staged control commit to descend from the current
+   one; this permits BIND-only updates without allowing stale workflow retries
+   to roll the channel back.
+5. It verifies that the generated catalogue, public key, manifest checksums,
+   and package dependency graph exactly match the intended set.
+6. A final distribution job writes the staged assets to
+   `resolver-plugins/repository` under the ABI-plus-series current path and
+   snapshot tags using a
+   short-lived installation token from an organization-owned GitHub App. The
+   App has only `Contents: write`, has no webhooks, and is installed only on
+   the distribution repository. A subsequent source-release job uses the
+   source repository's automatic token to create the immutable human-facing
+   release.
+7. Fresh FreeBSD verification VMs install official `os-bind`, pin the target
+   package manager, verify every candidate archive with
+   `package_checksums.py`, and exercise the real replacement path. The public
+   gate runs the supported installer, force-refreshes until public
+   `channel.json` and package identities match the staged release, then
+   requires official-package removal, non-null installed checksums, exact
+   identities, file ownership, and `pkg check -s`. The source release waits
+   for this exact installation.
+
+An HA canary adds operational recovery boundaries to those disposable gates:
+capture a configuration backup and target-created rollback packages, prove the
+rollback repository with a dry run, mutate only the passive node, verify direct
+and VIP DNS behavior, reboot that node, and repeat acceptance. Never restore a
+saved package database over the live database, and never allow package or
+configuration changes to propagate to the active peer during the canary.
+
+The publisher fails before changing the distribution repository if the
+existing channel is malformed, package checksums differ unexpectedly, source
+or control provenance is invalid, a dependency is unavailable, or the
+generated catalogue is incomplete.
+
+Production runs share one global lock. Before mutation, the publisher checks
+that the remote assets still match the locally preserved recovery snapshot;
+after upload, it downloads every asset and verifies its checksum.
+
+No rollback snapshot is removed until it falls outside the newest-five set and
+the current/snapshot publication has succeeded.
+An existing immutable snapshot may be reused by a full workflow retry only
+when its complete asset set is byte-identical to the staged snapshot. If the
+current channel exists, it must also be byte-identical; a mismatch is a hard
+failure so an older retry cannot roll current back.
+If the snapshot is absent and current differs, the staged source and control
+commits must each be equal to or descend from the commits recorded by current,
+and at least one lineage must advance. The one-time migration from a legacy
+channel without control lineage to schema 4 permits an equal source commit.
+This preserves BIND-only and source promotions while rejecting stale runs
+after recovery or pruning.
+
+## Migration
+
+Migration is additive and reversible:
+
+1. Establish and verify `resolver-plugins/repository` channels for every
+   supported series.
+2. Validate installation, upgrade, and explicit rollback from a disposable
+   OPNsense/FreeBSD test environment using the new channel URL.
+3. Change installer/bootstrap documentation and generated configuration to
+   use the distribution-repository URL.
+4. Continue serving existing source-repository channels for an explicitly
+   chosen transition window.
+5. Remove old operational channel assets from the source repository only
+   after the new channels are verified and the transition window has elapsed.
+
+The migration does not change the installed package name, the explicit
+`os-bind` conflict, the minimum OPNsense version of `26.1.11_10`, or the
+trusted public-key contract unless a separately reviewed key-rotation change
+is approved.
+
+## Verification requirements
+
+Durable CI regression tests must cover:
+
+- retaining exactly five complete rollback snapshots;
+- safely pruning the sixth-oldest snapshot only after promotion;
+- retaining the prior BIND baseline inside older snapshots during a baseline
+  transition;
+- refusing malformed prior channels, absent provenance, unexpected checksums,
+  invalid dependency edges, and incomplete catalogues before publication;
+- emitting correct `channel.json` content and a matching signed `pkg`
+  catalogue;
+- publishing only the narrow, immutable plugin-plus-metadata assets in the
+  source release; and
+- installing the current package and selecting a retained rollback snapshot
+  from the same distribution repository.
+
+## Non-goals
+
+- Hosting a general package repository service or introducing object storage.
+- Rebuilding BIND for every plugin release.
+- Letting release branches publish or sign packages directly.
+- Altering signing keys, end-user trust configuration, package names, or the
+  official `os-bind` conflict policy.

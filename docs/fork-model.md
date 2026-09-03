@@ -12,6 +12,10 @@ conflict with it. A system must have one or the other installed, never both.
 
 The package build requires OPNsense `26.1.11_10` or newer. That floor includes
 the BIND version carrying the named DoT-related fix relied on by this fork.
+Resolver Plugins owns the `bind920` package pin used by `os-bind-rp` and may
+advance it independently of OPNsense after review. Candidate automation may
+prepare evidence and PRs, but signed package publication remains a separate
+maintainer-controlled boundary.
 
 ## Branch responsibilities
 
@@ -37,10 +41,11 @@ They are generated review inputs, not places for unrelated development.
 
 ## Current distribution boundary
 
-The signed package repository is active and approved. The publication workflow
-signs packages and publishes the approved release through GitHub Release
-publication and the repository, with an established end-user installation
-contract. A release-branch build remains a reviewed build input; it does not
+The signed package repository is active and approved. Generated current and
+rollback channels are published as GitHub Releases in
+`resolver-plugins/repository`; human-facing source releases remain in
+`resolver-plugins/plugins` and contain only the plugin package and build
+metadata. A release-branch build remains a reviewed build input; it does not
 independently authorize publication or a change to the installation contract.
 
 Do not alter signing, GitHub Release publication, package-repository

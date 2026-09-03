@@ -6,12 +6,15 @@ It currently maintains `os-bind-rp`, a community-maintained BIND plugin based
 on the upstream `os-bind` plugin with a small set of additional features.
 
 `os-bind-rp` is intentionally separate from OPNsense's official `os-bind`
-package. They conflict and must not be installed together. The current package
-build requires OPNsense `26.1.11_10` or newer, which includes the BIND fix
-needed for DNS-over-TLS operation.
+package. They conflict and must not be installed together. The installer will
+prompt for its removal if present. However, configuration should be similar
+and carry over.
 
-Packages are published through signed GitHub Release channels. Maintainers
-should start with the [maintainer documentation](docs/README.md).
+The current package build requires OPNsense `26.1.11_10` or newer.
+
+This plugin bundles BIND internally. This happened because the version bundled
+in Opnsense at the time had DoT related bugs. I decided to just have this plugin
+manage BIND itself, rather than depend on Opnsense releases to get BIND updates.
 
 Custom BIND functionality
 ==========================
@@ -28,44 +31,40 @@ management features:
   `named.conf.d` includes, and forward-zone support.
 * HTTPS, SVCB, and NAPTR record support in the BIND record editor.
 
-These additions are implemented for both supported OPNsense release series:
-26.1 and 26.7.
-
 Installing os-bind-rp
 =====================
 
-`os-bind-rp` has package channels for the OPNsense 26.1 and 26.7 release
-series. Select the channel that matches the first two components of the
-installed OPNsense version. Do not install it alongside the official `os-bind`
-plugin: the two packages conflict by design.
-
-For OPNsense 26.1, use `pkg-26.1`; for 26.7, use `pkg-26.7`. Replace
-`channel` below with the selected channel. From an OPNsense root shell:
+From an OPNsense root shell, configure the ABI-plus-series current channel:
 
 ```sh
-channel=pkg-26.1
-install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
-fetch -o /usr/local/etc/pkg/keys/resolver-plugins.pub \
-  "https://github.com/resolver-plugins/plugins/releases/download/$channel/resolver-plugins.pub"
-test "$(sha256 -q /usr/local/etc/pkg/keys/resolver-plugins.pub)" = \
-  bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e || exit 1
+series="$(opnsense-version -a)"
+repo_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
+fetch_url="https://resolver-plugins.github.io/repository/pkg/$(pkg config ABI)/$series/latest"
+key=/usr/local/etc/pkg/keys/resolver-plugins.pub
+install -d -m 0755 "${key%/*}" /usr/local/etc/pkg/repos
+fetch -o "$key" "$fetch_url/resolver-plugins.pub"
 cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
 resolver-plugins: {
-  url: "https://github.com/resolver-plugins/plugins/releases/download/$channel",
+  url: "$repo_url",
+  mirror_type: "none",
   signature_type: "pubkey",
-  pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
+  pubkey: "$key",
   enabled: yes
 }
 EOF
-pkg update -r resolver-plugins
-pkg install os-bind-rp
+pkg update -r resolver-plugins && pkg install os-bind-rp
 ```
 
-The repository catalogue and package are signed by the public key above. A
-future release for the same OPNsense series updates the same `pkg-<series>`
-channel, so normal `pkg upgrade` operations can receive it. Review the
-[package-repository maintainer guide](docs/package-repository.md) before
-changing a release channel or its signing key.
+Or install the signed repository and package end-to-end with the interactive
+installer:
+
+```sh
+fetch -o - https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
+```
+
+----
+
+# Original Readme Follows:
 
 About the OPNsense plugins
 ==========================

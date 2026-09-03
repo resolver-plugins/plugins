@@ -21,6 +21,15 @@ Do not substitute a moving branch, a current tools checkout, or an unverified
 core commit for these values. `.github/ci/metadata_profile.py` rejects profiles
 that do not meet the required schema and provenance checks.
 
+The BIND runtime package recipe is pinned separately in
+`.resolver-plugins/bind920.json`. That profile records the FreeBSD Ports
+repository, exact Ports commit, `dns/bind920` `Makefile` and `distinfo`
+SHA-256 values, BIND `DISTVERSION`, and `PORTREVISION`. Resolver Plugins owns
+this pin for `os-bind-rp`; OPNsense's bundled BIND package remains the
+compatibility baseline, but this repository may carry a newer reviewed BIND
+9.20 package when a security fix, critical bugfix, or maintainer-approved
+routine update warrants it.
+
 ## Local build
 
 The GitHub Actions workflow is the canonical build path. It keeps the CI
@@ -30,6 +39,11 @@ commit, then materializes only that commit's `dns/bind` source and
 legacy release branches, which intentionally do not carry the control-plane
 scripts. In particular, the release `Mk` files prevent a development-branch
 marker from adding an unintended `-devel` package suffix.
+
+Package-affecting pushes to `master` automatically run production for the
+newest numeric `release/bind-rp/<series>` branch. Manual dispatch remains
+available for an explicit series or development build. Release-source branches
+provide immutable inputs and do not execute publication helpers themselves.
 
 Reproduce that split in a disposable worktree when building locally. Start
 from `master`, fetch the selected release branch, and overlay only its release
@@ -45,19 +59,21 @@ git cat-file -e "$source_commit:Mk/devel.mk" 2>/dev/null || rm -f Mk/devel.mk
 ```
 
 The runner checks out the pinned OPNsense core commit and configures its
-package repository and fingerprints. Before compiling, it checks the stable
-`pkg-<series>` Release for `bind920-provenance.json`. If the complete BIND
-profile, series, FreeBSD release, and architecture match, it downloads the
-two BIND packages through the signed package channel and installs them in the
-build VM. A first build or changed compatibility identity is a normal cache
+package repository and fingerprints. Before compiling, it checks the
+self-contained `pkg-<series>` channel in `resolver-plugins/repository` for
+`bind920-provenance.json`. If the complete BIND profile, series, FreeBSD
+release, architecture, and target package-creator identity match, it downloads
+the two BIND packages through the signed package channel and installs them in
+the build VM. A first build or changed compatibility identity is a normal cache
 miss and uses the exact FreeBSD Ports recipe pinned in
-`.resolver-plugins/bind920.json`, verifies its hashes, and builds
-`bind-tools` followed by `bind920` at `9.20.26_1`. Documentation is excluded
-because it is not needed at runtime; this keeps the source build from pulling
-in the large Sphinx documentation toolchain. Those packages are installed in
-the build VM before `os-bind-rp` is packaged, which records the exact BIND
-dependency in the plugin manifest. The plugin builder rejects any BIND version
-below `9.20.26` and verifies the OPNsense version floor.
+`.resolver-plugins/bind920.json`, verifies its hashes, and builds `bind-tools`
+followed by `bind920` at the pinned BIND package version. Documentation is
+excluded because it is not needed at runtime; this keeps the source build from
+pulling in the large Sphinx documentation toolchain. The plugin build then
+installs that exact pair before packaging `os-bind-rp`, so the current channel
+and its rollback snapshot contain the BIND packages actually used by the build.
+The plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
+built BIND revision, and the builder verifies the OPNsense version floor.
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
 `make clean` target after materializing a release source, because that target
 resets `dns/bind/src` to the control-plane checkout.
@@ -80,13 +96,47 @@ The runner installs `python3` first when the clean FreeBSD environment does
 not provide it; Python is required to validate the immutable metadata before
 any OPNsense package repository configuration is used.
 
+### Target package manager and manifest compatibility
+
+`.resolver-plugins/target-pkg.json` pins the exact `pkg` archive and
+`pkg-static` executable hash for each OPNsense series. Build wrappers install
+and lock that target package manager before creating either BIND or plugin
+archives. This forced selection is builder-only; it is not an instruction to
+upgrade an OPNsense host package manager.
+
+BIND provenance records the immutable creator as `package_creator`; plugin
+`build-metadata.txt` records the flat `pkg_creator` and
+`pkg_creator_sha256` fields. Reuse is a cache miss unless those values match
+the selected target exactly.
+
+Before copying an artifact, each wrapper verifies that the target parser can
+read a non-null checksum for every packaged file. The equivalent manual gate
+is:
+
+```sh
+python3 .github/ci/package_checksums.py \
+  --pkg-command /usr/local/sbin/pkg-static path/to/package.pkg
+```
+
+Treat a missing, `(null)`, or malformed file checksum as an incompatible
+artifact even when the archive and repository signatures are valid.
+
 For example, after preparing the selected release source:
 
 ```sh
 RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
 SOURCE_COMMIT="$source_commit" \
-.github/ci/build-bind920.sh "$series" "artifacts/$series"
+.github/ci/build-os-bind-rp.sh "$series" "artifacts/$series"
+```
+
+If that command exits with status `3`, build or reuse the Resolver fallback
+and invoke the plugin wrapper with `RP_BIND920_FALLBACK=yes`:
+
+```sh
 RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
+SOURCE_COMMIT="$source_commit" \
+.github/ci/build-bind920.sh "$series" "artifacts/$series"
+RP_BIND920_FALLBACK=yes RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
 SOURCE_COMMIT="$source_commit" \
 .github/ci/build-os-bind-rp.sh "$series" "artifacts/$series"
 ```
@@ -101,9 +151,36 @@ the FreeBSD VM's package repository configuration.
 
 The `Test BIND plugin` pull-request workflow discovers every active
 `release/bind-rp/<series>` branch, materializes its `dns/bind/src` tree, and
-runs the canonical `dns/bind/tests` suite from the pull request. Do not add a
-static release matrix: a newly created release branch is included
-automatically.
+runs the canonical `dns/bind/tests` suite from the pull request. It also runs
+the CI helper tests for BIND profile changes, including generated
+`.resolver-plugins/bind920.json` candidate PRs. Do not add a static release
+matrix: a newly created release branch is included automatically.
+
+## BIND candidate updates
+
+The `Propose bind920 candidate` workflow is manual-only. It inspects a
+FreeBSD Ports ref, defaults to `main`, and compares `dns/bind920` with the
+current `.resolver-plugins/bind920.json` pin. If it finds a newer BIND 9.20
+candidate, it updates the pin on a `sync/bind920/<version>-<portrevision>`
+branch and opens or updates a PR against `master`.
+
+The workflow's assessment is deterministic. It classifies a candidate as:
+
+- `security` when maintainer-supplied notes or security text contain CVE,
+  vulnerability, advisory, or related security signals.
+- `risky` when the Ports diff changes dependency or configuration inputs such
+  as `LIB_DEPENDS`, `RUN_DEPENDS`, `USES`, `OPTIONS_DEFAULT`, or
+  `CONFIGURE_ARGS`.
+- `critical-bugfix` when notes mention resolver-impacting issues such as
+  crash, assertion, SERVFAIL, DNSSEC validation, DoT, TLS, cache corruption,
+  or data loss.
+- `routine` when none of those signals are present.
+
+The workflow may receive maintainer-supplied changelog/security notes through
+its `changelog_text` input. It does not fetch ISC or VuXML pages directly,
+because adding non-GitHub egress destinations requires explicit approval under
+the workspace security policy. The generated PR is evidence for review only;
+it does not publish packages.
 
 ## Before approving a build change
 

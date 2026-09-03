@@ -17,11 +17,11 @@ is a reviewed build source for one OPNsense series. The release branch records
 immutable plugin, tools, FreeBSD, core archive, and checksum provenance in
 `.resolver-plugins/upstream.json`.
 
-Automation is deliberately conservative. Any newly discovered OPNsense series
-becomes a review PR; it does not silently advance a release branch or receive
-a package artifact before review. An upstream BIND change also becomes a
-review PR. No package repository, GitHub Release, Pages site, signing, or
-end-user installation mechanism exists yet.
+Automation is deliberately conservative. An upstream BIND change becomes a
+review PR; it does not silently advance a release branch. An unchanged BIND
+tree for a new series can receive a temporary build artifact. Signed,
+self-contained current and rollback channels are generated in
+`resolver-plugins/repository`; source releases remain narrow and human-facing.
 
 ## Repository map
 
@@ -62,6 +62,11 @@ end-user installation mechanism exists yet.
   `release/bind-rp/<series>` source. Use the ignored `.github/ci-local/`
   directory only for temporary CI discovery and investigation harnesses;
   never stage or commit anything under it.
+- Keep agent-generated process documents under the ignored
+  `docs/superpowers/` directory local-only. Never force-add or commit designs,
+  specifications, implementation plans, or other process notes from that
+  directory, even when a skill requests committing them; this repository rule
+  takes precedence.
 - The signed package repository is an approved system. Do not alter its
   GitHub Release publication, signing boundary, tokens, secrets, or end-user
   installation contract without explicit maintainer authorization.

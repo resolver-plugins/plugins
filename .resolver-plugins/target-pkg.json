@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "series": {
+    "26.1": {
+      "name": "pkg",
+      "version": "2.3.1_1",
+      "origin": "ports-mgmt/pkg",
+      "abi": "FreeBSD:14:amd64",
+      "filename": "pkg-2.3.1_1.pkg",
+      "sha256": "74dbb941de91fda8b470eeab78926170e35737346fbe55e8a2e4c3968f79e1e3",
+      "pkg_static_sha256": "d21190515479c960d29391bcd38a94e517948cb9aa8c27e5d4fb2e03046dc7b3"
+    },
+    "26.7": {
+      "name": "pkg",
+      "version": "2.3.1_1",
+      "origin": "ports-mgmt/pkg",
+      "abi": "FreeBSD:15:amd64",
+      "filename": "pkg-2.3.1_1.pkg",
+      "sha256": "11f4eeb2e93b3bf621d5e9a5dbe42d5b748e2462168571a4fa93799d8e18cbb7",
+      "pkg_static_sha256": "406774d610e27f83cbfdb30a6d711e9d4deff25cc0e67c8f08c6294649b91a36"
+    }
+  }
+}
