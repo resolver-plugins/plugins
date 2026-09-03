@@ -288,16 +288,19 @@ def test_existing_release_with_bind_change_requires_review(repositories):
     )
 
 
-def test_new_series_with_matching_bind_tree_bootstraps_a_build(repositories):
+def test_new_series_with_matching_bind_tree_requires_bootstrap_review(repositories):
     decision = plan(repositories)
 
-    assert decision['action'] == 'bootstrap-build'
+    assert decision['action'] == 'bootstrap-review'
     assert decision['series'] == '26.7'
     assert decision['source_release'] == 'release/bind-rp/26.1'
     assert decision['target_release'] == 'release/bind-rp/26.7'
     assert decision['tools_tag'] == '26.7.1'
     assert decision['freebsd_release'] == '15.1'
     assert decision['bind_changed'] is False
+    assert decision['sync_branch'] == (
+        f'sync/bootstrap/26.7/{repositories["stable_26_7"][:12]}'
+    )
 
 
 def test_new_series_with_bind_change_requires_bootstrap_review(repositories):
@@ -434,7 +437,7 @@ def test_missing_tools_os_assignment_blocks_planning(repositories):
     assert decision['reason'] == 'missing or invalid tools release profile'
 
 
-def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_metadata(
+def test_apply_bootstrap_review_creates_pristine_release_and_overlay_branch_for_unchanged_bind(
     repositories, tmp_path
 ):
     decision = plan(repositories)
@@ -443,7 +446,13 @@ def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_me
 
     assert result.returncode == 0, result.stderr
     target = decision['target_release']
-    assert git(repositories['repository'], 'show', f'{target}:tools/resolver-overlay.txt') == 'resolver overlay'
+    with pytest.raises(subprocess.CalledProcessError):
+        git(repositories['repository'], 'show', f'{target}:tools/resolver-overlay.txt')
+    assert git(
+        repositories['repository'],
+        'show',
+        f'{decision["sync_branch"]}:tools/resolver-overlay.txt',
+    ) == 'resolver overlay'
     with pytest.raises(subprocess.CalledProcessError):
         git(repositories['repository'], 'show', f'{target}:tools/not-an-overlay.txt')
     target_metadata = json.loads(git(repositories['repository'], 'show', f'{target}:{METADATA_PATH}'))
@@ -459,7 +468,7 @@ def test_apply_bootstrap_build_creates_release_with_only_manifest_overlay_and_me
     }
 
 
-def test_apply_bootstrap_build_accepts_source_metadata_from_divergent_source_stable_branch(
+def test_apply_bootstrap_review_accepts_source_metadata_from_divergent_source_stable_branch(
     repositories, tmp_path
 ):
     repository = repositories['repository']
@@ -499,7 +508,9 @@ def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
     )
     assert first.returncode == 0, first.stderr
     first_commit = git(repositories['repository'], 'rev-parse', decision['target_release'])
+    first_sync_commit = git(repositories['repository'], 'rev-parse', decision['sync_branch'])
     git(repositories['repository'], 'branch', '-D', decision['target_release'])
+    git(repositories['repository'], 'branch', '-D', decision['sync_branch'])
 
     second = apply(
         repositories,
@@ -513,6 +524,7 @@ def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
 
     assert second.returncode == 0, second.stderr
     assert git(repositories['repository'], 'rev-parse', decision['target_release']) == first_commit
+    assert git(repositories['repository'], 'rev-parse', decision['sync_branch']) == first_sync_commit
 
 
 def test_apply_bootstrap_review_creates_pristine_release_and_overlay_sync_branch(
@@ -571,7 +583,7 @@ def test_apply_three_way_merges_same_result_and_retains_target_and_overlay_chang
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert git(repositories['repository'], 'show', f'{decision["target_release"]}:{path}') == (
+    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:{path}') == (
         'header\nshared=new\nline-03\nline-04\nline-05\nline-06\nline-07\n'
         'line-08\nline-09\ncontext=target\nline-11\nline-12\nline-13\nline-14\n'
         'line-15\nline-16\nline-17\nline-18\nline-19\noverlay=new\ntail'

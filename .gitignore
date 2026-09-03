@@ -6,3 +6,4 @@ venv
 /*/*/work
 /.github/ci-local/
 /docs/superpowers/
+/.worktrees/

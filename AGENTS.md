@@ -39,6 +39,7 @@ self-contained current and rollback channels are generated in
 
 ## Non-negotiable rules
 
+- DO NOT open pr's on the official Opnsense Repos
 - `os-bind-rp` is a replacement for official `os-bind`, not a companion
   package. Keep `PLUGIN_NAME=bind-rp` and `PLUGIN_CONFLICTS=bind` intact unless
   the maintainer explicitly changes the package policy.
@@ -72,23 +73,50 @@ self-contained current and rollback channels are generated in
 - Verify CI changes with the focused local checks in
   [docs/building.md](docs/building.md), and run the affected workflow manually
   only when authorized. Report the workflow URL and its actual outcome.
-- A code review agent must be run on pr's when they are "ready", as a final step
-  befor merge. High priority items must be resolved before a pr can be merged.
-  Perform a remeditation and review cycle util the items are resolved and the
-  code-review agent approve the pr as ready, when no high priority items are
-  observed.
-
-- An agent must be used to review generated plans, and high priority items must be
-  resolved before a plan can be approved and implemented.
-- When creating tests, categorize each test according to type relative to purpose.
-  Tests used for discovery and troubleshooting vs tests used for enforcing outcomes
-  and preventing regressions. In other words, tests that should live temporarily
-  vs long term in the repo. Long term tests should be commited to the repo in the
-  appropriate folder. Short term tests should be kept local only, and not commited
-  to the repo. If an issue has been resolved and the problem is unlikely to occur
-  again in the future, it should be categorized as a temporaty test.
-- Code reviews should also include a code-simplication pass as well as a
-  documentation update and accuracy pass.
+- If a written implementation plan is created, have an independent agent
+  review it before implementation. The plan must state the required behavior,
+  the minimal sufficient architecture, and the current requirement served by
+  every proposed abstraction, boundary, configuration option, retry, cache,
+  state store, dependency, and durable test. Remove proposals with no
+  demonstrated current requirement.
+- Treat correctness, security, data-loss, compatibility, provenance, and
+  public-contract findings as blocking regardless of the review tool's
+  severity vocabulary. Resolve blocking findings and repeat review before
+  implementation or merge.
+- Before declaring a PR ready, run an independent code review for changes to
+  executable code, tests, workflows, build or release behavior, provenance,
+  security boundaries, persisted state, or public contracts. Purely editorial
+  documentation changes may skip independent review only when they alter no
+  command, procedure, policy, generated content, link contract, or
+  machine-consumed content. Human PR review does not replace required agent
+  review.
+- Every code review must apply both the `code-simplifier` and
+  `test-suite-simplifier` as read-only passes. Review implementation and
+  architecture for unexplained accretion; review changed tests for distinct
+  regression value, duplication, implementation coupling, inappropriate test
+  level, and exploratory residue. Also perform a documentation-impact and
+  accuracy check; update documentation only when the change affects its
+  contract or accuracy.
+- Discovery and troubleshooting tests may remain temporary while investigating
+  uncertainty. Keep them outside the final diff, using a temporary directory
+  or `.github/ci-local/` for CI investigations. Promote a test into the
+  repository only when it protects a distinct observable behavior, invariant,
+  known regression, security or compatibility risk, integration boundary, or
+  machine-enforced contract.
+- Do not retain a test merely because it was useful during development, raises
+  coverage, or exercises another example of an already-protected equivalence
+  class. Do not add tests that merely mirror ordinary Markdown wording.
+  Preserve uncertain tests until their value can be investigated.
+- Follow the repository's existing language and runtime constraints. Use POSIX
+  `sh` for existing package or service hooks and thin orchestration that must
+  run in the base OPNsense/FreeBSD environment. Prefer Python for non-trivial
+  parsing, branching, state handling, or data transformation when Python is
+  guaranteed or explicitly provisioned. Do not introduce Bash-specific syntax
+  or rewrite working scripts solely because of line count.
+- Prefer small pure functions for transformations and keep state changes,
+  filesystem access, network access, and other side effects explicit at
+  boundaries. Follow existing framework conventions; do not introduce
+  functional abstractions solely for stylistic purity.
 
 ## Documentation updates
 

@@ -251,16 +251,14 @@ def plan(arguments: argparse.Namespace) -> dict:
             'blocked', target_series, upstream_commit, source_release, target_release,
             None, None, False, 'upstream BIND tree is unavailable',
         )
-    if bind_changed:
-        return decision(
-            'bootstrap-review', target_series, upstream_commit, source_release,
-            target_release, tools_tag, freebsd_release, True,
-            'new series has an upstream BIND change',
-        )
+    reason = (
+        'new series has an upstream BIND change'
+        if bind_changed
+        else 'new series has an unchanged BIND tree'
+    )
     return decision(
-        'bootstrap-build', target_series, upstream_commit, source_release,
-        target_release, tools_tag, freebsd_release, False,
-        'new series has an unchanged BIND tree',
+        'bootstrap-review', target_series, upstream_commit, source_release,
+        target_release, tools_tag, freebsd_release, bind_changed, reason,
     )
 
 
