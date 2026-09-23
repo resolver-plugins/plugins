@@ -765,7 +765,7 @@ class PublicationRecoveryTest(unittest.TestCase):
                 json.dumps(release_channel.directory_checksums(remote)), encoding="utf-8"
             )
             snapshot = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2", True, remote, manifest
+                "os-bind-rp-26.7-1.36_2", True, remote, manifest, immutable=True
             )
             with (
                 patch.object(release_channel, "snapshot_release", return_value=snapshot),
@@ -823,16 +823,20 @@ class PublicationRecoveryTest(unittest.TestCase):
                 json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
             )
             published = release_channel.ReleaseSnapshot(
-                absent.tag, True, staged, manifest
+                absent.tag, True, staged, manifest, immutable=True
             )
-            calls: list[list[str]] = []
+            calls: list[tuple[list[str], int]] = []
+
+            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
+                calls.append((arguments, attempts))
+
             with (
                 patch.object(
                     release_channel,
                     "snapshot_release",
                     side_effect=(absent, published),
                 ),
-                patch.object(release_channel, "run_gh", side_effect=calls.append),
+                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
             ):
                 release_channel.publish_immutable_release(
                     "resolver-plugins/plugins",
@@ -841,24 +845,113 @@ class PublicationRecoveryTest(unittest.TestCase):
                     "os-bind-rp 26.7 1.36_2",
                 )
 
-            self.assertEqual("release", calls[0][0])
-            self.assertEqual("create", calls[0][1])
-            self.assertIn("--latest=false", calls[0])
             self.assertEqual(
                 [
-                    [
-                        "release", "upload", absent.tag,
-                        str(staged / "os-bind-rp-1.36_2.pkg"),
-                        "--clobber", "--repo", "resolver-plugins/plugins",
-                    ],
-                    [
-                        "release", "upload", absent.tag,
-                        str(staged / "build-metadata.txt"),
-                        "--clobber", "--repo", "resolver-plugins/plugins",
-                    ],
+                    "release", "create", absent.tag,
+                    str(staged / "os-bind-rp-1.36_2.pkg"),
+                    str(staged / "build-metadata.txt"),
+                    "--repo", "resolver-plugins/plugins",
+                    "--title", "os-bind-rp 26.7 1.36_2",
+                    "--latest=false",
                 ],
-                [call for call in calls if call[:2] == ["release", "upload"]],
+                calls[0][0],
             )
+            self.assertEqual(1, calls[0][1])
+            self.assertFalse(
+                any(call[:2] == ["release", "upload"] for call, _ in calls)
+            )
+
+    def test_complete_immutable_release_draft_is_published_on_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            staged = root / "staged"
+            staged.mkdir()
+            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
+            )
+            draft = release_channel.ReleaseSnapshot(
+                "os-bind-rp-26.7-1.36_2", True, staged, manifest, draft=True
+            )
+            published = release_channel.ReleaseSnapshot(
+                draft.tag, True, staged, manifest, immutable=True
+            )
+            calls: list[tuple[list[str], int]] = []
+
+            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
+                calls.append((arguments, attempts))
+
+            with (
+                patch.object(
+                    release_channel,
+                    "snapshot_release",
+                    side_effect=(draft, published),
+                ),
+                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
+            ):
+                release_channel.publish_immutable_release(
+                    "resolver-plugins/plugins",
+                    draft.tag,
+                    staged,
+                    "os-bind-rp 26.7 1.36_2",
+                )
+
+            self.assertEqual(
+                [
+                    "release", "edit", draft.tag, "--draft=false", "--latest=false",
+                    "--repo", "resolver-plugins/plugins",
+                ],
+                calls[0][0],
+            )
+            self.assertEqual(1, calls[0][1])
+
+    def test_partial_immutable_release_draft_is_replaced_on_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            staged = root / "staged"
+            partial = root / "partial"
+            staged.mkdir()
+            partial.mkdir()
+            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
+            (partial / "os-bind-rp-1.36_2.pkg").write_bytes(b"partial")
+            partial_manifest = root / "partial.json"
+            partial_manifest.write_text(
+                json.dumps(release_channel.directory_checksums(partial)), encoding="utf-8"
+            )
+            draft = release_channel.ReleaseSnapshot(
+                "os-bind-rp-26.7-1.36_2", True, partial, partial_manifest, draft=True
+            )
+            published_manifest = root / "published.json"
+            published_manifest.write_text(
+                json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
+            )
+            published = release_channel.ReleaseSnapshot(
+                draft.tag, True, staged, published_manifest, immutable=True
+            )
+            calls: list[tuple[list[str], int]] = []
+
+            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
+                calls.append((arguments, attempts))
+
+            with (
+                patch.object(
+                    release_channel,
+                    "snapshot_release",
+                    side_effect=(draft, published),
+                ),
+                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
+            ):
+                release_channel.publish_immutable_release(
+                    "resolver-plugins/plugins",
+                    draft.tag,
+                    staged,
+                    "os-bind-rp 26.7 1.36_2",
+                )
+
+            self.assertEqual(["release", "delete"], calls[0][0][:2])
+            self.assertEqual(["release", "create"], calls[1][0][:2])
+            self.assertEqual([1, 1], [attempts for _, attempts in calls])
 
     def test_existing_snapshot_is_materialized_for_an_exact_release_retry(self) -> None:
         """A published version is reused instead of rebuilt under a new control commit."""

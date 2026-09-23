@@ -455,14 +455,14 @@ GH_TIMEOUT_SECONDS = 300
 GH_ATTEMPTS = 3
 
 
-def run_gh(arguments: list[str]) -> None:
+def run_gh(arguments: list[str], *, attempts: int = GH_ATTEMPTS) -> None:
     command = ["gh", *arguments]
-    for attempt in range(1, GH_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         try:
             subprocess.run(command, check=True, timeout=GH_TIMEOUT_SECONDS)
             return
         except subprocess.TimeoutExpired:
-            if attempt == GH_ATTEMPTS:
+            if attempt == attempts:
                 raise
 
 
@@ -797,16 +797,31 @@ def materialize_existing_snapshot(
 class ReleaseSnapshot:
     """Verified local bytes required to restore one mutable GitHub Release."""
 
-    def __init__(self, tag: str, existed: bool, directory: Path, manifest: Path) -> None:
+    def __init__(
+        self,
+        tag: str,
+        existed: bool,
+        directory: Path,
+        manifest: Path,
+        *,
+        draft: bool = False,
+        immutable: bool = False,
+    ) -> None:
         self.tag = tag
         self.existed = existed
         self.directory = directory
         self.manifest = manifest
+        self.draft = draft
+        self.immutable = immutable
 
 
 def release_snapshots_match(left: ReleaseSnapshot, right: ReleaseSnapshot) -> bool:
     """Return whether two observations contain the same remote Release bytes."""
-    if left.existed != right.existed:
+    if (
+        left.existed != right.existed
+        or left.draft != right.draft
+        or left.immutable != right.immutable
+    ):
         return False
     if not left.existed:
         return True
@@ -888,7 +903,10 @@ def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
 def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapshot:
     """Download and checksum every pre-promotion asset before changing a Release."""
     result = subprocess.run(
-        ["gh", "release", "view", tag, "--repo", repository, "--json", "assets"],
+        [
+            "gh", "release", "view", tag, "--repo", repository,
+            "--json", "assets,isDraft,isImmutable",
+        ],
         capture_output=True,
         text=True,
     )
@@ -900,9 +918,18 @@ def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapsh
         raise RuntimeError(result.stderr.strip() or f"cannot inspect GitHub Release {tag}")
     payload = json.loads(result.stdout)
     assets = payload.get("assets")
-    if not isinstance(assets, list) or not all(
-        isinstance(asset, dict) and isinstance(asset.get("name"), str) and asset["name"]
-        for asset in assets
+    draft = payload.get("isDraft")
+    immutable = payload.get("isImmutable")
+    if (
+        not isinstance(assets, list)
+        or not isinstance(draft, bool)
+        or not isinstance(immutable, bool)
+        or not all(
+            isinstance(asset, dict)
+            and isinstance(asset.get("name"), str)
+            and asset["name"]
+            for asset in assets
+        )
     ):
         raise RuntimeError(f"cannot read GitHub Release assets for {tag}")
     directory.mkdir(parents=True, exist_ok=False)
@@ -915,7 +942,9 @@ def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapsh
             raise RuntimeError(f"cannot preserve GitHub Release asset {tag}/{name}")
         checksums[name] = sha256(downloaded)
     manifest.write_text(json.dumps(checksums, sort_keys=True) + "\n", encoding="utf-8")
-    return ReleaseSnapshot(tag, True, directory, manifest)
+    return ReleaseSnapshot(
+        tag, True, directory, manifest, draft=draft, immutable=immutable
+    )
 
 
 def publish_immutable_release(
@@ -924,18 +953,37 @@ def publish_immutable_release(
     """Create an immutable Release, or accept an exact byte-for-byte retry."""
     with tempfile.TemporaryDirectory() as temporary_directory:
         existing = snapshot_release(repository, tag, Path(temporary_directory))
-        if existing.existed:
+        if existing.existed and not existing.draft:
             if not snapshot_matches_directory(existing, directory):
                 raise RuntimeError(f"immutable GitHub Release has different bytes: {tag}")
+            if not existing.immutable:
+                raise RuntimeError(f"GitHub Release is not immutable: {tag}")
             return
+        create = not existing.existed
+        if existing.existed:
+            if snapshot_matches_directory(existing, directory):
+                run_gh([
+                    "release", "edit", tag, "--draft=false", "--latest=false",
+                    "--repo", repository,
+                ], attempts=1)
+            else:
+                run_gh([
+                    "release", "delete", tag, "--yes", "--repo", repository,
+                ], attempts=1)
+                create = True
+        if create:
+            run_gh([
+                "release", "create", tag,
+                *(str(asset) for asset in asset_order(directory)),
+                "--repo", repository, "--title", title, "--latest=false",
+            ], attempts=1)
 
-    run_gh([
-        "release", "create", tag,
-        "--repo", repository, "--title", title, "--latest=false",
-    ])
-    upload_release_assets(repository, tag, asset_order(directory))
     with tempfile.TemporaryDirectory() as temporary_directory:
         published = snapshot_release(repository, tag, Path(temporary_directory))
+        if published.draft:
+            raise RuntimeError(f"GitHub Release remains a draft: {tag}")
+        if not published.immutable:
+            raise RuntimeError(f"GitHub Release is not immutable: {tag}")
         if not snapshot_matches_directory(published, directory):
             raise RuntimeError(f"published immutable GitHub Release has different bytes: {tag}")
 
