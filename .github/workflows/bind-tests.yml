@@ -79,7 +79,10 @@ jobs:
             git fetch --no-tags origin \
               'refs/heads/master:refs/remotes/origin/control-plane'
             git checkout refs/remotes/origin/control-plane -- \
-              .github/ci .resolver-plugins/bind920.json
+              .github/ci \
+              .github/workflows/bind-tests.yml \
+              .github/workflows/bind920-candidate.yml \
+              .resolver-plugins/bind920.json
           fi
           test -d .github/ci
           test -f .resolver-plugins/bind920.json

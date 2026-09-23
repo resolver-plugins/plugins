@@ -67,7 +67,10 @@ def test_release_source_pull_requests_materialize_master_ci_helpers():
     assert 'PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}' in helper_job
     assert 'if [[ "$PR_BASE" == release/bind-rp/* ]]' in helper_job
     assert 'refs/heads/master:refs/remotes/origin/control-plane' in helper_job
-    assert '.github/ci .resolver-plugins/bind920.json' in helper_job
+    assert '.github/ci \\' in helper_job
+    assert '.github/workflows/bind-tests.yml' in helper_job
+    assert '.github/workflows/bind920-candidate.yml' in helper_job
+    assert '.resolver-plugins/bind920.json' in helper_job
 
 
 def test_reusable_workflow_accepts_the_callers_pull_request_context():
