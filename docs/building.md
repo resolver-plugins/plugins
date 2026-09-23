@@ -177,6 +177,10 @@ the CI helper tests for BIND profile changes, including generated
 `.resolver-plugins/bind920.json` candidate PRs. Do not add a static release
 matrix: a newly created release branch is included automatically.
 
+The workflow also requires `dns/bind/pkg-descr` to change with publishable
+BIND runtime, package-hook, or package-metadata changes. Test-only changes and
+`PLUGIN_REVISION`-only rebuilds do not require a changelog entry.
+
 ## BIND candidate updates
 
 The `Propose bind920 candidate` workflow is manual-only. It inspects a
