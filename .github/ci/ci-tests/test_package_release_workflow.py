@@ -19,7 +19,6 @@ def action_references(workflow: str) -> list[str]:
 def test_workflow_selects_an_immutable_release_source():
     workflow = workflow_text()
     assert 'workflow_dispatch:' in workflow
-    assert 'pull_request_target:' not in workflow
     assert 'refs/heads/release/bind-rp/$series' in workflow
     assert 'refs/pull/$INPUT_PULL_NUMBER/head' in workflow
     assert 'gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PULL_NUMBER" --jq .base.ref' in workflow
@@ -28,6 +27,22 @@ def test_workflow_selects_an_immutable_release_source():
     assert 'git fetch --no-tags origin "$SOURCE_REF:refs/remotes/origin/package-source"' in workflow
     assert 'source_commit=$(git rev-parse refs/remotes/origin/package-source)' in workflow
     assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in workflow
+
+
+def test_merged_release_source_pr_publishes_its_exact_merge_commit():
+    workflow = workflow_text()
+    trigger = workflow.split('  pull_request_target:', 1)[1].split('  workflow_dispatch:', 1)[0]
+    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
+
+    assert "pull_request_target:\n    types: [closed]\n    branches:\n      - 'release/bind-rp/**'" in workflow
+    for path in ("'.resolver-plugins/**'", "'dns/bind/**'", "'Mk/**'"):
+        assert path in trigger
+    assert "if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true" in select
+    assert '[[ "$PR_MERGED" == true ]]' in select
+    assert '[[ "$PR_BASE_REF" =~ ^release/bind-rp/([0-9]+\\.[0-9]+)$ ]]' in select
+    assert 'source_ref="$PR_MERGE_COMMIT"' in select
+    assert 'control_ref="$GITHUB_WORKFLOW_SHA"' in select
+    assert 'github.event.pull_request.head.sha' not in workflow
 
 
 def test_package_affecting_master_pushes_publish_the_newest_release_series():
