@@ -74,6 +74,18 @@ def test_release_source_pull_requests_materialize_master_ci_helpers():
     assert '.resolver-plugins/bind920.json' in helper_job
 
 
+def test_workflow_requires_pkg_descr_for_publishable_bind_changes():
+    workflow = workflow_text()
+    changes_job = workflow.split('  changes:', 1)[1].split('  ci-helpers:', 1)[0]
+
+    assert 'Check BIND package description freshness' in changes_job
+    assert 'CALLER_SHA: ${{ inputs.pull_request_sha }}' in changes_job
+    assert 'if [ -n "$CALLER_SHA" ]; then' in changes_job
+    assert 'refs/heads/$PR_BASE:refs/remotes/origin/pr-base' in changes_job
+    assert 'refs/heads/master:refs/remotes/origin/control-plane' in changes_job
+    assert 'check-bind-pkg-descr.sh' in changes_job
+
+
 def test_reusable_workflow_accepts_the_callers_pull_request_context():
     workflow = workflow_text()
 

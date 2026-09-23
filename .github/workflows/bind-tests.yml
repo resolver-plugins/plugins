@@ -60,6 +60,26 @@ jobs:
             esac
           done < "$RUNNER_TEMP/changed-paths"
           printf 'bind_source=%s\nci_helpers=%s\n' "$bind_source" "$ci_helpers" >> "$GITHUB_OUTPUT"
+      - name: Check BIND package description freshness
+        shell: bash
+        env:
+          CALLER_SHA: ${{ inputs.pull_request_sha }}
+          PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ inputs.pull_request_sha || github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          guard=.github/ci/check-bind-pkg-descr.sh
+          if [ -n "$CALLER_SHA" ]; then
+            git fetch --no-tags origin \
+              "refs/heads/$PR_BASE:refs/remotes/origin/pr-base" \
+              'refs/heads/master:refs/remotes/origin/control-plane'
+            BASE_SHA=$(git rev-parse refs/remotes/origin/pr-base)
+            guard="$RUNNER_TEMP/check-bind-pkg-descr.sh"
+            git show refs/remotes/origin/control-plane:.github/ci/check-bind-pkg-descr.sh > "$guard"
+            chmod +x "$guard"
+          fi
+          "$guard" "$BASE_SHA" "$HEAD_SHA"
 
   ci-helpers:
     needs: changes
