@@ -29,10 +29,16 @@ import sys
 import tempfile
 import unittest
 
+from .bounded_shutdown_contract import current_release_requires_bounded_shutdown
+
+
+BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
+BOUNDED_SHUTDOWN = current_release_requires_bounded_shutdown(BIND_ROOT)
+
 
 class JournalLifecycleTest(unittest.TestCase):
     def test_stop_clears_journals_for_watcher_and_reverse_zones(self):
-        bind_root = pathlib.Path(__file__).resolve().parents[1]
+        bind_root = BIND_ROOT
         stop_script = bind_root / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
 
         with tempfile.TemporaryDirectory(dir=bind_root) as directory:
@@ -62,7 +68,12 @@ class JournalLifecycleTest(unittest.TestCase):
             state.write_text("{}")
             events = temporary / "events"
             named = temporary / "named"
-            named.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TEST_EVENTS\"\n")
+            named.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$TEST_EVENTS\"\n"
+                "[ \"$1\" = status ] && exit 1\n"
+                "exit 0\n"
+            )
             named.chmod(0o755)
 
             result = subprocess.run(
@@ -81,14 +92,14 @@ class JournalLifecycleTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(events.read_text(), "stop\n")
+            self.assertEqual(events.read_text(), "status\n" if BOUNDED_SHUTDOWN else "stop\n")
             self.assertFalse(state.exists())
             for zone in ("forward.example", "watcher.example", "1.168.192.in-addr.arpa"):
                 for suffix in (".jnl", ".jnw", ".jbk"):
                     self.assertFalse((zone_dir / f"{zone}.db{suffix}").exists())
 
     def assert_stop_failure_preserves_journals_and_state(self, status_code):
-        bind_root = pathlib.Path(__file__).resolve().parents[1]
+        bind_root = BIND_ROOT
         stop_script = bind_root / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
 
         with tempfile.TemporaryDirectory(dir=bind_root) as directory:
@@ -127,7 +138,10 @@ class JournalLifecycleTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1, result.stderr)
-            self.assertEqual(events.read_text(), "stop\nstatus\n")
+            self.assertEqual(
+                events.read_text(),
+                "status\n" if BOUNDED_SHUTDOWN else "stop\nstatus\n",
+            )
             self.assertTrue(state.exists())
             self.assertTrue(journal.exists())
 
@@ -137,7 +151,7 @@ class JournalLifecycleTest(unittest.TestCase):
                 self.assert_stop_failure_preserves_journals_and_state(status_code)
 
     def test_already_stopped_clears_journals_and_state(self):
-        bind_root = pathlib.Path(__file__).resolve().parents[1]
+        bind_root = BIND_ROOT
         stop_script = bind_root / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
 
         with tempfile.TemporaryDirectory(dir=bind_root) as directory:
@@ -174,7 +188,10 @@ class JournalLifecycleTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(events.read_text(), "stop\nstatus\n")
+            self.assertEqual(
+                events.read_text(),
+                "status\n" if BOUNDED_SHUTDOWN else "stop\nstatus\n",
+            )
             self.assertFalse(state.exists())
             self.assertFalse(journal.exists())
 
