@@ -267,7 +267,7 @@ def test_normal_stop_keeps_primary_journals_and_clears_reverse_scope(executable_
     for zone in zones:
         (zone_dir / f"{zone}.db.jnl").write_text("")
     named = executable_tmp_path / "named-stop"
-    _write_executable(named, "#!/bin/sh\nexit 0\n")
+    _write_executable(named, '#!/bin/sh\n[ "$1" = status ] && exit 1\nexit 0\n')
     watcher = executable_tmp_path / "watcher.conf"
     watcher.write_text("")
 

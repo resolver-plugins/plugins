@@ -69,6 +69,20 @@ jobs:
         with:
           ref: ${{ inputs.pull_request_sha || github.sha }}
           persist-credentials: false
+      - name: Materialize CI control plane
+        shell: bash
+        env:
+          PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$PR_BASE" == release/bind-rp/* ]]; then
+            git fetch --no-tags origin \
+              'refs/heads/master:refs/remotes/origin/control-plane'
+            git checkout refs/remotes/origin/control-plane -- \
+              .github/ci .resolver-plugins/bind920.json
+          fi
+          test -d .github/ci
+          test -f .resolver-plugins/bind920.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12.13'
@@ -140,12 +154,14 @@ jobs:
           SERIES: ${{ matrix.series }}
         run: |
           set -euo pipefail
-          if [[ ! -d dns/bind/tests || ! -f .github/ci/metadata_profile.py ]]; then
+          if [[ "$PR_BASE" == release/bind-rp/* ]]; then
             git fetch --no-tags origin \
               'refs/heads/master:refs/remotes/origin/canonical-tests'
             git checkout refs/remotes/origin/canonical-tests -- \
               .github/ci/metadata_profile.py dns/bind/tests
           fi
+          test -d dns/bind/tests
+          test -f .github/ci/metadata_profile.py
           source_commit=$(git rev-parse HEAD)
           if [[ "$PR_BASE" != "release/bind-rp/$SERIES" ]]; then
             source_ref="refs/heads/release/bind-rp/$SERIES"

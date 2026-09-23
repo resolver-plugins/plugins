@@ -60,6 +60,16 @@ def test_release_source_pull_requests_test_their_proposed_source():
     assert 'if [[ "$PR_BASE" != "release/bind-rp/$SERIES" ]]' in workflow
 
 
+def test_release_source_pull_requests_materialize_master_ci_helpers():
+    workflow = workflow_text()
+    helper_job = workflow.split('  ci-helpers:', 1)[1].split('  discover:', 1)[0]
+
+    assert 'PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}' in helper_job
+    assert 'if [[ "$PR_BASE" == release/bind-rp/* ]]' in helper_job
+    assert 'refs/heads/master:refs/remotes/origin/control-plane' in helper_job
+    assert '.github/ci .resolver-plugins/bind920.json' in helper_job
+
+
 def test_reusable_workflow_accepts_the_callers_pull_request_context():
     workflow = workflow_text()
 
@@ -67,6 +77,14 @@ def test_reusable_workflow_accepts_the_callers_pull_request_context():
     assert 'pull_request_sha:' in workflow
     assert 'ref: ${{ inputs.pull_request_sha || github.sha }}' in workflow
     assert 'PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}' in workflow
+
+
+def test_release_source_pull_requests_always_use_master_canonical_tests():
+    workflow = workflow_text()
+    test_job = workflow.split('  test:', 1)[1]
+
+    assert 'if [[ "$PR_BASE" == release/bind-rp/* ]]' in test_job
+    assert 'refs/heads/master:refs/remotes/origin/canonical-tests' in test_job
 
 
 def test_workflow_has_read_only_permissions_and_pinned_actions():
