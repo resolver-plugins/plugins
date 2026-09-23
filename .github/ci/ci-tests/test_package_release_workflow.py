@@ -68,6 +68,20 @@ def test_package_affecting_master_pushes_publish_the_newest_release_series():
     assert "'26.7'" not in select
 
 
+def test_merging_a_repack_recovery_rebuilds_its_exact_series():
+    select = workflow_text().split('  select:', 1)[1].split('  profile:', 1)[0]
+
+    assert 'ref: ${{ github.workflow_sha }}' in select
+    assert 'fetch-depth: 0' in select
+    assert 'persist-credentials: false' in select
+    assert 'BEFORE_SHA: ${{ github.event.before }}' in select
+    assert 'changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")' in select
+    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in select
+    assert 'git show "$BEFORE_SHA:.resolver-plugins/target-pkg.json"' in select
+    assert 'target_pkg.py changed-series "$before" "$after"' in select
+    assert 'series=$recovered_series' in select
+
+
 def test_production_runs_only_from_the_master_control_plane():
     workflow = workflow_text()
     select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
@@ -112,12 +126,32 @@ def test_workflow_materializes_the_distribution_bind_pair_before_building_the_pl
     )
 
 
+def test_failed_production_bind_job_can_only_propose_a_content_identical_pkg_repack():
+    workflow = workflow_text()
+    recovery = workflow.split('  recover-target-pkg:', 1)[1].split('  build:', 1)[0]
+    validator = recovery.split('  propose-target-pkg:', 1)[0]
+    proposer = recovery.split('  propose-target-pkg:', 1)[1]
+
+    assert "needs.bind.result == 'failure'" in validator
+    assert "needs.select.outputs.mode == 'production'" in validator
+    assert 'contents: read' in validator
+    assert 'contents: write' not in validator
+    assert 'persist-credentials: false' in validator
+    assert '.resolver-plugins/target-pkg-content.json' in validator
+    assert 'target_pkg.py refresh' in validator
+    assert "needs.recover-target-pkg.result == 'success'" in proposer
+    assert 'contents: write\n      pull-requests: write' in proposer
+    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in proposer
+    assert 'gh pr create' in proposer
+    assert 'gh pr merge' not in recovery
+
+
 def test_workflow_uses_sha_pinned_actions_and_nonpersistent_checkout_credentials():
     workflow = workflow_text()
     references = action_references(workflow)
     assert references
     assert all(PINNED_ACTION.fullmatch(reference) for reference in references)
-    assert workflow.count('persist-credentials: false') == 10
+    assert workflow.count('persist-credentials: false') == 12
     assert 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803' in references
     assert 'vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d' in references
 

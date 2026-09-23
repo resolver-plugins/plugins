@@ -74,11 +74,17 @@ jobs:
       pull_number: ${{ steps.select.outputs.pull_number }}
       control_ref: ${{ steps.select.outputs.control_ref }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - id: select
         shell: bash
         env:
           GITHUB_REF: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
           GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -97,6 +103,19 @@ jobs:
               sed -nE 's#^refs/heads/release/bind-rp/([0-9]+\.[0-9]+)$#\1#p' |
               sort -V |
               tail -n 1)
+            if [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ && "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+              changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")
+              if [ "$changed" = .resolver-plugins/target-pkg.json ]; then
+                before=$(mktemp)
+                after=$(mktemp)
+                git show "$BEFORE_SHA:.resolver-plugins/target-pkg.json" > "$before"
+                git show "$GITHUB_SHA:.resolver-plugins/target-pkg.json" > "$after"
+                recovered_series=$(python3 .github/ci/target_pkg.py changed-series "$before" "$after")
+                if [ -n "$recovered_series" ]; then
+                  series=$recovered_series
+                fi
+              fi
+            fi
           elif [[ "$EVENT_NAME" == pull_request_target ]]; then
             [[ "$PR_MERGED" == true ]]
             [[ "$PR_BASE_REF" =~ ^release/bind-rp/([0-9]+\.[0-9]+)$ ]]
@@ -214,6 +233,109 @@ jobs:
           name: os-bind-rp-bind920-${{ needs.select.outputs.series }}
           path: artifacts/${{ needs.select.outputs.series }}
           retention-days: 7
+
+  recover-target-pkg:
+    if: always() && needs.select.result == 'success' && needs.profile.result == 'success' && needs.bind.result == 'failure' && needs.select.outputs.mode == 'production'
+    needs: [select, profile, bind]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.control_commit }}
+          persist-credentials: false
+      - name: Materialize selected release metadata
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SOURCE_COMMIT"
+          git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json
+      - name: Check for a packaging-only target pkg change
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        with:
+          release: ${{ needs.profile.outputs.freebsd_release }}
+          arch: x86_64
+          usesh: true
+          disable-cache: true
+          copyback: true
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+            series='${{ needs.select.outputs.series }}'
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            pkg update -f
+            python3 .github/ci/target_pkg.py refresh \
+              .resolver-plugins/target-pkg.json \
+              .resolver-plugins/target-pkg-content.json \
+              "$series" --output .resolver-plugins/target-pkg.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: target-pkg-recovery-${{ needs.select.outputs.series }}
+          path: .resolver-plugins/target-pkg.json
+          retention-days: 1
+
+  propose-target-pkg:
+    if: always() && needs.recover-target-pkg.result == 'success'
+    needs: [select, profile, recover-target-pkg]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.control_commit }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: target-pkg-recovery-${{ needs.select.outputs.series }}
+          path: ${{ runner.temp }}/target-pkg-recovery
+      - name: Open or update target pkg recovery PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ needs.select.outputs.series }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/target-pkg-recovery/target-pkg.json" .resolver-plugins/target-pkg.json
+          changed=$(git diff --name-only)
+          if [ -z "$changed" ]; then
+            echo "The target pkg pin is current; the BIND failure requires separate investigation."
+            exit 0
+          fi
+          [ "$changed" = .resolver-plugins/target-pkg.json ]
+          branch="sync/target-pkg/$SERIES"
+          title="ci: refresh $SERIES target pkg archive pin"
+          expected=
+          if git fetch --no-tags origin "$branch:refs/remotes/origin/target-pkg-recovery"; then
+            expected=$(git rev-parse refs/remotes/origin/target-pkg-recovery)
+          fi
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout -B "$branch"
+          git add .resolver-plugins/target-pkg.json
+          git commit -m "$title"
+          git push --force-with-lease="$branch:$expected" origin "HEAD:$branch"
+          cat > "$RUNNER_TEMP/pr-body.md" <<EOF
+          The production build found that OPNsense repacked the signed target pkg archive.
+
+          This update was generated only after verifying that the package identity and extracted paths, types, modes, ownership, flags, hardlink relationships, file bytes, and symlink targets match the pinned canonical contents. Publication remains blocked until this PR is reviewed and merged.
+
+          Triggering run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+          fi
 
   build:
     needs: [select, profile, test, bind]
