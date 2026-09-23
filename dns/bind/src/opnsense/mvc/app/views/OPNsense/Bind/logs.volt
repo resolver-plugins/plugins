@@ -111,7 +111,11 @@
 <div class="content-box tab-content">
 
     <div id="generallog" class="tab-pane fade in active">
-        {{ partial("OPNsense/Diagnostics/log",['module':'core','scope':'named'])}}
+        {{ partial("OPNsense/Diagnostics/log",[
+            'module':'core',
+            'scope':'named',
+            'default_log_severity':'Informational'
+        ])}}
     </div>
 
     <div id="querylog" class="tab-pane fade">

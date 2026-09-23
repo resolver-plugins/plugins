@@ -9,6 +9,7 @@ Plugin Changelog
 
 1.36
 
+* Bound BIND shutdown and log forced recovery steps in the General Log
 * Preserve dynamic BIND records while package upgrades regenerate zone files
 * Add DHCP lease watcher and scoped dynamic DNS mappings
 * Add reverse DNS zone management
