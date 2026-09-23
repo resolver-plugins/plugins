@@ -43,11 +43,15 @@ ZONE_DIR = Path(ENV.get("BIND_STOP_ZONE_DIR", "/usr/local/etc/namedb/primary"))
 STATE_FILE = Path(ENV.get("BIND_STOP_STATE_FILE", "/var/cache/bind/dhcplease_state.json"))
 CONFIG = Path(ENV.get("BIND_STOP_CONFIG", "/conf/config.xml"))
 NAMED_RC = ENV.get("BIND_STOP_NAMED_RC", "/usr/local/etc/rc.d/named")
+NAMED_PIDFILE = Path(ENV.get("BIND_STOP_NAMED_PIDFILE", "/var/run/named/pid"))
+RNDC = ENV.get("BIND_STOP_RNDC", "/usr/local/sbin/rndc")
+GRACE_TIMEOUT = float(ENV.get("BIND_STOP_GRACE_TIMEOUT", "30"))
+FORCE_TIMEOUT = float(ENV.get("BIND_STOP_FORCE_TIMEOUT", "5"))
 ZONE_NAME = re.compile(r"[A-Za-z0-9.-]+$")
 
 
 def log(priority, message):
-    syslog.openlog("bind")
+    syslog.openlog("named")
     syslog.syslog(priority, message)
 
 
@@ -204,26 +208,120 @@ def clear_journals(zones):
                     pass
 
 
-def stop_named():
+def run(command, **kwargs):
     try:
-        result = subprocess.run([NAMED_RC, "stop"], check=False)
+        return subprocess.run(command, check=False, timeout=FORCE_TIMEOUT, **kwargs)
+    except subprocess.TimeoutExpired:
+        log(syslog.LOG_ERR, f"command timed out after {FORCE_TIMEOUT:g} seconds: {command[0]}")
     except OSError as error:
-        log(syslog.LOG_ERR, f"unable to stop named: {error}")
+        log(syslog.LOG_ERR, f"unable to run {command[0]}: {error}")
+    return None
+
+
+def named_status():
+    result = run(
+        [NAMED_RC, "status"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return None if result is None else result.returncode
+
+
+def named_pid():
+    try:
+        pid = int(NAMED_PIDFILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 1 else None
+
+
+def process_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
-    if result.returncode == 0:
+    except PermissionError:
         return True
-    try:
-        status = subprocess.run([NAMED_RC, "status"], check=False)
-    except OSError as error:
-        log(syslog.LOG_ERR, f"unable to verify named status: {error}")
+    return True
+
+
+def wait_for_exit(pid, timeout):
+    deadline = time.monotonic() + timeout
+    while process_exists(pid):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.1, remaining))
+    return True
+
+
+def signal_named(pid, sig):
+    if not process_exists(pid):
+        return True
+    if named_pid() != pid or named_status() != 0:
+        log(syslog.LOG_ERR, f"refusing to signal unverified named pid {pid}")
         return False
-    if status.returncode == 1:
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return True
+    except OSError as error:
+        log(syslog.LOG_ERR, f"unable to signal named pid {pid}: {error}")
+        return False
+    return True
+
+
+def named_target():
+    status = named_status()
+    if status == 1:
+        return status, None
+    if status != 0:
+        log(syslog.LOG_ERR, f"unable to verify named status (exit {status})")
+        return None
+
+    pid = named_pid()
+    if pid is None:
+        log(syslog.LOG_ERR, f"unable to read a valid named pid from {NAMED_PIDFILE}")
+        return None
+    return status, pid
+
+
+def stop_named():
+    target = named_target()
+    if target is None:
+        return False
+    status, pid = target
+    if status == 1:
         log(syslog.LOG_NOTICE, "named was already stopped")
         return True
+
+    log(syslog.LOG_NOTICE, f"requesting graceful shutdown of named pid {pid}")
+    result = run([RNDC, "stop"])
+    if result is not None and result.returncode == 0:
+        if wait_for_exit(pid, GRACE_TIMEOUT):
+            log(syslog.LOG_NOTICE, f"named pid {pid} stopped gracefully")
+            return True
+    else:
+        exit_status = "timeout" if result is None else f"exit {result.returncode}"
+        log(syslog.LOG_WARNING, f"rndc stop failed ({exit_status}); escalating shutdown")
+
+    log(syslog.LOG_ERR, f"named pid {pid} did not stop gracefully; sending SIGTERM")
+    if not signal_named(pid, signal.SIGTERM):
+        return False
+    if wait_for_exit(pid, FORCE_TIMEOUT):
+        log(syslog.LOG_WARNING, f"named pid {pid} stopped after SIGTERM")
+        return True
+
+    log(syslog.LOG_CRIT, f"named pid {pid} ignored SIGTERM; sending SIGKILL")
+    if not signal_named(pid, signal.SIGKILL):
+        return False
+    if wait_for_exit(pid, FORCE_TIMEOUT):
+        log(syslog.LOG_CRIT, f"named pid {pid} required SIGKILL to stop")
+        return True
+
     log(
         syslog.LOG_ERR,
-        f"named stop failed with exit status {result.returncode}; "
-        f"status exited {status.returncode}",
+        f"named pid {pid} is still present after SIGKILL",
     )
     return False
 
