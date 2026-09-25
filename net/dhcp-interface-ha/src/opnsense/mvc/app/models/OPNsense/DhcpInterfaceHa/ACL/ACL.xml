@@ -1,0 +1,9 @@
+<acl>
+    <page-services-dhcp-interface-ha>
+        <name>Services: DHCP Interface HA</name>
+        <patterns>
+            <pattern>ui/dhcpinterfaceha/*</pattern>
+            <pattern>api/dhcpinterfaceha/*</pattern>
+        </patterns>
+    </page-services-dhcp-interface-ha>
+</acl>

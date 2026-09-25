@@ -1,0 +1,4 @@
+#!/bin/sh
+# dhcpha0lagg cleanup is verified by +PRE_DEINSTALL while Python is installed.
+# Leave the transition lock inode intact until reboot.
+exit 0

@@ -1,9 +1,0 @@
-<acl>
-    <page-services-wan-ha-dhcp>
-        <name>Services: WAN HA DHCP</name>
-        <patterns>
-            <pattern>ui/wanhadhcp/*</pattern>
-            <pattern>api/wanhadhcp/*</pattern>
-        </patterns>
-    </page-services-wan-ha-dhcp>
-</acl>

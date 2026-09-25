@@ -1,0 +1,30 @@
+<form>
+    <field>
+        <type>header</type>
+        <label>Shared Settings</label>
+    </field>
+    <field>
+        <id>dhcphashared.enabled</id>
+        <label>Enable DHCP Interface HA</label>
+        <type>checkbox</type>
+        <help>Enable CARP-aware exclusive attachment for the selected IPv4 DHCP interface.</help>
+    </field>
+    <field>
+        <id>dhcphashared.managed_interface</id>
+        <label>Managed OPNsense Interface</label>
+        <type>select</type>
+        <help>The logical OPNsense interface managed by this plugin. Version 1 requires IPv4 DHCP.</help>
+    </field>
+    <field>
+        <id>dhcphashared.shared_mac</id>
+        <label>Shared interface MAC</label>
+        <type>text</type>
+        <help>Ordinary unicast MAC presented to the upstream network by the active node. Use Generate Private MAC when no network-specific MAC is required.</help>
+    </field>
+    <field>
+        <id>dhcphashared.failback_delay</id>
+        <label>Failback Delay</label>
+        <type>text</type>
+        <help>Use zero in this experimental release. Delayed failback is not implemented; native CARP preemption policy applies.</help>
+    </field>
+</form>

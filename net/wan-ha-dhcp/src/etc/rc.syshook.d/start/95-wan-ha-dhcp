@@ -1,2 +1,0 @@
-#!/bin/sh
-exec /usr/local/etc/rc.d/wan_ha_dhcp onestart

@@ -1,5 +1,0 @@
-<menu>
-    <Services>
-        <WanHaDhcp VisibleName="WAN HA DHCP" cssClass="fa fa-random fa-fw" url="/ui/wanhadhcp"/>
-    </Services>
-</menu>

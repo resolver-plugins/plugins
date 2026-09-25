@@ -12,4 +12,4 @@ Read the guide matching the work you are about to do:
   workflow, review PRs, and temporary artifacts.
 - [Package repository](package-repository.md) describes the signed GitHub
   Release channels, publication workflow, and key rotation responsibilities.
-- [WAN HA DHCP design](wan-ha-dhcp.md) specifies the proposed `os-wan-ha-dhcp` architecture, safety invariants, prototype gates, and staged implementation plan.
+- [DHCP Interface HA design](dhcp-interface-ha.md) specifies the proposed `os-dhcp-interface-ha` architecture, safety invariants, prototype gates, and staged implementation plan.
