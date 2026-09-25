@@ -36,7 +36,7 @@ source MAC to change (Hyper-V: enable MAC spoofing). Choose one fixed shared
 unicast MAC for both nodes; a preferred node's dedicated WAN hardware MAC is
 valid. Do not dynamically choose whichever node obtains DHCP first.
 
-1. Install the experimental plugin and select the dedicated local carrier.
+1. Install the experimental plugin and select the dedicated local carrier. The managed interface may still use its original addressing while the feature is disabled; the enabled configuration requires IPv4 DHCP.
 2. Assign the desired logical DHCP interface to `wanha0lagg`; clear its native
    spoof MAC, IPv6, hardware overrides and custom media settings. Keep CARP
    VIPs on other interfaces.

@@ -10,10 +10,6 @@
         <managed_interface type="InterfaceField">
             <Default>wan</Default>
             <Required>Y</Required>
-            <filters>
-                <enable>/^(?!0).*$/</enable>
-                <ipaddr>/^dhcp$/</ipaddr>
-            </filters>
         </managed_interface>
         <shared_mac type="MacAddressField">
             <Required>N</Required>

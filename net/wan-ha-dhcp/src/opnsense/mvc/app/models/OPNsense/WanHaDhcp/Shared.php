@@ -112,9 +112,9 @@ class Shared extends BaseModel
         }
 
         $managed = $config->interfaces->$interface;
-        if ((string)$managed->ipaddr !== 'dhcp') {
+        if (empty((string)$managed->enable) || (string)$managed->ipaddr !== 'dhcp') {
             $messages->appendMessage(new Message(
-                gettext('Version 1 requires the managed interface to use IPv4 DHCP.'),
+                gettext('The managed interface must be enabled and use IPv4 DHCP.'),
                 $this->managed_interface->getInternalXMLTagName()
             ));
         }

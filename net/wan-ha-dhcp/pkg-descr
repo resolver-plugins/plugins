@@ -13,6 +13,10 @@ the prototype tests documented in docs/wan-ha-dhcp.md.
 Plugin Changelog
 ================
 
+0.1_1
+
+* Accept pre-migration static interfaces in initial shared settings.
+
 0.1
 
 * Experimental carrier controller with native CARP and DHCP integration.
