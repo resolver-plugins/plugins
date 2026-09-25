@@ -113,7 +113,11 @@ $(document).ready(function() {
                 shared.reject
             );
             shared.done(function() {
-                $("#saveResult").text("{{ lang._('Configuration saved. Runtime carrier mutation is not enabled in this experimental scaffold.') }}");
+                ajaxCall("/api/wanhadhcp/service/apply", {}, function(data, status) {
+                    $("#saveResult").text(status === "success" && !data.error
+                        ? (data.actual_attachment + ": " + data.reason)
+                        : (data.error || "{{ lang._('Apply failed; check system logs.') }}"));
+                });
             });
         });
     });
@@ -122,7 +126,7 @@ $(document).ready(function() {
 
 <section class="page-content-main">
     <div class="alert alert-warning">
-        {{ lang._('Experimental implementation scaffold. The dataplane fencing mechanism remains prototype-gated and this page does not yet activate automatic WAN carrier movement.') }}
+        {{ lang._('Experimental controller. Enabling this feature activates automatic WAN carrier movement. Use a dedicated test adapter; production failover qualification remains incomplete.') }}
     </div>
 
     <div class="content-box">

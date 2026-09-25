@@ -19,7 +19,7 @@
             <Required>N</Required>
         </shared_mac>
         <failback_delay type="IntegerField">
-            <Default>120</Default>
+            <Default>0</Default>
             <Required>Y</Required>
             <MinimumValue>0</MinimumValue>
             <MaximumValue>86400</MaximumValue>

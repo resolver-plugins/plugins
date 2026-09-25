@@ -1,359 +1,83 @@
-# os-wan-ha-dhcp experimental scaffold
+# os-wan-ha-dhcp experimental controller
 
-This directory contains the first non-production implementation slice for the
-design in [../../docs/wan-ha-dhcp.md](../../docs/wan-ha-dhcp.md).
+This plugin implements the experimental carrier controller described in
+[the design specification](../../docs/wan-ha-dhcp.md). It follows native CARP
+on other interfaces and attaches one dedicated Ethernet adapter to
+`wanha0lagg` only while the local node is eligible and MASTER.
 
-The current code intentionally **does not automatically move a live WAN
-carrier**.  The FreeBSD dataplane primitive, DHCP carrier behavior, and
-failback mechanism are still subject to Prototype Gates A-C in the design.
+The controller sets the configured shared MAC on the **down, detached**
+carrier before attachment. It verifies the MAC and topology before bringing
+the LAGG up. Demotion downs the LAGG and members before detachment. Normal
+detachment preserves the shared MAC; it does not restore the hardware MAC.
+OPNsense retains ownership of DHCP, addressing, routing, NAT and PF.
 
-Implemented so far:
+## Current scope
 
-- OPNsense plugin package skeleton.
-- Separate cluster-shared and node-local configuration models.
-- XMLRPC registration of the shared model only.
-- Registration of the stable `wanha0lagg` virtual WAN candidate.
-- Carrier candidate discovery from OPNsense hardware/VLAN assignment options.
-- Secure locally administered unicast MAC generation.
-- Pure Python global-CARP-role reduction and fail-closed desired-state logic.
-- Provisional single-member-LAGG command planning.
-- Dry-run CLI status/plan output.
-- Unit tests for role reduction, MAC rules, fencing order, idempotence, stale
-  member fencing, and model metadata.
+- Separate shared and node-local MVC settings; XMLRPC syncs only shared settings.
+- Virtual device registration with verified runtime ownership.
+- Serialized, bounded transitions with configuration/CARP rereads and readback.
+- CARP event wakeups and a five-second reconcile service.
+- Native CARP service-health integration for local incapacity after fencing.
+- Stop inhibits promotion before fencing; a failed stop leaves the service
+  running to retry. Start clears the inhibition.
+- Removal refuses assigned or unverified devices and preserves the lock inode.
 
-## Safety boundary
+This is **not production qualified**. Appliance investigation demonstrated the
+native LAGG/MAC ordering and isolated native DHCP acquisition. Cold boot at the
+external segment, complete configured WAN gateway/NAT integration, two-node
+handoff, and pfsync session continuity still require qualification. VLAN
+carriers are rejected. Delayed failback is not implemented: set its value to
+zero; native CARP preemption policy remains in effect.
 
-Installation must not be treated as approval to migrate a production WAN.
-Automatic CARP hooks and automatic command execution are deliberately absent.
+## Test configuration
 
-Intentional package removal is guarded while any logical interface is still
-assigned to `wanha0lagg`; the guard explicitly permits normal package upgrades.
+Use a dedicated spare adapter on a test segment. Hypervisors must allow its
+source MAC to change (Hyper-V: enable MAC spoofing). Choose one fixed shared
+unicast MAC for both nodes; a preferred node's dedicated WAN hardware MAC is
+valid. Do not dynamically choose whichever node obtains DHCP first.
 
-The only plugin-side interface creation currently proposed by the integration
-scaffold is an **empty/detached** `wanha0lagg` LAGG candidate when OPNsense asks
-the registered device to be prepared.  Gate A must validate that behavior on
-OPNsense 26.7 before runtime ownership code is enabled.
+1. Install the experimental plugin and select the dedicated local carrier.
+2. Assign the desired logical DHCP interface to `wanha0lagg`; clear its native
+   spoof MAC, IPv6, hardware overrides and custom media settings. Keep CARP
+   VIPs on other interfaces.
+3. Configure the same shared MAC on both nodes, set failback delay to zero,
+   then enable and save. Saving applies the configuration. Local reservation,
+   topology, MAC collision, and native CARP checks also run inside the root
+   controller, including after XMLRPC changes.
+4. Check the displayed controller result and system logs. Native DHCP must
+   run on `wanha0lagg`, never directly on the reserved carrier.
 
-## Local tests
-
-From the repository root:
+Read current status without changing interfaces:
 
 ```sh
+/usr/local/bin/python3 /usr/local/opnsense/scripts/wan_ha_dhcp/wan_ha_dhcp.py status --from-config
+```
+
+Stop/fence or restart the controller:
+
+```sh
+service wan_ha_dhcp onestop
+service wan_ha_dhcp onestart
+```
+
+A failed fence is an error, not a successful stop. Inspect the live LAGG and
+member state before further testing. Reassign every logical interface away
+from `wanha0lagg` before uninstalling. Package upgrades preserve the device;
+restart the controller after an upgrade to load the new implementation.
+
+## Verification
+
+```sh
+python3 -m compileall -q net/wan-ha-dhcp/src/opnsense/scripts/wan_ha_dhcp
 python3 -m unittest discover -s net/wan-ha-dhcp/tests -v
 ```
 
-OPNsense/FreeBSD PHP/plugin lint should also be run using the repository's
-normal plugin lint target once a target build environment is available.
-
-## Dry-run controller inspection on OPNsense
-
-The Python CLI does not execute the returned command plan.  Once the plugin
-settings exist in OPNsense, prefer loading them directly:
-
-```sh
-/usr/local/bin/python3 /usr/local/opnsense/scripts/wan_ha_dhcp/wan_ha_dhcp.py \
-    status --from-config
-```
-
-For isolated pre-configuration experiments, explicit arguments remain
-available:
-
-```sh
-/usr/local/bin/python3 /usr/local/opnsense/scripts/wan_ha_dhcp/wan_ha_dhcp.py \
-    status \
-    --enabled \
-    --managed-by-wanha \
-    --carrier ix0 \
-    --shared-mac 02:11:22:33:44:55
-```
-
-Use the node's actual configured carrier in place of `ix0`.  The JSON output
-includes:
-
-- all observed CARP states;
-- derived global role;
-- desired attachment state;
-- carrier and `wanha0lagg` observations;
-- the provisional command plan;
-- warnings.
-
-The output is intended to help execute Prototype Gate A/B with Codex or a
-human operator before automatic mutations are added.
-
-
-## Appliance qualification runbook
-
-The following work is for Codex or a human operator with shell access to an
-OPNsense 26.7+ test node.  Do **not** perform Gate A/B mutation commands on the
-currently active production WAN carrier.  Capture the initial state first and
-use a disposable/dedicated carrier, the HA BACKUP during a controlled window,
-or an isolated test segment.
-
-### Read-only preflight
-
-Record this output on both nodes before changing interface state:
-
-```sh
-opnsense-version
-/usr/local/sbin/configctl interface show carp
-/sbin/sysctl net.inet.carp
-/sbin/ifconfig -Lmv
-/usr/local/sbin/configctl filter list pfsync json
-/usr/local/sbin/pluginctl -X
-```
-
-After the scaffold is installed, verify registration and the detached device:
-
-```sh
-/usr/local/sbin/pluginctl -d wanha
-/usr/local/sbin/pluginctl -d wanha0lagg
-test -f /var/run/wan-ha-dhcp/device.wanha0lagg
-/sbin/ifconfig wanha0lagg
-```
-
-The registration callback may create only an **empty failover LAGG**.  It must
-not attach a carrier.
-
-For a configured carrier, record at least:
-
-```sh
-carrier=ix0   # replace with this node's test carrier
-/sbin/ifconfig -Lmv "$carrier"
-/sbin/ifconfig -Lmv wanha0lagg
-```
-
-Preserve the original carrier MAC/hwaddr, MTU, flags, media/status, and any
-VLAN parent/tag information in the test notes.
-
-### Gate A: LAGG/fencing primitive
-
-On an isolated carrier only, test the candidate ordering while observing both
-the carrier and `wanha0lagg` after every command:
-
-```sh
-carrier=ix0
-shared_mac=02:11:22:33:44:55
-
-/sbin/ifconfig wanha0lagg down
-/sbin/ifconfig "$carrier" up
-/sbin/ifconfig wanha0lagg laggport "$carrier"
-/sbin/ifconfig wanha0lagg ether "$shared_mac"
-/sbin/ifconfig wanha0lagg up
-
-/sbin/ifconfig -Lmv "$carrier"
-/sbin/ifconfig -Lmv wanha0lagg
-```
-
-Then fence it:
-
-```sh
-/sbin/ifconfig wanha0lagg -laggport "$carrier"
-/sbin/ifconfig "$carrier" down
-/sbin/ifconfig wanha0lagg down
-
-/sbin/ifconfig -Lmv "$carrier"
-/sbin/ifconfig -Lmv wanha0lagg
-```
-
-Gate A evidence must answer all of these:
-
-- Does add/remove work repeatedly on physical and virtual NICs?
-- Does setting the shared MAC **after member attachment** produce the expected
-  ISP-facing MAC?
-- Does member removal restore the saved hardware/native MAC?
-- When the detached carrier is administratively down, does `ifconfig` still
-  report a useful physical/media `status: active` vs `no carrier` signal?
-- Does a VLAN interface work as a member where required?
-- Does `wanha0lagg` remain classified as a virtual/plugin device by OPNsense?
-- Does reboot/interface configuration recreate it detached before DHCP?
-- With no explicit WAN MTU, is carrier MTU left untouched? With an explicit
-  MTU, can it be applied before attachment and on the LAGG without error?
-- Does packet capture show any unexpected frame from the BACKUP carrier while
-  the design says it is fenced?
-
-Also compare the opposite MAC ordering (set the LAGG MAC before member attach)
-on the isolated segment.  Retain whichever ordering consistently preserves the
-configured shared MAC across representative drivers; do not encode a
-driver-specific branch.
-
-### Gate B: native DHCP convergence and identity
-
-Do not replace OPNsense DHCP.  Test the normal logical DHCP interface while
-`wanha0lagg` is detached, then attach the isolated/upstream carrier and apply
-the shared MAC.
-
-Capture DHCP on the actual upstream-facing carrier:
-
-```sh
-tcpdump -eni "$carrier" -vvv 'udp port 67 or udp port 68'
-```
-
-Verify:
-
-- no DHCP reaches upstream while `wanha0lagg` has no member;
-- DHCP `chaddr` is the configured shared MAC after promotion;
-- Option 61/hostname behavior matches the existing native OPNsense WAN
-  configuration;
-- any configured native DHCP send/request options and DHCP VLAN priority
-  continue to appear on the wire as expected for the ISP;
-- the resulting address, subnet, gateway, DNS, route, NAT, and gateway monitor
-  are created through normal OPNsense mechanisms.
-
-First observe whether the already-running detached dhclient reacts correctly to
-carrier attachment.  If it does not, use the supported native restart path
-after the member and shared MAC are in place:
-
-```sh
-/usr/local/sbin/configctl interface reconfigure wan
-```
-
-Replace `wan` with the selected managed logical interface.  OPNsense 26.7
-suppresses native MAC replacement for this plugin device because it is
-registered with `spoofmac=false`, so the reconfigure path should preserve the
-controller-applied shared MAC; verify this on the appliance.
-
-Inspect the per-interface lease database as part of the test:
-
-```sh
-ls -l /var/db/dhclient.leases.*
-```
-
-Do not add lease replication unless same-MAC failover testing demonstrates a
-specific failure that cannot be handled by the native DHCP server/client
-exchange.
-
-### Gate C: delayed failback
-
-Record the native baseline first:
-
-```sh
-/sbin/sysctl -n net.inet.carp.preempt
-```
-
-FreeBSD source indicates that `preempt=0` suppresses taking MASTER from a
-living slower peer but does not suppress ordinary takeover after MASTER
-advertisements time out.  Validate that behavior on the actual pair:
-
-1. Place the recovered/preferred node in BACKUP with a living peer MASTER.
-2. Temporarily suppress preemption on the recovering node only.
-3. Confirm it does not reclaim MASTER before the configured hold expires.
-4. During a separate run, make the current MASTER disappear while the hold is
-   active and confirm the recovering node still becomes MASTER promptly.
-5. Restore the administrator's baseline exactly.
-6. Repeat with native OPNsense "Disable preempt" already configured and confirm
-   the plugin would never enable preemption contrary to that policy.
-
-Do not use Internet/gateway reachability as the failback timer's health input.
-
-### Gate D: pfsync/session continuity and transition overlap
-
-Before testing, confirm both nodes use the same PF-facing managed WAN device
-name and that pfsync is healthy.  Establish a long-lived TCP/NAT flow through
-MASTER, then perform controlled and hard failure tests.
-
-Record:
-
-- PF/pfsync state on both nodes before/after;
-- public DHCP address before/after;
-- whether the long-lived flow survives;
-- behavior with pfsync defer disabled and enabled;
-- timestamps for old-MASTER carrier detach and new-MASTER carrier attach.
-
-Capture the ISP-facing L2 segment during planned failover.  There must not be
-an unsafe period where both nodes deliberately expose the shared MAC.  If a
-small promotion settle delay is empirically required, keep it an internal
-constant first; do not add a user-facing tuning option without evidence.
-
-### Cleanup after isolated Gate A tests
-
-Before returning a test carrier to other use, ensure it is no longer a member
-and verify its original MAC/MTU/admin state:
-
-```sh
-/sbin/ifconfig wanha0lagg -laggport "$carrier" 2>/dev/null || :
-/sbin/ifconfig -Lmv "$carrier"
-/sbin/ifconfig -Lmv wanha0lagg
-```
-
-Do not destroy `wanha0lagg` if an OPNsense logical interface is assigned to
-it.  The package uninstall guard enforces the same safety rule.
-
-
-
-## Codex start here
-
-The static scaffold has been audited as far as practical without an OPNsense
-appliance.  Continue in this order and record evidence in the design/runbook
-before enabling automatic mutation:
-
-1. **Install/build validation on OPNsense 26.7+**
-   - Build the package using the fork's normal plugin tooling.
-   - Run `pluginctl -v`, PHP/plugin lint, the Python unit suite, and verify the
-     MVC page/API load without warnings.
-   - Confirm `wanha0lagg` is reported as a plugin/virtual device rather than a
-     physical interface or a core-managed `laggN`.
-   - Confirm the runtime ownership marker is created only when the plugin
-     creates the virtual device.
-
-2. **Gate A: virtual WAN/fencing**
-   - Use an isolated/dedicated carrier.
-   - Prove member attach/detach, MAC ordering, MTU ordering, native-MAC restore,
-     link/media observability while standby-fenced, reboot recreation, VLAN
-     carrier behavior if required, and zero unintended upstream frames.
-   - If the renamed single-member LAGG fails any durable requirement, change
-     the primitive before adding controller execution.
-
-3. **Gate B: native DHCP**
-   - Keep OPNsense DHCP authoritative.
-   - Packet-capture DHCP and prove `chaddr`, Option 61/hostname, configured
-     send/request options, and VLAN priority behavior.
-   - Determine whether a detached-started dhclient observes the shared MAC
-     after attachment.  If not, use only the supported
-     `configctl interface reconfigure <logical-interface>` path after MAC
-     installation.
-   - Verify gateway, route, DNS, NAT, dpinger, and `rc.newwanip` behavior.
-
-4. **Gate C: failback**
-   - Validate temporary runtime `net.inet.carp.preempt=0` behavior against a
-     living MASTER and against loss of that MASTER.
-   - Preserve the administrator's original preemption policy exactly.
-   - Do not use Internet/gateway reachability as the hold-health signal.
-
-5. **Gate D: pfsync/session continuity**
-   - Confirm both nodes' PF state uses the same `wanha0lagg` identity.
-   - Measure state survival across planned and hard failover with the same
-     public DHCP address.
-   - Capture the shared L2 segment and prove there is no deliberate dual-owner
-     interval.
-
-Only after Gates A/B are proven should Codex add:
-- a command executor around the existing pure planner;
-- one serialized transition lock;
-- the CARP syshook fast path;
-- the periodic reconcile service;
-- native CARP service-health integration for node-local WAN incapacity.
-
-Do not add lease replication, custom DHCP, Internet-health election, a second
-CARP protocol, driver-specific NIC branches, or OPNsense core patches unless a
-recorded gate failure demonstrates that one is required.
-
-### Known residual risks that are not code bugs
-
-- Ordinary two-node CARP cannot perfectly fence a network partition where both
-  nodes independently become MASTER; the plugin follows native CARP and does
-  not add a witness.
-- Same-IP session preservation depends on the ISP reissuing the same public
-  DHCP address to the shared client identity.
-- Hypervisors/switches must permit the shared source MAC to move between nodes
-  (for example Hyper-V MAC spoofing and no conflicting sticky/port-security
-  policy).
-- A locally administered generated MAC is standards-compliant but cannot be
-  guaranteed acceptable to every ISP; manual/imported MAC remains supported.
-
-
-## Development rule
-
-Do not add an automatic execution path merely to make the plugin appear
-complete.  The implementation must preserve the design's fail-closed and
-fence-first invariants, and unresolved behavior must remain behind an explicit
-prototype gate.
+The controller tests simulate kernel side effects and exercise cancellation,
+readback failures, fencing failures, reservation/collision checks, ownership,
+stop inhibition, local-health recovery, and transition serialization. Actual
+appliance results and the remaining qualification matrix belong in the design
+specification. Unit tests do not prove external first-frame behavior.
+
+Native CARP split brain remains possible during a partition. The plugin adds
+no witness or second election. Session preservation requires a stable public
+lease and working pfsync. These limitations also require pair testing.

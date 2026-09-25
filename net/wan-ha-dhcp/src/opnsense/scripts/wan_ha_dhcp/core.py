@@ -208,217 +208,57 @@ def desired_state(settings: Settings, observed: ObservedState) -> DesiredState:
 
 
 def plan_reconcile(settings: Settings, observed: ObservedState) -> Plan:
-    """
-    Build a deterministic mutation plan for the provisional single-member
-    LAGG design.
-
-    No command is executed here.  In particular, demotion plans remove every
-    carrier before any non-safety-critical cleanup: fence first.
-    """
+    """Plan pre-spoofed attachment; runtime verifies each transition boundary."""
     desired = desired_state(settings, observed)
     plan = Plan(desired=desired)
-
-    wanha = observed.wanha or InterfaceSnapshot(name=WANHA_DEVICE, exists=False)
+    wanha = observed.wanha or InterfaceSnapshot(WANHA_DEVICE)
+    carrier = observed.carrier or InterfaceSnapshot(settings.carrier)
 
     if desired.attachment is DesiredAttachment.UNMANAGED:
-        # Pre-migration / configuration-only state. Never touch the carrier or
-        # claim ownership of a same-name device.
+        return plan
+    if not wanha.exists or not observed.wanha_owned or wanha.lagg_protocol != "failover":
+        plan.desired = DesiredState(desired.role, DesiredAttachment.FENCED,
+                                    "verified plugin-owned failover LAGG is required")
+        plan.warnings.append("device preparation or ownership requires attention")
         return plan
 
-    if wanha.exists and not observed.wanha_owned:
-        plan.desired = DesiredState(
-            desired.role,
-            DesiredAttachment.FENCED,
-            "wanha0lagg exists but is not marked as plugin-owned",
-        )
-        plan.warnings.append(
-            "refusing to mutate an existing wanha0lagg without the runtime ownership marker"
-        )
+    shared_mac = settings.shared_mac.strip().lower()
+    correct = (
+        desired.attachment is DesiredAttachment.ATTACHED
+        and wanha.up and carrier.up
+        and wanha.lagg_members == (settings.carrier,)
+        and wanha.mac == shared_mac and carrier.mac == shared_mac
+        and (settings.managed_mtu is None or
+             wanha.mtu == carrier.mtu == settings.managed_mtu)
+    )
+    if correct:
         return plan
 
-    if wanha.exists and wanha.lagg_protocol is None:
-        plan.desired = DesiredState(
-            desired.role,
-            DesiredAttachment.FENCED,
-            "wanha0lagg exists but is not the expected LAGG abstraction",
-        )
-        plan.warnings.append(
-            "refusing to mutate an existing non-LAGG interface named wanha0lagg"
-        )
-        return plan
+    def command(device: str, *args: str, reason: str) -> None:
+        plan.commands.append(Command(("/sbin/ifconfig", device, *args), reason))
 
-    if wanha.exists and wanha.lagg_protocol != "failover":
-        plan.desired = DesiredState(
-            desired.role,
-            DesiredAttachment.FENCED,
-            f"wanha0lagg uses unsupported LAGG protocol {wanha.lagg_protocol}",
-        )
-        plan.warnings.append(
-            "refusing to mutate wanha0lagg unless its LAGG protocol is failover"
-        )
-        return plan
-
-    members = tuple(wanha.lagg_members)
-    member_present = settings.carrier in members
-    foreign_members = tuple(member for member in members if member != settings.carrier)
-
+    # Silence members before detach can restore their saved Ethernet identity.
+    if wanha.up or wanha.lagg_members:
+        command(WANHA_DEVICE, "down", reason="silence the logical WAN and its members")
+    for member in wanha.lagg_members:
+        command(member, "down", reason="verify member silence before detachment")
+        command(WANHA_DEVICE, "-laggport", member, reason="remove the ISP Layer-2 path")
+    if carrier.exists and (carrier.up or desired.attachment is DesiredAttachment.ATTACHED):
+        command(settings.carrier, "down", reason="prepare the reserved carrier without transmission")
     if desired.attachment is DesiredAttachment.FENCED:
-        # Remove every observed member.  This also fences a stale previous
-        # carrier after a node-local configuration change.
-        for member in members:
-            plan.commands.append(
-                Command(
-                    ("/sbin/ifconfig", WANHA_DEVICE, "-laggport", member),
-                    "fence ISP Layer-2 path before cleanup",
-                )
-            )
-        if (
-            observed.carrier is not None
-            and observed.carrier.exists
-            and observed.carrier.up
-        ):
-            plan.commands.append(
-                Command(
-                    ("/sbin/ifconfig", settings.carrier, "down"),
-                    "keep the explicitly configured standby ISP carrier administratively silent",
-                )
-            )
-        if wanha.exists and wanha.up:
-            plan.commands.append(
-                Command(
-                    ("/sbin/ifconfig", WANHA_DEVICE, "down"),
-                    "leave fenced logical WAN administratively down",
-                )
-            )
         return plan
 
-    shared_mac = normalize_mac(settings.shared_mac)
-    already_correct = (
-        wanha.exists
-        and wanha.up
-        and wanha.lagg_protocol == "failover"
-        and members == (settings.carrier,)
-        and observed.carrier is not None
-        and observed.carrier.up
-        and (
-            settings.managed_mtu is None
-            or wanha.mtu == settings.managed_mtu
-        )
-        and wanha.mac is not None
-        and wanha.mac.lower() == shared_mac
-    )
-    if already_correct:
-        return plan
-
-    # MASTER path.
-    if not wanha.exists:
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", "lagg", "create"),
-                "create a numbered LAGG; capture the returned device name",
-            )
-        )
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", "<created-lagg>", "name", WANHA_DEVICE),
-                "rename the newly-created LAGG to the stable WAN HA device name",
-            )
-        )
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", WANHA_DEVICE, "laggproto", "failover"),
-                "set the WAN HA LAGG protocol explicitly",
-            )
-        )
-
-    # A stale/foreign member is an unsafe path. Fence it before preparing the
-    # desired carrier.
-    for member in foreign_members:
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", WANHA_DEVICE, "-laggport", member),
-                "remove stale carrier before ownership transition without changing its administrative state",
-            )
-        )
-
-    # Keep the logical interface down while member/MAC are being prepared.
-    if wanha.up:
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", WANHA_DEVICE, "down"),
-                "prepare WAN without forwarding during ownership transition",
-            )
-        )
-
-    if (
-        observed.carrier is not None
-        and observed.carrier.exists
-        and not observed.carrier.up
-    ):
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", settings.carrier, "up"),
-                "ensure the configured active carrier is administratively up",
-            )
-        )
-
-    if not member_present:
-        target_mtu = settings.managed_mtu
-        if (
-            target_mtu is not None
-            and observed.carrier is not None
-            and observed.carrier.mtu != target_mtu
-        ):
-            plan.commands.append(
-                Command(
-                    (
-                        "/sbin/ifconfig",
-                        settings.carrier,
-                        "mtu",
-                        str(target_mtu),
-                    ),
-                    "align carrier MTU with the native managed WAN before LAGG attachment",
-                )
-            )
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", WANHA_DEVICE, "laggport", settings.carrier),
-                "attach local carrier after MASTER revalidation",
-            )
-        )
-
-    if settings.managed_mtu is not None and wanha.mtu != settings.managed_mtu:
-        plan.commands.append(
-            Command(
-                (
-                    "/sbin/ifconfig",
-                    WANHA_DEVICE,
-                    "mtu",
-                    str(settings.managed_mtu),
-                ),
-                "apply explicitly configured managed-WAN MTU to the logical LAGG",
-            )
-        )
-
-    if wanha.mac is None or wanha.mac.lower() != shared_mac:
-        plan.commands.append(
-            Command(
-                ("/sbin/ifconfig", WANHA_DEVICE, "ether", shared_mac),
-                "apply shared ISP-facing Ethernet identity",
-            )
-        )
-
-    plan.commands.append(
-        Command(
-            ("/sbin/ifconfig", WANHA_DEVICE, "up"),
-            "enable logical WAN after member and MAC are prepared",
-        )
-    )
-
+    # Setting the carrier first also makes detach restore the shared identity.
+    command(settings.carrier, "ether", shared_mac, reason="install shared identity before attachment")
+    if settings.managed_mtu is not None and carrier.mtu != settings.managed_mtu:
+        command(settings.carrier, "mtu", str(settings.managed_mtu),
+                reason="inherit explicit native WAN MTU before attachment")
+    command(WANHA_DEVICE, "laggport", settings.carrier,
+            reason="attach only after fresh MASTER and shared-MAC verification")
+    # The first member supplies the LAGG MAC and MTU. There is no carrier-up step.
+    command(WANHA_DEVICE, "up", reason="activate only after both MACs and role are verified")
     if is_virtual_router_mac(shared_mac):
-        plan.warnings.append(
-            "shared MAC is in a standardized VRRP/CARP virtual-router range and may be rejected upstream"
-        )
+        plan.warnings.append("shared MAC is in a standardized VRRP/CARP virtual-router range")
     return plan
 
 

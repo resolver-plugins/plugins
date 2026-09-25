@@ -1,0 +1,12 @@
+#!/bin/sh
+# Only the controller's explicit verified-incapacity result requests demotion.
+# Missing files/interpreter during package replacement must not masquerade as it.
+/usr/local/bin/python3 /usr/local/opnsense/scripts/wan_ha_dhcp/wan_ha_dhcp.py health
+result=$?
+if [ "$result" -eq 100 ]; then
+    exit 1
+fi
+if [ "$result" -ne 0 ]; then
+    logger -t wan_ha_dhcp 'Health controller unavailable; unverified demotion withheld'
+fi
+exit 0

@@ -1,11 +1,6 @@
 #!/usr/local/bin/python3
 
-"""Experimental CLI for os-wan-ha-dhcp.
-
-The current implementation is intentionally read-only by default.  It can
-generate a shared MAC, reduce CARP state, and print a provisional LAGG command
-plan.  Runtime mutation is left for the prototype-gated controller work.
-"""
+"""Experimental WAN HA DHCP controller and read-only planning CLI."""
 
 from __future__ import annotations
 
@@ -14,6 +9,11 @@ import json
 import os
 import subprocess
 import sys
+import signal
+import syslog
+import threading
+
+from runtime import Controller, run
 
 from core import (
     InterfaceSnapshot,
@@ -34,6 +34,7 @@ def read_ifconfig() -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=5,
     ).stdout
 
 
@@ -43,48 +44,10 @@ def read_carp_admin() -> tuple[bool, bool]:
         check=True,
         capture_output=True,
         text=True,
+        timeout=5,
     )
     payload = json.loads(result.stdout or "{}")
     return bool(int(payload.get("allow", 0))), bool(payload.get("maintenancemode", False))
-
-
-def pluginctl_get(path: str) -> dict:
-    result = subprocess.run(
-        ["/usr/local/sbin/pluginctl", "-g", path],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return {}
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def load_configured_settings() -> tuple[Settings, str, dict]:
-    shared = pluginctl_get("OPNsense.WanHaDhcpShared")
-    local = pluginctl_get("OPNsense.WanHaDhcpLocal")
-
-    managed_name = str(shared.get("managed_interface") or "wan")
-    managed = pluginctl_get(f"interfaces.{managed_name}")
-
-    mtu = managed.get("mtu")
-    try:
-        managed_mtu = int(mtu) if str(mtu).strip() else None
-    except (TypeError, ValueError):
-        managed_mtu = None
-
-    settings = Settings(
-        enabled=str(shared.get("enabled", "0")) == "1",
-        carrier=str(local.get("carrier") or ""),
-        shared_mac=str(shared.get("shared_mac") or ""),
-        managed_by_wanha=str(managed.get("if") or "") == WANHA_DEVICE,
-        managed_mtu=managed_mtu,
-    )
-    return settings, managed_name, managed
 
 
 def cmd_generate_mac(_args: argparse.Namespace) -> int:
@@ -100,8 +63,8 @@ def cmd_validate_mac(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     if args.from_config:
-        settings, managed_name, managed_config = load_configured_settings()
-        config_source = "opnsense"
+        print(json.dumps(Controller().status(), indent=2))
+        return 0
     else:
         if not args.carrier or not args.shared_mac:
             raise SystemExit("--carrier and --shared-mac are required unless --from-config is used")
@@ -126,7 +89,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         carp_states=carp_states,
         carp_allowed=carp_allowed,
         carp_maintenance=carp_maintenance,
-        wanha_owned=os.path.isfile("/var/run/wan-ha-dhcp/device.wanha0lagg"),
+        wanha_owned=Controller().owned(),
         carrier=carrier,
         wanha=wanha,
     )
@@ -161,6 +124,63 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def serve(controller):
+    wake = threading.Event()
+    stopping = False
+
+    def terminate(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+        wake.set()
+
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    signal.signal(signal.SIGUSR1, lambda *_: wake.set())
+    while not stopping:
+        wake.clear()
+        try:
+            controller.reconcile()
+        except Exception as exc:
+            syslog.syslog(syslog.LOG_ERR, str(exc))
+        # Native service health takes its own lock and calls our health hook.
+        # Never invoke it while holding the WAN transition lock.
+        try:
+            run(["/usr/local/sbin/carp_service_status"])
+        except Exception as exc:
+            syslog.syslog(syslog.LOG_ERR, "CARP service health refresh failed: " + str(exc))
+        wake.wait(5)
+    controller.fence(stop=True)
+
+
+def cmd_runtime(args):
+    if os.geteuid() != 0:
+        raise PermissionError("runtime operations require root")
+    controller = Controller()
+    if args.command == "serve":
+        serve(controller)
+    elif args.command == "health":
+        try:
+            return 0 if controller.health() else 100
+        except Exception as exc:
+            # Unverified fencing must not deliberately demote an attached node.
+            syslog.syslog(syslog.LOG_ERR, "WAN health unknown; demotion withheld: " + str(exc))
+            return 0
+    elif args.command == "suspend":
+        controller.fence(stop=True)
+    elif args.command == "apply":
+        service = "/usr/local/etc/rc.d/wan_ha_dhcp"
+        try:
+            run([service, "onestatus"])
+        except subprocess.CalledProcessError:
+            run([service, "onestart"])
+        print(json.dumps(controller.reconcile()))
+    else:
+        result = getattr(controller, args.command)()
+        if result is not None:
+            print(json.dumps(result))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Experimental WAN HA DHCP controller")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -176,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument(
         "--from-config",
         action="store_true",
-        help="load shared/local plugin settings and managed WAN settings through pluginctl",
+        help="read current native configuration and interface inventory",
     )
     status.add_argument("--carrier")
     status.add_argument("--shared-mac")
@@ -194,12 +214,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(func=cmd_status)
 
+    for command in ("prepare", "reconcile", "fence", "suspend", "resume", "remove", "health", "serve", "apply"):
+        action = sub.add_parser(command, help="root controller operation")
+        action.set_defaults(func=cmd_runtime)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except Exception as exc:
+        syslog.syslog(syslog.LOG_ERR, str(exc))
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

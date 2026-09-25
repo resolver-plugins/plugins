@@ -7,6 +7,6 @@
         <id>wanhalocal.carrier</id>
         <label>Local WAN Carrier</label>
         <type>select</type>
-        <help>This setting is local to this firewall and is never XMLRPC-synchronized. Eligible physical Ethernet and VLAN carriers are discovered from OPNsense.</help>
+        <help>This setting is local to this firewall and is never XMLRPC-synchronized. Dedicated Ethernet adapters are discovered from OPNsense. VLAN carriers are not qualified in this experimental release.</help>
     </field>
 </form>

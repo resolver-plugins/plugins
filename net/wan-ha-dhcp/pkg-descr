@@ -7,7 +7,7 @@ replace OPNsense DHCP, routing, NAT, PF, pfsync, or CARP.  It provides a
 stable logical WAN abstraction, a shared ordinary unicast MAC identity, and
 fail-closed Layer-2 fencing of the local WAN carrier.
 
-This package is experimental.  Its dataplane implementation remains gated by
+This package is experimental.  Production deployment remains gated by
 the prototype tests documented in docs/wan-ha-dhcp.md.
 
 Plugin Changelog
@@ -15,4 +15,4 @@ Plugin Changelog
 
 0.1
 
-* Initial experimental skeleton and decision engine.
+* Experimental carrier controller with native CARP and DHCP integration.

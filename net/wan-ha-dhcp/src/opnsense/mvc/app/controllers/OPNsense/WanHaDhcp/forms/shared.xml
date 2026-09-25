@@ -25,6 +25,6 @@
         <id>wanhashared.failback_delay</id>
         <label>Failback Delay</label>
         <type>text</type>
-        <help>Seconds a recovered preferred node must remain healthy before it may preempt a living MASTER.</help>
+        <help>Use zero in this experimental release. Delayed failback is not implemented; native CARP preemption policy applies.</help>
     </field>
 </form>

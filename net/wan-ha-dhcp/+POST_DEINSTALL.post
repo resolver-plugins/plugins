@@ -1,19 +1,4 @@
 #!/bin/sh
-
-# During an upgrade, preserve the live kernel dataplane for the replacement
-# package.  Intentional removal is already guarded by +PRE_DEINSTALL.
-if [ -n "${PKG_UPGRADE:-}" ]; then
-    exit 0
-fi
-
-if /sbin/ifconfig wanha0lagg >/dev/null 2>&1; then
-    if /sbin/ifconfig wanha0lagg 2>/dev/null | /usr/bin/grep -q 'laggproto '; then
-        /sbin/ifconfig wanha0lagg destroy >/dev/null 2>&1 || exit 1
-    else
-        echo "os-wan-ha-dhcp: wanha0lagg exists but is not a LAGG; leaving it untouched." >&2
-    fi
-fi
-
-rm -rf /var/run/wan-ha-dhcp >/dev/null 2>&1 || :
-
+# wanha0lagg cleanup is verified by +PRE_DEINSTALL while Python is installed.
+# Leave the transition lock inode intact until reboot.
 exit 0

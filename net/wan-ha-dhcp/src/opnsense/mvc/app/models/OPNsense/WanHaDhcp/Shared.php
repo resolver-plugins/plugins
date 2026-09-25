@@ -17,6 +17,13 @@ class Shared extends BaseModel
             return $messages;
         }
 
+        if ((int)(string)$this->failback_delay !== 0) {
+            $messages->appendMessage(new Message(
+                gettext('Delayed failback is not implemented in this experimental release; use zero.'),
+                $this->failback_delay->getInternalXMLTagName()
+            ));
+        }
+
         $mac = strtolower(trim((string)$this->shared_mac));
         if (empty($mac)) {
             $messages->appendMessage(new Message(

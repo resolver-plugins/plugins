@@ -1,4 +1,4 @@
-name: WAN HA DHCP scaffold tests
+name: WAN HA DHCP controller tests
 
 on:
   push:
@@ -32,7 +32,10 @@ jobs:
         run: |
           find net/wan-ha-dhcp/src -type f \( -name '*.php' -o -name '*.inc' \) -print0 |
             xargs -0 -n1 php -l
-      - name: Package script syntax lint
+      - name: Package and service shell lint
         run: |
           sh -n net/wan-ha-dhcp/+PRE_DEINSTALL.pre
           sh -n net/wan-ha-dhcp/+POST_DEINSTALL.post
+          find net/wan-ha-dhcp/src/etc/rc.d net/wan-ha-dhcp/src/etc/rc.syshook.d net/wan-ha-dhcp/src/etc/rc.carp_service_status.d -type f -print0 | xargs -0 -n1 sh -n
+          shellcheck -s sh -e SC1091 net/wan-ha-dhcp/+PRE_DEINSTALL.pre net/wan-ha-dhcp/+POST_DEINSTALL.post
+          find net/wan-ha-dhcp/src/etc/rc.d net/wan-ha-dhcp/src/etc/rc.syshook.d net/wan-ha-dhcp/src/etc/rc.carp_service_status.d -type f -exec shellcheck -s sh -e SC1091 {} +

@@ -94,23 +94,20 @@ class Local extends BaseModel
                 $group = 'hardware';
             }
         }
-        if (!in_array($group, ['hardware', 'vlan'], true)) {
-            return gettext('is not an eligible physical Ethernet or VLAN interface');
+        if ($group === 'vlan') {
+            return gettext('requires VLAN carrier qualification; this experimental release supports Ethernet adapters only');
+        }
+        if ($group !== 'hardware') {
+            return gettext('is not an eligible physical Ethernet interface');
         }
 
         if (!empty($runtime['laggproto']) || !empty($runtime['members']) || !empty($runtime['tunnel']) || !empty($runtime['vxlan'])) {
             return gettext('is already a virtual aggregation, bridge, or tunnel-like interface');
         }
 
-        if ($group === 'vlan' && empty($runtime['vlan'])) {
-            return gettext('is not currently reported as an L2 VLAN interface');
-        }
-
-        if ($group === 'hardware') {
-            $mac = strtolower((string)($runtime['macaddr'] ?? ''));
-            if (empty($mac) || $mac === '00:00:00:00:00:00' || !filter_var($mac, FILTER_VALIDATE_MAC)) {
-                return gettext('does not expose a usable Ethernet MAC address');
-            }
+        $mac = strtolower((string)($runtime['macaddr'] ?? ''));
+        if (empty($mac) || $mac === '00:00:00:00:00:00' || !filter_var($mac, FILTER_VALIDATE_MAC)) {
+            return gettext('does not expose a usable Ethernet MAC address');
         }
 
         return null;

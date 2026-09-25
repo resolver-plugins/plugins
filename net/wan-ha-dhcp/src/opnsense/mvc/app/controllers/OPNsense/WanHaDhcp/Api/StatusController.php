@@ -165,7 +165,11 @@ class StatusController extends ApiControllerBase
         $carrierRuntime = !empty($interfaces[$localCarrier]) ? $interfaces[$localCarrier] : [];
         $wanhaRuntime = !empty($interfaces['wanha0lagg']) ? $interfaces['wanha0lagg'] : [];
         $wanhaMembers = !empty($wanhaRuntime['laggport']) ? array_keys($wanhaRuntime['laggport']) : [];
-        $wanhaOwned = is_file('/var/run/wan-ha-dhcp/device.wanha0lagg');
+        $runtime = json_decode($backend->configdRun('wan_ha_dhcp status'), true) ?? [];
+        $wanhaOwned = !empty($runtime['owned']);
+        if (!empty($runtime['reason'])) {
+            $warnings[] = $runtime['reason'];
+        }
         if (!empty($wanhaRuntime) && !$wanhaOwned) {
             $warnings[] = gettext('wanha0lagg exists without the plugin runtime ownership marker; the controller will refuse to mutate it.');
         }
@@ -173,6 +177,7 @@ class StatusController extends ApiControllerBase
         return [
             'global_role' => $globalRole,
             'warnings' => $warnings,
+            'runtime' => $runtime,
             'carp' => $carp,
             'interfaces' => $interfaces,
             'pfsync_runtime' => json_decode($backend->configdRun('filter list pfsync json'), true) ?? [],

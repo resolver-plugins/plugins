@@ -14,4 +14,15 @@ if [ -r "${config}" ] && grep -Eq '<if>[[:space:]]*wanha0lagg[[:space:]]*</if>' 
     exit 1
 fi
 
+# Offline package roots have no live interface or service to remove.
+if [ -n "${PKG_ROOTDIR:-}" ] && [ "${PKG_ROOTDIR}" != / ]; then
+    exit 0
+fi
+
+controller=/usr/local/opnsense/scripts/wan_ha_dhcp/wan_ha_dhcp.py
+/usr/local/bin/python3 "$controller" suspend || exit 1
+if /usr/local/etc/rc.d/wan_ha_dhcp onestatus >/dev/null 2>&1; then
+    /usr/local/etc/rc.d/wan_ha_dhcp onestop || exit 1
+fi
+/usr/local/bin/python3 "$controller" remove || exit 1
 exit 0
