@@ -1,16 +1,12 @@
 <model>
     <mount>//OPNsense/DhcpInterfaceHaShared</mount>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <description>DHCP Interface HA shared settings</description>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
             <Required>Y</Required>
         </enabled>
-        <managed_interface type="InterfaceField">
-            <Default>wan</Default>
-            <Required>Y</Required>
-        </managed_interface>
         <shared_mac type="MacAddressField">
             <Required>N</Required>
         </shared_mac>

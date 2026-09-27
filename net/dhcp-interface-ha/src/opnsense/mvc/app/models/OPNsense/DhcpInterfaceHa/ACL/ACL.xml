@@ -1,9 +1,18 @@
 <acl>
     <page-services-dhcp-interface-ha>
-        <name>Services: DHCP Interface HA</name>
+        <name>Services: DHCP Interface HA: Settings</name>
         <patterns>
-            <pattern>ui/dhcpinterfaceha/*</pattern>
+            <pattern>ui/dhcpinterfaceha</pattern>
             <pattern>api/dhcpinterfaceha/*</pattern>
         </patterns>
     </page-services-dhcp-interface-ha>
+    <page-diagnostics-logs-dhcp-interface-ha>
+        <name>Services: DHCP Interface HA: Log File</name>
+        <patterns>
+            <pattern>ui/dhcpinterfaceha/log</pattern>
+            <pattern>api/diagnostics/log/dhcpinterfaceha/core</pattern>
+            <pattern>api/diagnostics/log/dhcpinterfaceha/core/export</pattern>
+            <pattern>api/diagnostics/log/dhcpinterfaceha/core/live</pattern>
+        </patterns>
+    </page-diagnostics-logs-dhcp-interface-ha>
 </acl>

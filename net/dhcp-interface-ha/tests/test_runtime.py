@@ -1,5 +1,6 @@
 """Controller boundary tests: model native side effects, not just command plans."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/opnsense/scripts/dhcp_interface_ha'))
+import runtime
 from runtime import Controller, DHCPHA_DEVICE
 
 MAC = '02:11:22:33:44:55'
@@ -14,9 +16,9 @@ CONFIG = '''<opnsense><interfaces>
 <wan><enable>1</enable><if>dhcpha0lagg</if><ipaddr>dhcp</ipaddr><mtu>1400</mtu></wan>
 <lan><enable>1</enable><if>hn0</if></lan></interfaces>
 <virtualip><vip><mode>carp</mode><interface>lan</interface><vhid>10</vhid></vip></virtualip>
-<OPNsense><DhcpInterfaceHaShared><enabled>1</enabled><managed_interface>wan</managed_interface>
+<OPNsense><DhcpInterfaceHaShared><enabled>1</enabled>
 <shared_mac>02:11:22:33:44:55</shared_mac><failback_delay>0</failback_delay></DhcpInterfaceHaShared>
-<DhcpInterfaceHaLocal><carrier>hn1</carrier></DhcpInterfaceHaLocal></OPNsense></opnsense>'''
+<DhcpInterfaceHaLocal><managed_interface>wan</managed_interface><carrier>hn1</carrier></DhcpInterfaceHaLocal></OPNsense></opnsense>'''
 
 
 class Host:
@@ -55,23 +57,34 @@ class Host:
         elif action == 'laggproto':
             item['laggproto'] = args[0]
         elif action in ('up', 'down'):
-            item['flags'] = ['up'] if action == 'up' else []
+            item['flags'] = [flag for flag in item['flags'] if flag != 'up']
+            if action == 'up':
+                item['flags'].append('up')
             for member in item.get('laggport', {}):
                 self.items[member]['flags'] = list(item['flags'])
+        elif action == 'promisc':
+            if 'promisc' not in item['flags']:
+                item['flags'].append('promisc')
+            for name in item.get('laggport', {}):
+                if 'promisc' not in self.items[name]['flags']:
+                    self.items[name]['flags'].append('promisc')
         elif action == 'ether':
             item['macaddr'] = args[0]
         elif action == 'mtu':
             item['mtu'] = args[0]
         elif action == 'laggport':
             member = self.items[args[0]]
-            assert not member['flags'], 'unsafe live attachment'
+            assert 'up' not in member['flags'], 'unsafe live attachment'
             assert member['macaddr'] == MAC, 'unsafe original-MAC attachment'
             item['laggport'][args[0]] = {}
             item['macaddr'] = member['macaddr']
             item['mtu'] = member['mtu']
+            if 'promisc' in item['flags']:
+                member['flags'].append('promisc')
         elif action == '-laggport':
-            assert not self.items[args[0]]['flags'], 'unsafe live detach'
+            assert 'up' not in self.items[args[0]]['flags'], 'unsafe live detach'
             del item['laggport'][args[0]]
+            self.items[args[0]]['flags'] = [f for f in self.items[args[0]]['flags'] if f != 'promisc']
         else:
             raise AssertionError(argv)
         self.after(argv)
@@ -86,7 +99,13 @@ class RuntimeTests(unittest.TestCase):
         self.config = self.directory / 'config.xml'
         self.config.write_text(CONFIG)
         self.host = Host()
-        self.controller = Controller(self.config, self.directory, self.host.command, lambda _: 42)
+        self.events = []
+        self.controller = Controller(
+            self.config, self.directory, self.host.command, lambda _: 42,
+            event_sink=lambda severity, message: self.events.append((severity, message)),
+        )
+        (self.directory / 'transition.lock').touch()
+        (self.directory / 'controller.pid').write_text(str(os.getpid()))
         self.controller.marker.write_text(json.dumps({'index': 42, 'group': 'wh0123456789abx'}))
 
     def edit(self, old, new):
@@ -95,6 +114,9 @@ class RuntimeTests(unittest.TestCase):
     def assert_fenced(self):
         self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {})
         self.assertNotIn('up', self.host.items['hn1']['flags'])
+
+    def event_messages(self, code):
+        return [message for _, message in self.events if message.startswith(f'event={code} ')]
 
     def test_non_wan_dhcp_interface_uses_same_controller(self):
         self.edit('<wan>', '<opt1>')
@@ -105,9 +127,39 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(status['actual_attachment'], 'ATTACHED')
         self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {'hn1': {}})
 
+    def test_identical_shared_settings_allow_different_local_mappings(self):
+        for logical, carrier in [('opt7', 'hn1'), ('opt2', 'ix3')]:
+            with self.subTest(logical=logical, carrier=carrier):
+                self.config.write_text(CONFIG.replace('<wan>', f'<{logical}>')
+                    .replace('</wan>', f'</{logical}>')
+                    .replace('<managed_interface>wan<', f'<managed_interface>{logical}<')
+                    .replace('<carrier>hn1<', f'<carrier>{carrier}<'))
+                self.host = Host()
+                self.host.items[carrier] = self.host.items.pop('hn1')
+                self.controller.command = self.host.command
+                status = self.controller.reconcile()
+                self.assertEqual(status['state'], 'ACTIVE')
+                self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {carrier: {}})
+                self.assertEqual(self.host.items[carrier]['macaddr'], MAC)
+
+    def test_shared_sync_cannot_retarget_local_interface(self):
+        # A legacy sender may still transmit its own assignment. Local wins.
+        self.edit('<DhcpInterfaceHaShared>',
+                  '<DhcpInterfaceHaShared><managed_interface>opt9</managed_interface>')
+        self.assertEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {'hn1': {}})
+        # An unconfigured receiver must fence, even with a valid legacy WAN.
+        self.edit('<managed_interface>wan</managed_interface>', '')
+        self.edit('<managed_interface>opt9</managed_interface>',
+                  '<managed_interface>wan</managed_interface>')
+        self.assertNotEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        self.assert_fenced()
+
     def test_active_round_trip_preserves_shared_identity_and_is_idempotent(self):
         result = self.controller.reconcile()
         self.assertEqual(result['actual_attachment'], 'ATTACHED')
+        self.assertEqual(result['state'], 'ACTIVE')
+        self.assertEqual(result['global_role'], 'MASTER')
         self.assertEqual(self.host.items['hn1']['mtu'], '1400')
         self.host.commands.clear()
         self.controller.reconcile()
@@ -118,6 +170,33 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.host.items['hn1']['macaddr'], MAC)
         # Role-independent health lets a recovered BACKUP remain eligible.
         self.assertTrue(self.controller.health())
+
+    def test_shared_mac_receive_filter_is_set_before_activation_and_repaired(self):
+        def verify_before_up(argv):
+            if argv[1:3] == [DHCPHA_DEVICE, 'up']:
+                self.assertIn('promisc', self.host.items[DHCPHA_DEVICE]['flags'])
+                self.assertIn('promisc', self.host.items['hn1']['flags'])
+        self.host.after = verify_before_up
+        self.assertEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        # Native interface reconfigure can clear the receive filter. Repair it
+        # without detaching the carrier or interrupting an established lease.
+        for device in (DHCPHA_DEVICE, 'hn1'):
+            self.host.items[device]['flags'].remove('promisc')
+        self.host.commands.clear()
+        self.assertNotEqual(self.controller.status()['state'], 'ACTIVE')
+        self.assertEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        self.assertEqual(self.host.commands, [('/sbin/ifconfig', DHCPHA_DEVICE, 'promisc')])
+        self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+        self.controller.reconcile()
+        self.assert_fenced()
+        self.assertNotIn('promisc', self.host.items['hn1']['flags'])
+
+    def test_unverified_receive_filter_never_activates(self):
+        self.host.ignore = lambda argv: argv[2] == 'promisc'
+        with self.assertRaisesRegex(RuntimeError, 'receive filter'):
+            self.controller.reconcile()
+        self.assert_fenced()
+        self.assertNotIn(('/sbin/ifconfig', DHCPHA_DEVICE, 'up'), self.host.commands)
 
     def test_config_and_role_changes_cancel_before_activation(self):
         for change in ('config', 'role'):
@@ -136,7 +215,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertNotIn(('/sbin/ifconfig', DHCPHA_DEVICE, 'up'), self.host.commands)
 
     def test_each_promotion_failure_fences_without_claiming_success(self):
-        for action in ('down', 'ether', 'mtu', 'laggport', 'up'):
+        for action in ('down', 'ether', 'mtu', 'promisc', 'laggport', 'up'):
             with self.subTest(action=action):
                 self.setUp()
                 fired = False
@@ -267,6 +346,39 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(TimeoutError): other.reconcile()
         self.assertEqual(self.host.commands, [])
 
+    def test_status_waits_for_short_transition_then_reads_fresh_state(self):
+        other = Controller(self.config, self.directory, self.host.command, lambda _: 42)
+        # Simulate the writer finishing on the first retry, without timing races.
+        writer = self.controller.locked()
+        writer.__enter__()
+        released = False
+
+        def finish_transition(_delay):
+            nonlocal released
+            self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+            writer.__exit__(None, None, None)
+            released = True
+
+        try:
+            with patch('runtime.time.sleep', side_effect=finish_transition) as wait:
+                status = other.status()
+            self.assertTrue(released)
+            wait.assert_called_once()
+            self.assertEqual(status['global_role'], 'BACKUP')
+            self.assertEqual(status['actual_attachment'], 'FENCED')
+            self.assertEqual(self.host.commands, [])
+        finally:
+            if not released:
+                writer.__exit__(None, None, None)
+
+    def test_status_lock_wait_is_bounded_and_does_not_read_during_transition(self):
+        other = Controller(self.config, self.directory, self.host.command, lambda _: 42)
+        with self.controller.locked(), patch('runtime.STATUS_LOCK_TIMEOUT', 0), \
+                patch.object(other, 'snapshot') as snapshot:
+            with self.assertRaisesRegex(TimeoutError, 'transition is busy'):
+                other.status()
+            snapshot.assert_not_called()
+
     def test_local_link_health_fences_before_reporting_incapable(self):
         self.controller.reconcile()
         self.host.items['hn1']['status'] = 'no carrier'
@@ -274,6 +386,238 @@ class RuntimeTests(unittest.TestCase):
         self.assert_fenced()
         self.host.items['hn1']['status'] = 'active'
         self.assertTrue(self.controller.health())
+
+    def test_status_keeps_observed_carp_role_when_disabled_and_reports_operational_state(self):
+        self.edit('<enabled>1</enabled>', '<enabled>0</enabled>')
+        result = self.controller.status()
+        self.assertEqual(result['global_role'], 'MASTER')
+        self.assertEqual(result['state'], 'DISABLED')
+        self.assertEqual(result['expected_carp_instances'], [{'interface': 'hn0', 'vhid': '10'}])
+        self.assertEqual(result['live_carp_instances'][0]['status'], 'MASTER')
+
+        self.edit('<enabled>0</enabled>', '<enabled>1</enabled>')
+        self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+        result = self.controller.status()
+        self.assertEqual(result['global_role'], 'BACKUP')
+        self.assertEqual(result['state'], 'STANDBY')
+
+    def test_status_is_unknown_for_live_carp_inventory_mismatch(self):
+        self.host.items['hn0']['carp'] = {}
+        result = self.controller.status()
+        self.assertEqual(result['state'], 'UNKNOWN')
+        self.assertEqual(result['reason_code'], 'carp_inventory_mismatch')
+        self.assertEqual(result['global_role'], 'INDETERMINATE')
+
+    def test_status_faults_attachment_that_remains_on_backup(self):
+        self.controller.reconcile()
+        self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+        result = self.controller.status()
+        self.assertEqual(result['actual_attachment'], 'ATTACHED')
+        self.assertEqual(result['state'], 'FAULT')
+        self.assertEqual(result['reason_code'], 'attachment_when_carp_ineligible')
+
+    def test_status_faults_an_active_attachment_without_carrier_link(self):
+        self.controller.reconcile()
+        self.host.items['hn1']['status'] = 'no carrier'
+        result = self.controller.status()
+        self.assertEqual(result['state'], 'FAULT')
+        self.assertEqual(result['reason_code'], 'carrier_link_down')
+
+    def test_explicit_setup_prepare_is_disabled_only_and_verifies_detached_ownership(self):
+        self.edit('<enabled>1</enabled>', '<enabled>0</enabled>')
+        self.host.items.pop(DHCPHA_DEVICE)
+        self.controller.marker.unlink()
+        result = self.controller.prepare_setup()
+        self.assertEqual(result, {
+            'prepared': True, 'device': DHCPHA_DEVICE, 'detached': True, 'owned': True,
+        })
+        self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {})
+
+        self.setUp()
+        with self.assertRaisesRegex(RuntimeError, 'disable'):
+            self.controller.prepare_setup()
+        self.assertEqual(self.host.commands, [])
+
+    def test_setup_prepare_rejects_foreign_or_attached_same_name_device(self):
+        self.edit('<enabled>1</enabled>', '<enabled>0</enabled>')
+        self.host.items[DHCPHA_DEVICE]['groups'] = []
+        with self.assertRaisesRegex(RuntimeError, 'unverified or attached'):
+            self.controller.prepare_setup()
+        self.assertEqual(self.host.commands, [])
+
+    def test_explicit_prepare_and_reconcile_log_only_verified_changes(self):
+        self.host.items.pop(DHCPHA_DEVICE)
+        self.controller.marker.unlink()
+        self.controller.prepare()
+        self.controller.prepare()
+        self.assertEqual(len(self.event_messages('device_prepared')), 1)
+        self.assertIn('safety=owned_detached outcome=verified', self.event_messages('device_prepared')[0])
+
+        self.controller.reconcile()
+        self.assertEqual(len(self.event_messages('attachment_changed')), 1)
+        self.assertIn('old=FENCED new=hn1', self.event_messages('attachment_changed')[0])
+        self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+        self.controller.reconcile()
+        self.assertEqual(len(self.event_messages('attachment_changed')), 2)
+        self.assertIn('old=hn1 new=FENCED', self.event_messages('attachment_changed')[1])
+
+    def test_receive_mode_repair_is_logged_without_a_false_attachment_change(self):
+        self.controller.reconcile()
+        self.events.clear()
+        for device in (DHCPHA_DEVICE, 'hn1'):
+            self.host.items[device]['flags'].remove('promisc')
+        self.controller.reconcile()
+        self.assertEqual(len(self.event_messages('repair_completed')), 1)
+        self.assertIn('condition=receive_mode_missing', self.event_messages('repair_completed')[0])
+        self.assertEqual(self.event_messages('attachment_changed'), [])
+
+    def test_blocked_or_stopped_master_does_not_log_unperformed_repairs(self):
+        for blocked in ('invalid_config', 'stopped'):
+            with self.subTest(blocked=blocked):
+                self.setUp()
+                self.controller.reconcile()
+                self.events.clear()
+                if blocked == 'invalid_config':
+                    self.edit('<failback_delay>0', '<failback_delay>120')
+                else:
+                    self.controller.stopped.touch()
+                reason = self.controller.snapshot().local_error or 'controller stopped'
+                self.controller.reconcile()
+                self.assert_fenced()
+                changes = self.event_messages('attachment_changed')
+                self.assertEqual(len(changes), 1)
+                self.assertIn('reason=' + reason, changes[0])
+                self.events.clear()
+                self.controller.reconcile()
+                self.controller.reconcile()
+                self.assertEqual(self.events, [])
+
+    def test_reconcile_logs_verified_carrier_replacement(self):
+        self.controller.reconcile()
+        self.events.clear()
+        self.host.items['hn2'] = dict(
+            flags=['up', 'promisc'], is_physical=True,
+            macaddr='00:11:22:33:44:02', mtu='1500', status='active',
+        )
+        self.host.items[DHCPHA_DEVICE]['laggport'] = {'hn2': {}}
+        self.controller.reconcile()
+        changes = self.event_messages('attachment_changed')
+        self.assertEqual(len(changes), 1)
+        self.assertIn('old=hn2 new=hn1', changes[0])
+        self.assertEqual(self.event_messages('repair_completed'), [])
+
+    def test_status_and_healthy_health_probe_emit_no_events(self):
+        self.controller.status()
+        self.assertTrue(self.controller.health())
+        self.assertEqual(self.events, [])
+
+    def test_status_distinguishes_known_empty_ipv4_from_unknown_inventory(self):
+        self.host.items[DHCPHA_DEVICE]['ipv4'] = []
+        self.assertEqual(self.controller.status()['ipv4_addresses'], [])
+        self.host.items[DHCPHA_DEVICE]['ipv4'] = [{'ipaddr': '192.0.2.10'}]
+        self.assertEqual(self.controller.status()['ipv4_addresses'], ['192.0.2.10'])
+        self.host.items[DHCPHA_DEVICE]['ipv4'] = [{'ipaddr': 'not-an-address'}]
+        self.assertIsNone(self.controller.status()['ipv4_addresses'])
+
+    def test_failed_reconcile_logs_once_and_logging_errors_do_not_change_fencing(self):
+        self.host.fail = lambda argv: argv[2] == 'promisc'
+        with self.assertRaisesRegex(RuntimeError, 'owned attachment fenced'):
+            self.controller.reconcile()
+        self.assert_fenced()
+        self.assertEqual(len(self.event_messages('operation_failed')), 1)
+        self.assertIn('safety=fenced outcome=failed', self.event_messages('operation_failed')[0])
+
+        self.events.clear()
+        self.controller.event_sink = lambda *_: (_ for _ in ()).throw(OSError('syslog unavailable'))
+        with self.assertRaisesRegex(RuntimeError, 'owned attachment fenced'):
+            self.controller.reconcile()
+        self.assert_fenced()
+
+    def test_daemon_failure_reminder_changed_safety_and_recovery(self):
+        self.controller.reconcile()
+        self.events.clear()
+        for device in (DHCPHA_DEVICE, 'hn1'):
+            self.host.items[device]['flags'].remove('promisc')
+        self.host.fail = lambda argv: argv[2] in ('promisc', 'down')
+        now = [100.0]
+        with patch('runtime.time.monotonic', side_effect=lambda: now[0]):
+            for _ in range(2):
+                with self.assertRaises(RuntimeError):
+                    self.controller.reconcile(daemon=True)
+                self.controller.report_daemon_failure(
+                    'carp_status_refresh', OSError('refresh failure'),
+                )
+            self.assertEqual(len(self.event_messages('operation_failed')), 2)
+
+            now[0] = 159.0
+            with self.assertRaises(RuntimeError):
+                self.controller.reconcile(daemon=True)
+            self.controller.report_daemon_failure('carp_status_refresh', OSError('refresh failure'))
+            self.assertEqual(len(self.event_messages('operation_failed')), 2)
+
+            now[0] = 160.0
+            with self.assertRaises(RuntimeError):
+                self.controller.reconcile(daemon=True)
+            self.controller.report_daemon_failure('carp_status_refresh', OSError('refresh failure'))
+            self.assertEqual(len(self.event_messages('operation_failed')), 4)
+            reconcile_failures = [
+                message for message in self.event_messages('operation_failed')
+                if 'operation=reconcile ' in message
+            ]
+            self.assertIn('safety=unverified', reconcile_failures[0])
+
+            # A verified fence changes the outcome and is reported immediately.
+            self.host.fail = lambda argv: argv[2] == 'promisc'
+            now[0] = 161.0
+            with self.assertRaises(RuntimeError):
+                self.controller.reconcile(daemon=True)
+            self.controller.report_daemon_failure('carp_status_refresh', OSError('refresh failure'))
+            self.assertEqual(len(self.event_messages('operation_failed')), 5)
+            reconcile_failures = [
+                message for message in self.event_messages('operation_failed')
+                if 'operation=reconcile ' in message
+            ]
+            self.assertIn('safety=fenced', reconcile_failures[-1])
+
+            self.host.fail = None
+            self.controller.reconcile(daemon=True)
+            self.controller.report_daemon_recovery('carp_status_refresh')
+        recoveries = self.event_messages('operation_recovered')
+        self.assertEqual(len(recoveries), 2)
+        self.assertIn('operation=reconcile ', recoveries[0])
+        self.assertIn('operation=carp_status_refresh ', recoveries[1])
+
+    def test_daemon_lock_acquisition_failure_is_reported_without_unlocked_fencing(self):
+        with patch.object(self.controller, 'locked', side_effect=TimeoutError('transition lock busy')):
+            for _ in range(2):
+                with self.assertRaisesRegex(TimeoutError, 'transition lock busy'):
+                    self.controller.reconcile(daemon=True)
+
+        failures = self.event_messages('operation_failed')
+        self.assertEqual(len(failures), 1)
+        self.assertIn('operation=reconcile', failures[0])
+        self.assertIn('safety=unknown outcome=failed', failures[0])
+        self.assertEqual(self.host.commands, [])
+
+    def test_event_format_is_single_line_bounded_and_keeps_code_and_outcome(self):
+        extra_fields = {f'extra{index}': 'z' * 4096 for index in range(20)}
+        self.controller._event(
+            'operation_failed', operation='reconcile', interface='wan', carrier='hn1',
+            condition='command_failure', reason='x' * 4096,
+            safety='unverified', outcome='failed', **extra_fields,
+        )
+        message = self.events[-1][1]
+        self.assertLessEqual(len(message), 1024)
+        self.assertNotIn('\n', message)
+        self.assertTrue(message.startswith('event=operation_failed '))
+        self.assertIn('reason=', message)
+        self.assertTrue(message.endswith('safety=unverified outcome=failed'))
+
+    def test_native_event_writer_uses_the_registered_program_identity(self):
+        with patch('runtime.syslog.openlog') as openlog, patch('runtime.syslog.syslog') as sink:
+            runtime.emit_event('state_observed', state='ACTIVE', outcome='observed')
+        openlog.assert_called_once_with('dhcp-interface-ha')
+        sink.assert_called_once_with(runtime.syslog.LOG_INFO, 'event=state_observed state=ACTIVE outcome=observed')
 
 
 if __name__ == '__main__':

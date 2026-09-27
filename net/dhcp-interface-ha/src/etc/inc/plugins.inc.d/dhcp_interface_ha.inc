@@ -64,8 +64,13 @@ function dhcp_interface_ha_prepare_device($device)
     }
 
     // Preparation and carrier movement use the same controller lock and identity check.
-    if (mwexec('/usr/local/bin/python3 /usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py prepare') !== 0) {
-        log_msg('DHCP Interface HA could not prepare its owned virtual device', LOG_ERR);
+    $result = mwexecf('/usr/local/bin/python3 /usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py prepare');
+    if ($result !== 0) {
+        // The controller logs its own failed attempt. Shell execution failures
+        // cannot reach that event boundary and still need a native boot error.
+        if (in_array($result, [126, 127], true)) {
+            log_msg('DHCP Interface HA controller could not be executed', LOG_ERR);
+        }
         return null;
     }
 

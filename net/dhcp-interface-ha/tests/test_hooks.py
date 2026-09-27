@@ -1,4 +1,5 @@
 """Execute lifecycle hooks with local command fixtures; never contact appliances."""
+import json
 import os
 from pathlib import Path
 import shlex
@@ -11,6 +12,39 @@ PLUGIN = Path(__file__).resolve().parents[1]
 
 
 class HookTests(unittest.TestCase):
+    def test_device_preparation_uses_supported_core_command_helper(self):
+        # OPNsense 26.7 provides mwexecf(), not the removed mwexec(). Invoke
+        # the real boot callback with only the supported command/log boundary.
+        fixture = r'''
+            $commands = [];
+            $messages = [];
+            function mwexecf($format, $args = [], $mute = false) {
+                $GLOBALS['commands'][] = $format;
+                return (int)getenv('PREPARE_RESULT');
+            }
+            function log_msg($message, $level) {
+                $GLOBALS['messages'][] = $message;
+            }
+            require $argv[1];
+            $result = dhcp_interface_ha_prepare_device($argv[2]);
+            echo json_encode([$result, $commands, $messages]);
+        '''
+        hook = PLUGIN / 'src/etc/inc/plugins.inc.d/dhcp_interface_ha.inc'
+        command = '/usr/local/bin/python3 /usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py prepare'
+        for device, status in (('dhcpha0lagg', 0), ('dhcpha0lagg', 1), ('dhcpha0lagg', 127), ('unrelated0', 0)):
+            with self.subTest(device=device, controller_exit=status):
+                result = subprocess.run(
+                    ['php', '-r', fixture, str(hook), device],
+                    env={**os.environ, 'PREPARE_RESULT': str(status)},
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                prepared, commands, messages = json.loads(result.stdout)
+                selected = device == 'dhcpha0lagg'
+                self.assertEqual(prepared, device if selected and status == 0 else None)
+                self.assertEqual(commands, [command] if selected else [])
+                self.assertEqual(bool(messages), selected and status in (126, 127))
+
     def test_health_hook_demotes_only_on_verified_incapacity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

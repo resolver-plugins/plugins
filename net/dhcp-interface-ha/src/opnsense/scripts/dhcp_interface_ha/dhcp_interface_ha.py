@@ -13,7 +13,7 @@ import signal
 import syslog
 import threading
 
-from runtime import Controller, run
+from runtime import Controller, emit_event, run
 
 from core import (
     InterfaceSnapshot,
@@ -124,9 +124,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def serve(controller):
+def serve(controller, event_sink=None):
     wake = threading.Event()
     stopping = False
+    previous_state = None
+    previous_addresses = object()
+
+    def event(code, severity=syslog.LOG_INFO, **fields):
+        emit_event(code, severity, event_sink, **fields)
 
     def terminate(_signum, _frame):
         nonlocal stopping
@@ -136,20 +141,86 @@ def serve(controller):
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     signal.signal(signal.SIGUSR1, lambda *_: wake.set())
+    event("service_started", operation="serve", outcome="started")
     while not stopping:
         wake.clear()
         try:
-            controller.reconcile()
-        except Exception as exc:
-            syslog.syslog(syslog.LOG_ERR, str(exc))
+            status = controller.reconcile(daemon=True)
+            interface = status.get("managed_interface") or "unknown"
+            carrier = status.get("carrier", {}).get("name") or "unknown"
+            state = (
+                status.get("state", "UNKNOWN"),
+                status.get("global_role", "INDETERMINATE"),
+                status.get("actual_attachment", "UNVERIFIED"),
+                status.get("reason_code", "unknown"),
+                interface,
+                carrier,
+            )
+            if previous_state is None:
+                event(
+                    "state_observed", interface=interface, carrier=carrier,
+                    state=state[0], role=state[1], attachment=state[2],
+                    reason=state[3], outcome="observed",
+                )
+            elif state != previous_state:
+                event(
+                    "state_changed", interface=interface, carrier=carrier,
+                    old_state=previous_state[0], state=state[0],
+                    old_role=previous_state[1], role=state[1],
+                    old_interface=previous_state[4], old_carrier=previous_state[5],
+                    attachment=state[2], reason=state[3],
+                    safety="verified" if state[2] != "UNVERIFIED" else "unverified",
+                    outcome="observed",
+                )
+            previous_state = state
+
+            addresses = status.get("ipv4_addresses")
+            if addresses is not None:
+                addresses = tuple(addresses)
+                if previous_addresses != addresses:
+                    old_text = (
+                        "unobserved" if not isinstance(previous_addresses, tuple)
+                        else ",".join(previous_addresses) or "none"
+                    )
+                    new_text = ",".join(addresses) or "none"
+                    if not isinstance(previous_addresses, tuple):
+                        outcome = "observed"
+                    elif previous_addresses and not addresses:
+                        outcome = "lost"
+                    elif not previous_addresses and addresses:
+                        outcome = "acquired"
+                    else:
+                        outcome = "changed"
+                    severity = (
+                        syslog.LOG_WARNING if outcome == "lost" and state[0] == "ACTIVE"
+                        else syslog.LOG_INFO
+                    )
+                    event(
+                        "ipv4_changed", severity, interface=interface, carrier=carrier,
+                        old=old_text, address=new_text, state=state[0], role=state[1],
+                        outcome=outcome,
+                    )
+                previous_addresses = addresses
+        except Exception:
+            # Controller owns operation failure events; do not log the same exception here.
+            pass
         # Native service health takes its own lock and calls our health hook.
         # Never invoke it while holding the interface transition lock.
         try:
             run(["/usr/local/sbin/carp_service_status"])
         except Exception as exc:
-            syslog.syslog(syslog.LOG_ERR, "CARP service health refresh failed: " + str(exc))
+            controller.report_daemon_failure("carp_status_refresh", exc)
+        else:
+            controller.report_daemon_recovery("carp_status_refresh")
         wake.wait(5)
-    controller.fence(stop=True)
+    try:
+        controller.fence(stop=True)
+    except Exception:
+        event(
+            "service_stopped", operation="serve", safety="unverified", outcome="stopped",
+        )
+        raise
+    event("service_stopped", operation="serve", safety="fenced", outcome="stopped")
 
 
 def cmd_runtime(args):
@@ -161,9 +232,8 @@ def cmd_runtime(args):
     elif args.command == "health":
         try:
             return 0 if controller.health() else 100
-        except Exception as exc:
+        except Exception:
             # Unverified fencing must not deliberately demote an attached node.
-            syslog.syslog(syslog.LOG_ERR, "Interface health unknown; demotion withheld: " + str(exc))
             return 0
     elif args.command == "suspend":
         controller.fence(stop=True)
@@ -172,7 +242,14 @@ def cmd_runtime(args):
         try:
             run([service, "onestatus"])
         except subprocess.CalledProcessError:
-            run([service, "onestart"])
+            try:
+                run([service, "onestart"])
+            except Exception as exc:
+                emit_event(
+                    "operation_failed", syslog.LOG_ERR, operation="apply_start",
+                    reason=exc, safety="unchanged", outcome="failed",
+                )
+                raise
         print(json.dumps(controller.reconcile()))
     else:
         result = getattr(controller, args.command)()
@@ -214,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(func=cmd_status)
 
-    for command in ("prepare", "reconcile", "fence", "suspend", "resume", "remove", "health", "serve", "apply"):
+    for command in ("prepare", "prepare_setup", "reconcile", "fence", "suspend", "resume", "remove", "health", "serve", "apply"):
         action = sub.add_parser(command, help="root controller operation")
         action.set_defaults(func=cmd_runtime)
     return parser
@@ -225,7 +302,6 @@ def main() -> int:
     try:
         return args.func(args)
     except Exception as exc:
-        syslog.syslog(syslog.LOG_ERR, str(exc))
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
 

@@ -44,6 +44,7 @@ class InterfaceSnapshot:
     lagg_protocol: str | None = None
     mtu: int | None = None
     lagg_members: tuple[str, ...] = ()
+    promiscuous: bool = False
 
 
 @dataclass(frozen=True)
@@ -231,11 +232,14 @@ def plan_reconcile(settings: Settings, observed: ObservedState) -> Plan:
         and (settings.managed_mtu is None or
              dhcpha.mtu == carrier.mtu == settings.managed_mtu)
     )
-    if correct:
-        return plan
 
     def command(device: str, *args: str, reason: str) -> None:
         plan.commands.append(Command(("/sbin/ifconfig", device, *args), reason))
+
+    if correct:
+        if not (dhcpha.promiscuous and carrier.promiscuous):
+            command(DHCPHA_DEVICE, "promisc", reason="restore reception for the shared Ethernet identity")
+        return plan
 
     # Silence members before detach can restore their saved Ethernet identity.
     if dhcpha.up or dhcpha.lagg_members:
@@ -253,6 +257,9 @@ def plan_reconcile(settings: Settings, observed: ObservedState) -> Plan:
     if settings.managed_mtu is not None and carrier.mtu != settings.managed_mtu:
         command(settings.carrier, "mtu", str(settings.managed_mtu),
                 reason="inherit explicit native interface MTU before attachment")
+    # A cloned MAC may not match the NIC's receive filter (e.g. Hyper-V hn).
+    # Set this on our LAGG; native LAGG membership propagates it to the carrier.
+    command(DHCPHA_DEVICE, "promisc", reason="receive the shared Ethernet identity before activation")
     command(DHCPHA_DEVICE, "laggport", settings.carrier,
             reason="attach only after fresh MASTER and shared-MAC verification")
     # The first member supplies the LAGG MAC and MTU. There is no carrier-up step.

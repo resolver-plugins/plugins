@@ -4,12 +4,11 @@ namespace OPNsense\DhcpInterfaceHa;
 
 use OPNsense\Base\BaseModel;
 use OPNsense\Base\Messages\Message;
-use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 
 class Local extends BaseModel
 {
-    public static function blockedCarrierDevices($managedInterface = 'wan')
+    public static function blockedCarrierDevices($managedInterface)
     {
         $config = Config::getInstance()->object();
         $blocked = [];
@@ -77,11 +76,15 @@ class Local extends BaseModel
     public static function carrierRuntimeEligibility($carrier, array $devices, array $ifconfig)
     {
         $runtime = $ifconfig[$carrier] ?? null;
-        if (empty($runtime)) {
+        if (!is_array($runtime) || empty($runtime)) {
             return gettext('does not currently exist in the FreeBSD interface inventory');
         }
 
-        $group = $devices[$carrier]['optgroup'] ?? null;
+        $device = $devices[$carrier] ?? [];
+        if (!is_array($device)) {
+            return gettext('has an invalid assignment inventory record');
+        }
+        $group = $device['optgroup'] ?? null;
         if ($group === null) {
             /*
              * After migration the plugin intentionally excludes its carrier
@@ -94,7 +97,7 @@ class Local extends BaseModel
                 $group = 'hardware';
             }
         }
-        if ($group === 'vlan') {
+        if ($group === 'vlan' || (!empty($runtime['vlan']) && !is_array($runtime['vlan']))) {
             return gettext('requires VLAN carrier qualification; this experimental release supports Ethernet adapters only');
         }
         if ($group !== 'hardware') {
@@ -103,6 +106,32 @@ class Local extends BaseModel
 
         if (!empty($runtime['laggproto']) || !empty($runtime['members']) || !empty($runtime['tunnel']) || !empty($runtime['vxlan'])) {
             return gettext('is already a virtual aggregation, bridge, or tunnel-like interface');
+        }
+        if (!empty($runtime['carp'])) {
+            return gettext('already carries runtime CARP instances');
+        }
+
+        foreach ($ifconfig as $otherName => $other) {
+            if (!is_array($other) || $otherName === $carrier || $otherName === 'dhcpha0lagg') {
+                continue;
+            }
+            foreach (['laggport', 'members'] as $membership) {
+                if (array_key_exists($membership, $other) && !is_array($other[$membership])) {
+                    return gettext('cannot be checked because the runtime membership inventory is malformed');
+                }
+                if (
+                    is_array($other[$membership] ?? null)
+                    && array_key_exists($carrier, $other[$membership])
+                ) {
+                    return sprintf(gettext('is a runtime member of %s'), $otherName);
+                }
+            }
+            if (array_key_exists('vlan', $other) && !empty($other['vlan']) && !is_array($other['vlan'])) {
+                return gettext('cannot be checked because the runtime VLAN inventory is malformed');
+            }
+            if (is_array($other['vlan'] ?? null) && ($other['vlan']['parent'] ?? null) === $carrier) {
+                return sprintf(gettext('is a runtime VLAN parent for %s'), $otherName);
+            }
         }
 
         $mac = strtolower((string)($runtime['macaddr'] ?? ''));
@@ -117,53 +146,16 @@ class Local extends BaseModel
     {
         $messages = parent::performValidation($validateFullModel);
         $carrier = trim((string)$this->carrier);
-        $shared = new Shared();
-
-        if (empty($carrier)) {
-            if (!empty((string)$shared->enabled)) {
-                $messages->appendMessage(new Message(
-                    gettext('A local carrier is required when DHCP Interface HA is enabled.'),
-                    $this->carrier->getInternalXMLTagName()
-                ));
-            }
-            return $messages;
-        }
-
-        if ($carrier === 'dhcpha0lagg') {
+        if (
+            $carrier !== ''
+            && $this->carrier->isFieldChanged()
+            && (!preg_match('/^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$/', $carrier) || $carrier === 'dhcpha0lagg')
+        ) {
             $messages->appendMessage(new Message(
-                gettext('dhcpha0lagg cannot be its own local carrier.'),
-                $this->carrier->getInternalXMLTagName()
-            ));
-            return $messages;
-        }
-
-        $backend = new Backend();
-        $devices = json_decode($backend->configdRun('interface list assign-opts'), true) ?? [];
-        $ifconfig = json_decode($backend->configdRun('interface list ifconfig'), true) ?? [];
-        $runtimeReason = self::carrierRuntimeEligibility($carrier, $devices, $ifconfig);
-        if ($runtimeReason !== null) {
-            $messages->appendMessage(new Message(
-                sprintf(
-                    gettext('The selected carrier cannot be used because it %s.'),
-                    $runtimeReason
-                ),
-                $this->carrier->getInternalXMLTagName()
-            ));
-            return $messages;
-        }
-
-        $managedInterface = (string)$shared->managed_interface ?: 'wan';
-        $blocked = self::blockedCarrierDevices($managedInterface);
-        if (!empty($blocked[$carrier])) {
-            $messages->appendMessage(new Message(
-                sprintf(
-                    gettext('The selected carrier cannot be used because it %s.'),
-                    $blocked[$carrier]
-                ),
+                gettext('Choose a valid local carrier other than dhcpha0lagg.'),
                 $this->carrier->getInternalXMLTagName()
             ));
         }
-
         return $messages;
     }
 }

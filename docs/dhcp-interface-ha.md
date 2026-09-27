@@ -1,12 +1,25 @@
 # `os-dhcp-interface-ha` design specification and implementation plan
 
-- **Status:** Proposed design; implementation is gated by the prototype tests in this document.
+For the 0.2_9 GUI/setup/logging increment, use the
+[UI streamlining specification](dhcp-interface-ha-ui-streamlining-spec.md) and
+[implementation plan](dhcp-interface-ha-ui-streamlining-plan.md). They supersede
+older manual-setup and UI presentation requirements below, particularly sections
+21–22, while preserving this design's controller safety boundaries. Requirements
+in the new documents are tracked with implementation and verification evidence
+in the linked plan; source changes are not evidence of deployed behavior.
+
+- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. Source 0.2_9 is separate from the last verified 0.2_8 deployment. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
-- **Proposed plugin path:** `net/dhcp-interface-ha/`
+- **Plugin path:** `net/dhcp-interface-ha/`
+- **Last verified deployment (before this increment):** HA-1 and HA-2 have 0.2_8 with automatic carrier capture and no separate carrier selector. Both are now configured and enabled; HA-1 is in operator-selected CARP maintenance and HA-2 is MASTER. HA-2 acquired 10.250.100.100 with automatic promiscuous reception verified. See the [deployment records](dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 - **Package name:** `os-dhcp-interface-ha`
 - **Initial platform:** OPNsense 26.7 and later
 - **Scope:** high availability for one IPv4 DHCP client interface in an existing active/passive OPNsense CARP cluster. WAN is the default use case, not a required interface role.
-- **Implementation scope:** experimental phase 3 adds the reviewed carrier controller to the existing MVC/discovery scaffold using the recorded appliance evidence. Production boot/forwarding/two-node qualification remains open; delayed failback (Gate C) is not implemented in this increment.
+- **Restored controller baseline:** 0.2_1 provides the CARP-following carrier controller, combined Settings transaction, Settings/Status/Diagnostics page, structured local status/readiness, explicit setup preparation and independent node-local logical/NIC assignments. Peer API credentials and release holds are absent. See the [rollback record](dhcp-interface-ha-ui-plan.md#source-and-ha-2-rollback--2026-09-27).
+- **Source 0.2_7:** Configure LAGG captures the selected assignment's original device and saves it through the existing validated Settings transaction before native relinking. It saves the submitted shared MAC and other plugin form settings with enablement off. The updated revision is retained; failed settings save/apply prevents relinking. Native apply failures leave the carrier saved for recovery. The carrier selector is removed; preview detects the current native device and retains a saved carrier for migrated assignments. If a migrated assignment has no saved carrier, restore its original device while disabled and repeat setup. Native assignment privileges and confirmation still apply.
+- **Source 0.2_8:** The controller automatically sets promiscuous receive mode on its owned LAGG before attachment, verifies member inheritance before activation, and repairs cleared filters on an otherwise correct active attachment without bringing it down. This addresses Hyper-V receive filtering with cloned MACs. Failed filter verification fences the attachment. The setting is scoped to the runtime LAGG; native configuration is unchanged, and detached members release the inherited filter.
+- **Source 0.2_9:** The UI/setup/logging increment adds a guarded server-side Configure action, sender-specific sync selection, structured diagnostic responsibility/resolution and native event logging. Settings, Diagnostics and Log replace the separate Status tab. See the linked plan for source verification and outstanding native acceptance; this increment has not been installed on either appliance.
+- **Next work:** complete the linked increment's browser/native acceptance gates and retain outstanding controller and paired handover qualification. Passive conflict observations and ping checks remain proposals; delayed failback (Gate C) is separate work.
 
 ## 1. Problem statement
 
@@ -27,7 +40,7 @@ The plugin MUST:
 1. Reuse OPNsense/FreeBSD CARP as the sole HA election authority.
 2. Determine attachment ownership using OPNsense's existing global CARP semantics: the node is eligible to attach the selected interface only when all configured active CARP instances are unequivocally `MASTER`.
 3. Fail closed: `BACKUP`, `INIT`, mixed CARP state, disabled CARP, unknown state, or invalid plugin state MUST fence the selected carrier.
-4. Present the same logical kernel interface name on both nodes so PF/pfsync state references can match.
+4. Present the same kernel interface name (`dhcpha0lagg`) on both nodes so PF/pfsync state references can match.
 5. Permit a user-selected Ethernet-capable local carrier regardless of NIC driver (`ix`, `igb`, `igc`, `em`, `hn`, `vtnet`, `vmx`, `re`, VLAN, or future compatible drivers).
 6. Present one configurable ordinary unicast shared MAC address to the upstream network from the active node only.
 7. Continue to use the native OPNsense interface configuration and native DHCP client behavior.
@@ -37,6 +50,8 @@ The plugin MUST:
 11. Minimize dependencies on private OPNsense implementation details; prefer documented plugin hooks plus FreeBSD interface/CARP primitives.
 12. Integrate with the existing Resolver Plugins package/release infrastructure after that infrastructure is generalized from its current BIND-specific form.
 13. Preserve existing TCP/NAT sessions across failover when the ISP reissues the same public IPv4 lease and normal pfsync prerequisites are met.
+14. Let an administrator configure, inspect and retire the shared DHCP connection through a coherent OPNsense UI, with explicit local/peer evidence and safe migration steps.
+15. Keep a plugin preparation or observation failure from terminating OPNsense boot or rendering the rest of the web UI unusable.
 
 ## 3. Non-goals for v1
 
@@ -108,27 +123,75 @@ The normal configuration surface is intentionally small.
 These settings are cluster-wide and SHOULD be eligible for OPNsense XMLRPC synchronization:
 
 1. **Enable DHCP Interface HA**
-2. **Managed logical interface**
-   - Default: `WAN`.
-   - v1 validation requires IPv4 DHCP.
-3. **Shared interface MAC**
+2. **Shared interface MAC**
    - User-entered, imported from an existing WAN spoof MAC, or generated.
    - Generated addresses MUST be locally administered unicast addresses, e.g. `02:xx:xx:xx:xx:xx`, with cryptographically secure random remaining bits.
    - Validation MUST reject multicast, broadcast, all-zero, and otherwise invalid addresses.
    - The UI SHOULD warn for standardized virtual-router ranges such as CARP/VRRP MACs because some access networks reject them.
-4. **Failback delay in seconds**
-   - Experimental default: 0 seconds. Nonzero values are rejected until the Gate C failback implementation is qualified.
+3. **Failback delay in seconds**
+   - Experimental stored value: 0 seconds. Nonzero values are rejected until the Gate C failback implementation is qualified.
+   - The repair UI MUST NOT offer an editable failback-delay field. Show that native CARP preemption currently applies. A pre-existing nonzero value requires an explicit reset to zero when saving; do not silently change it while loading the page.
+   - Reintroducing the field requires a qualified backend, documented timing semantics and Gate C evidence in the same change.
    - Meaning: a recovered preferred node must remain continuously healthy for this period before it may preempt a living MASTER.
 
-### 5.2 Node-local setting
+### 5.2 Node-local settings
 
-The following setting MUST NOT be XMLRPC-synchronized:
+The following settings MUST NOT be XMLRPC-synchronized:
 
-1. **Local carrier**
+1. **Managed logical interface**
+   - Select this firewall's existing assignment, such as `wan` or `opt7`.
+   - There is no implicit WAN default. An unconfigured node stays unselected
+     and cannot attach a carrier, even if it receives enabled shared settings.
+   - The selected assignment must use `dhcpha0lagg`, be enabled and use IPv4
+     DHCP before enablement. Incomplete disabled drafts remain saveable.
+   - Logical identifiers and descriptions may differ between nodes.
+2. **Local carrier**
    - Selected independently on each firewall.
    - Example: `ix0` on a physical node and `hn1` on a Hyper-V node.
    - The UI MUST filter by capability, not driver-name allowlists.
-   - v1 candidates are Ethernet and L2 VLAN interfaces that the chosen FreeBSD fencing primitive can safely use.
+   - The repair supports the controller's current Ethernet adapter scope. VLANs remain rejected pending qualification; do not present them as supported choices.
+
+Shared and node-local storage remain separate. Their placement in separate models MUST NOT force two independent UI saves; section 21.7 defines one validated save on the local node.
+
+Both nodes MUST connect their independently selected carriers to the same intended
+Ethernet broadcast domain. They MUST use the fixed kernel device `dhcpha0lagg`
+and the same configured shared MAC. For example, HA-1 may use
+`opt2 → dhcpha0lagg → ix3`, while HA-2 uses `opt7 → dhcpha0lagg → hn1`.
+This release manages one connection per cluster. It does not discover, match or
+address peer NICs; administrators configure each local mapping explicitly.
+
+Native XMLRPC rules, NAT, gateways and other configuration can reference OPNsense
+logical identifiers. The plugin does not rewrite those references for differing
+`optN` assignments. Configure equivalent references independently or align IDs
+for the native sections that are synchronized. Matching this plugin's device and
+MAC does not establish whole-firewall configuration equivalence or pfsync session
+continuity; those remain pair qualification requirements.
+
+### 5.2.1 Upgrade from schema 1.0.0
+
+Package 0.2 uses model version 1.1.0. Move `managed_interface` from
+`OPNsense/DhcpInterfaceHaShared` to `OPNsense/DhcpInterfaceHaLocal`; the other
+fields and XML mounts retain their meanings. XMLRPC still registers only Shared.
+
+- Copy the legacy selection once on each node before serializing Shared without
+  that field. Migration MUST work regardless of which model migrates first.
+- Preserve an existing local field, including an explicitly empty selection.
+  Preserve an unavailable legacy identifier visibly for the administrator to fix.
+- A fresh installation has an empty local selection. Runtime and API MUST NOT
+  fall back to a legacy shared selection or to WAN.
+- Once Local is version 1.1.0, later shared sync, including from an older sender,
+  MUST NOT copy a managed-interface value into Local.
+- The Settings API uses `dhcphalocal.managed_interface`. A legacy
+  `dhcphashared.managed_interface` POST is rejected; refresh open pages after
+  upgrade. No stale browser payload may overwrite the node's mapping.
+- Upgrade both nodes while the plugin is disabled and verify each local mapping
+  before enabling or resuming shared synchronization. Mixed controller versions
+  are not a supported pair; there is no reverse schema migration on downgrade.
+
+The local model stores the selection as optional text so removed assignments can
+survive migration and remain visible. The API supplies native assignment choices
+and validates existence and eligibility before enablement; the root controller
+rechecks the local assignment on every transition.
 
 ### 5.3 Settings that MUST NOT be duplicated
 
@@ -186,7 +249,9 @@ For a normal two-node OPNsense HA deployment it can derive useful peer context f
 
 The absence of an XMLRPC target on a secondary is not an error; OPNsense treats that as normal.
 
-v1 is designed and tested for a two-node active/passive CARP pair. Multi-node CARP topologies are outside the initial support contract.
+v1 targets a two-node active/passive CARP pair; real pair qualification is still outstanding. Multi-node CARP topologies are outside the initial support contract.
+
+Configured pfsync/XMLRPC addresses are discovery hints, not proof of peer plugin installation, matching settings, carrier readiness or exclusive attachment. The repair UI MUST label peer plugin readiness **Not verified from this node** unless actual fresh peer observations establish it. Section 21.4 defines the evidence boundary.
 
 ## 8. Stable logical interface abstraction
 
@@ -239,6 +304,13 @@ The plugin SHOULD accept any local interface type proven compatible with the fen
 Direct PPPoE/tunnel interfaces are excluded from v1.
 
 ## 9. Layer-2 fencing invariant
+
+The restored 0.2_1 controller follows native CARP and enforces local carrier
+ordering. It does not request or acknowledge peer release. A local MASTER event
+is not proof that the previous owner's carrier has detached; paired capture is
+required to characterize overlap and transition timing. Passive traffic or ping
+observations would provide supplementary evidence, not authoritative fencing,
+and are not implemented in this baseline.
 
 Safety depends on **physical/L2 exclusivity**, not on racing OPNsense DHCP process start/stop behavior.
 
@@ -319,7 +391,7 @@ Session preservation is a first-class goal.
 Required conditions include:
 
 1. pfsync is healthy.
-2. PF sees the same selected logical kernel interface name on both nodes.
+2. PF sees the same kernel interface name (`dhcpha0lagg`) on both nodes.
 3. Firewall/NAT configuration is synchronized appropriately.
 4. The new MASTER obtains the same public IPv4 address.
 5. The shared MAC identity moves to the new active carrier.
@@ -398,6 +470,10 @@ When the preferred node recovers while a healthy peer is already MASTER:
 
 ### 15.2 Leading mechanism: temporary preemption suppression
 
+This remains a proposal for the separate delayed-failback feature. The restored
+controller preserves native preemption. Keep `failback_delay=0` until Gate C is
+qualified; no failback hold is active in this baseline.
+
 FreeBSD 15 CARP source makes temporary preemption suppression the leading mechanism:
 
 - In BACKUP state, `net.inet.carp.preempt=1` permits a faster local CARP instance to treat a slower living MASTER as down and preempt it.
@@ -470,6 +546,13 @@ Preferred sequence:
 
 The implementation SHOULD avoid an early boot hook unless Prototype Gate A/B proves it necessary. A detached-by-default virtual interface is preferred because safety then derives from FreeBSD dataplane state rather than hook timing.
 
+OPNsense also calls registered device-preparation callbacks for unassigned devices
+at the end of `interfaces_configure()`. The plugin enable checkbox therefore does
+not bypass this boot integration. Preparation uses the supported `mwexecf()`
+helper; a controller failure is logged and returns no prepared device without
+terminating PHP. Exercise this callback, including its failure path, before
+installing a build even when the plugin will remain disabled.
+
 ## 19. Controller failure behavior
 
 A transient Python/controller restart on the current MASTER SHOULD NOT immediately drop a working dataplane. The kernel interface/member association may remain intact while the controller restarts.
@@ -502,61 +585,382 @@ Package upgrade must preserve configuration and leave the current dataplane stab
 
 No OPNsense core files may be patched in place.
 
-## 21. UI/API design
+## 21. UI/API contract for the repair
 
-### 21.1 Configuration page
+This section is the normative UI/API contract for the repair and its target
+qualification. The original scaffold put a long diagnostic table ahead of the
+forms, loaded observations once, saved two models independently and exposed an
+unimplemented failback control. The local source now contains the R0–R5 repair
+shape; each requirement below has an observable check in the
+[repair plan](dhcp-interface-ha-ui-plan.md), and source presence alone does not
+pass that check.
 
-Proposed normal fields:
+### 21.1 Navigation and page ownership
 
-```text
-Enable                         [x]
-Managed OPNsense interface     [ WAN                         v ]
+Keep the existing **Services → DHCP Interface HA** entry and
+`/ui/dhcpinterfaceha` route. Use three native OPNsense tabs in this order:
+**Settings**, **Status**, **Diagnostics**, with matching `#settings`, `#status`,
+`#diagnostics` anchors. The default is Settings; preserve an explicitly selected
+anchor. Reuse the installed framework's forms, tabs, validation and buttons.
+Do not introduce a frontend framework or a separate dashboard application.
 
-Local carrier                  [ Intel X520 (ix0)           v ]
-                               (local only; not synchronized)
+All tabs identify the local node and managed interface. Settings explains how to
+configure this node; Status answers whether this node can carry the connection;
+Diagnostics explains the observations behind that answer. Use interface
+descriptions with stable identifiers, e.g. `WAN (wan)`, throughout. The same
+behavior MUST work for an eligible `lan` or `optN` assignment.
 
-Shared interface MAC           [ 02:xx:xx:xx:xx:xx ] [Generate]
-Failback delay                 [ 0 ] seconds (experimental controller)
-```
+### 21.2 Settings: one connection and one local adapter
 
-The UI should show the selected interface's current device and spoof MAC during migration and offer safe import/suggestion actions. `WAN` is the default example in the form.
+Render one form and one **Save & Apply** action. The visible order is:
 
-### 21.2 Status page
+| Control or display | Scope and required behavior |
+|---|---|
+| Enable DHCP Interface HA | Shared checkbox. Explain that enabling permits CARP-controlled attachment and disabling disconnects an already-migrated interface. |
+| Managed interface | This node only; never XMLRPC-synchronized. Selector of existing logical assignments, showing description and identifier; IDs may differ on the peer. Ineligible choices remain understandable through their reason; do not silently substitute WAN. |
+| Local carrier | This node only. Label with local hostname, device, available description and observed media status. State beside the field that it is never XMLRPC-synchronized. |
+| Shared MAC | Shared field with adjacent **Generate** and **Use current interface MAC** actions. Display the identity source and scope. |
+| Failback policy | Read-only text: native CARP preemption applies; delayed failback is unavailable in this experimental release. |
+| Setup checklist | Computed prerequisites, specific next actions and links to native pages, as defined in section 22. |
+| Save & Apply | Validates and saves both configuration sections together, then requests convergence. Show progress and the exact outcome. |
 
-Status SHOULD include:
+Below the interface/carrier fields, show a compact mapping:
+`WAN (wan) → DHCP HA device → Local adapter hn1` and the current native assignment.
+The generated device name may be shown as supporting detail. The administrator
+MUST NOT need to create or edit a native LAGG object manually.
 
-- Global CARP role.
-- CARP enabled/maintenance/demotion/preemption state.
-- Number and alignment of CARP instances.
-- Controller state (`ACTIVE`, `STANDBY`, `RECOVERY_HOLD`, `FAULT`, etc.).
-- Managed logical interface.
-- Local carrier and link state.
-- `dhcpha0lagg` existence and carrier/member attachment.
-- Shared and effective MAC.
-- Native DHCP/public IPv4/gateway status where available.
-- pfsync configuration/runtime health and defer status.
-- Last transition, reason, and duration.
+The empty managed-interface choice is **None**. Selecting it clears the form's
+interface and carrier selections, unchecks enablement and resets failback delay
+to zero, while retaining the shared MAC. **Save & Apply** persists this reset in
+the existing single transaction; the API also normalizes these fields for direct
+callers. An enabled configuration must first be disabled and saved, with fencing
+verified, before clearing its identity. This removes the plugin setup, not the
+native logical interface, its assignments or firewall rules.
 
-The BACKUP page must clearly state that a down/fenced managed carrier is intentional rather than simply showing an unexplained interface alarm.
+Carrier candidates must use the existing capability/reservation checks. Preserve
+a configured carrier in the selector when it is excluded from general native
+assignment options by this plugin. A missing or newly ineligible saved carrier
+must remain visible with its reason, not become an empty field that will silently
+clear the selection. Show why candidates are blocked. Distinguish **allowed to
+record during disabled setup** (e.g. the selected interface's current adapter)
+from **safe to attach now** (exclusive, migrated, unaddressed carrier).
 
-### 21.3 Diagnostics/API
+**Generate** changes only the unsaved MAC field. **Use current interface MAC**
+shows the source and exact value before copying: prefer a native spoof MAC when
+configured, otherwise the observed MAC of the selected interface's current
+backing device. Offer only a usable unicast address. An all-zero MAC from an empty LAGG
+means the suggestion is unavailable; disable copying while unavailable or loading
+and preserve the configured MAC.
 
-Provide bounded actions for:
+Require explicit selection of this action, never copy on load,
+and never choose a different MAC automatically on the peer. Copying a native
+spoof MAC does not remove the native setting; the checklist directs the user to
+clear that setting before enablement. Refresh the suggestion when the selected
+logical interface changes. Never act on stale data from the previously selected
+interface. Keep collision validation in both the save path and root controller.
 
-- Validate configuration.
-- Show discovered HA environment.
-- Dry-run reconciliation.
-- Reconcile now.
-- Show global CARP derivation.
-- Show carrier/member/MAC state.
-- Show native DHCP/gateway observations.
-- Export a diagnostic bundle suitable for issue reports.
+Fields holding unsaved input MUST survive status refreshes and failed requests.
+Show which values are shared and which are local without splitting the save
+operation. While saved configuration is enabled, changing the managed interface,
+carrier or shared MAC requires disabling and successfully fencing first. Enforce
+this in the API, including a request that tries to disable and change identity in
+one step. After disabling, an identity edit also requires fresh proof that the
+plugin-owned path is detached or absent; a prior failed/timed-out fence is not
+proof. The disable-only request must remain possible even if current local
+readiness is broken.
 
-Do not add a second manual failover button; use native OPNsense CARP controls.
+### 21.3 Status: ownership and connection health are separate observations
+
+Show, in order:
+
+1. Local node, managed logical interface, observation time and freshness.
+2. A prominent operational state with one concrete reason and next action.
+3. Configured shared MAC and observed carrier/device MACs; intended and observed
+   attachment; controller process status; local media link status.
+4. The selected interface's current IPv4 address/prefix, native DHCP observations
+   and associated IPv4 gateway/monitor status. Label the address **IPv4 address**,
+   since a managed interface is not necessarily a public WAN.
+5. The HA context and peer evidence described in section 21.4.
+
+Derive the operational state on the backend from the root controller's validated
+observation. The browser renders it. Do not create another CARP reducer in the
+browser or PHP presentation layer. Report the observed CARP role independently
+of whether plugin enablement is off; the current planner's early-return role is
+not sufficient for this display.
+
+Evaluate the following rules in order:
+
+| State | Conditions and display |
+|---|---|
+| **UNKNOWN** | Required config/controller/topology observation failed, timed out or is inconsistent/busy. Show the unavailable source; never infer Disabled or Standby from an empty JSON object. A browser request failure also marks old data stale. |
+| **FAULT** | Observed attachment violates eligibility, ownership/member/MAC/MTU verification fails, or an enabled migrated node has invalid local configuration, lost local media, a stopped/missing controller or a recorded stopped marker. A disabled configuration with an observed attached carrier is a fault. |
+| **SETUP_INCOMPLETE** | Managed assignment has not migrated, or disabled setup has missing prerequisites, and no unsafe plugin attachment is observed. Show the ordered outstanding steps. |
+| **DISABLED** | Saved enable is off, setup is otherwise complete, and the plugin path is verified detached. Explain whether the logical interface remains on the disconnected DHCP HA device. |
+| **STANDBY** | Saved enable is on, local readiness is valid, controller is running, CARP is allowed, maintenance is off, all expected CARP instances are present, derived role is BACKUP, and attachment is verified fenced. Say **Standby — local adapter intentionally disconnected**. |
+| **FENCED** | Enabled, locally valid and detached, but native maintenance/administrative disable/INIT or another indeterminate CARP state prevents attachment. Give the exact native reason. |
+| **ACTIVE** | Enabled and locally valid, controller is running, unequivocal global MASTER, and the owned device has exactly the selected carrier with verified MACs and configured MTU. |
+| **PENDING** | Remaining valid case: global MASTER is eligible but the controller has not yet produced a verified attachment. Show **Waiting for controller convergence**; do not call it Active. |
+
+An enabled but unmigrated interface is Setup incomplete, consistent with the
+controller's UNMANAGED behavior; it is never a working HA connection. Mixed
+MASTER/BACKUP observations remain visible in Diagnostics even though the global
+reducer yields BACKUP. Missing expected CARP instances cannot produce Standby.
+A missing device during disabled setup is a missing prerequisite; it is not the
+same observation as an existing device that fails ownership verification. Process
+presence is labeled **Running**, not proof that a stuck loop is healthy.
+No new heartbeat/transition-history database is required by this repair.
+
+Connection observations MUST NOT influence election or carrier eligibility:
+
+- Active with no current IPv4 address: **Awaiting DHCP address**.
+- Active with an address: show the address; do not claim an Internet check passed.
+- Gateway reports down: show **Gateway reports down** alongside the ownership
+  state. Do not demote or move the carrier because of this display.
+- Gateway monitoring is disabled: show **Not monitored**, not a successful probe.
+- Standby: say DHCP acquisition is not required while intentionally disconnected.
+  A retained address or old lease is not proof of an active upstream path.
+- This repair does not read DHCP lease files or private DHCP state. Report native
+  lease details as **Unavailable**; a live address is an address observation,
+  not proof of lease expiry, server identity or future validity.
+- Unavailable lease duration/server/expiry information is **Unavailable**; do not
+  invent lease validity from an address or a lease file's existence.
+
+### 21.4 HA pair evidence and its limits
+
+Display local hostname, observed global CARP role and instance alignment, native
+maintenance/preemption/demotion, configured pfsync interface/peer and runtime
+observations, XMLRPC target and whether shared plugin settings are selected for
+sync. Display configured pfsync and XMLRPC addresses with their sources; they may
+be different addresses of the same node. Do not equate them by guessing a name.
+
+The repair MUST show **Peer plugin readiness: Not verified from this node** and
+**Shared settings synchronization: Selected/Not selected/Not configured** as
+separate facts. Selecting XMLRPC synchronization is not evidence of successful
+delivery or a matching remote MAC. A secondary with no outbound XMLRPC target is
+normal; explain that it may receive synchronization rather than declaring an
+error. A local MASTER observation does not prove the peer is fenced.
+
+Use the existing native HA Settings/Status links for peer inspection. Full pair
+qualification includes opening the plugin page on each node and observing the
+same kernel device `dhcpha0lagg` and shared MAC, appropriate independent local
+logical assignments/carriers on the same segment, and exclusive attachment.
+Logical IDs and NIC names need not match; native rules/gateway references still
+require independent verification when IDs differ. This is an explicit manual verification requirement.
+
+Automatic remote plugin readiness is outside the 0.2 UI repair's implementation scope.
+No new peer credentials, browser cross-origin requests, remote shell calls,
+XMLRPC execution methods, polling daemon or second HA protocol may be introduced.
+A later automatic verification change must identify an authenticated, bounded
+native read-only transport, define freshness and configuration matching, and
+pass a two-node test before replacing **Not verified** with a readiness claim.
+Native HA version/service reachability alone is insufficient.
+
+The API-coordinated release increment was withdrawn. Peer readiness remains
+**Not verified** from this node; inspect the other node through native HA tools.
+
+### 21.5 Diagnostics and actionable readiness
+
+Diagnostics contains selected, structured observations: configured versus live
+CARP instance identifiers/states, device ownership, membership, MAC/MTU checks,
+controller process/stopped state, and the native DHCP/gateway/pfsync evidence.
+Include **Refresh**, **Reconcile now** (explicit POST using saved settings), and
+links to native CARP controls and logs. Do not provide an independent failover,
+force-attach or raw-command control.
+
+Readiness is a list of records with stable `code`, `scope` (`local`, `peer`,
+`connection`), `severity` (`blocker`, `warning`, `info`), `status` (`pass`, `fail`,
+`unknown`), setup `stage`, `message`, and a named `action` (or null) from the fixed
+native-link/action allowlist. A blocker prevents enablement only when its status
+is fail/unknown. Return passing records too so checklist completion is computed
+from evidence rather than inferred from missing errors. Do not parse human prose to
+choose behavior. Distinguish blockers for enablement from warnings about pfsync,
+provider behavior or unavailable peer evidence. Show a disabled draft's missing
+steps without reporting that saving the draft failed.
+
+Required checks cover: selected logical assignment; IPv4 DHCP/enabled and IPv6
+constraints; exclusive compatible carrier; owned failover device; native spoof
+MAC conflict; CARP VIP conflict on the selected interface; matching expected/live
+CARP inventory; hardware/media overrides; shared-MAC validity/collision; and
+unsupported failback delay. Runtime BACKUP and common upstream failure are not
+configuration blockers. Local link failure is operational unavailability, not a
+reason to prevent saving otherwise valid settings.
+
+Use these readiness codes consistently across API responses and tests:
+
+| Codes | Fact or stage covered |
+|---|---|
+| `managed_interface`, `managed_assignment`, `managed_ipv4`, `managed_ipv6` | Existence, correct generated-device assignment, enabled IPv4 DHCP and no unsupported IPv6. |
+| `carrier_selection`, `carrier_capability`, `carrier_exclusive` | Local selection, Ethernet capability and configuration/runtime reservation checks. |
+| `device_ownership`, `device_topology` | Current-boot ownership and failover LAGG shape, including unwanted members. |
+| `shared_mac`, `native_spoof_mac`, `hardware_media`, `failback_policy` | Valid unique identity and incompatible native/unsupported settings. |
+| `managed_carp_vips`, `carp_inventory` | No CARP on the managed path and matching expected/live cluster instances. |
+| `pfsync_context`, `xmlrpc_selection`, `peer_readiness` | Session/sync context and explicit unavailable remote verification; warnings/information, not automatic enable blockers. |
+
+Return local media/role/controller convergence as operational state reasons,
+not additional configuration blockers. `reason_code` names must be stable and
+covered by the state-table tests; present `reason` as a localized explanation,
+never a control-flow input.
+
+A downloadable **diagnostic snapshot** is the same allowlisted status/readiness
+JSON shown by the page plus plugin/platform versions and collection time. Produce
+it on explicit user request. Exclude full config.xml, credentials, keys, DHCP
+client secrets, arbitrary files and unrelated interface addresses. Explain that
+the snapshot contains this node's interface, MAC and HA peer details. No server
+bundle archive or log collector is needed. Do not export a browser cache as a
+fresh observation. Transition history remains unavailable in this increment;
+link to native logs instead of inventing a last-transition time on page load.
+
+### 21.6 API contracts and observation sources
+
+All paths below are under `/api/dhcpinterfaceha`. Reuse native session/ACL/CSRF
+handling. GET endpoints MUST NOT save configuration, create devices, start
+services, reconcile, modify interfaces or contact the peer. Privileged operations
+remain behind fixed configd actions; never expose a caller-supplied command/path.
+
+| Endpoint | Required contract |
+|---|---|
+| `GET settings/get` | Return both existing form roots `dhcphashared` and `dhcphalocal`, plus a `revision` derived from their canonical persisted values. Preserve native select-field option mapping. |
+| `GET status/carriers` | Return `items`, `blocked`, and `managed` preview metadata (logical identifier/description, current device, IPv4 type, native spoof MAC and effective MAC suggestion), including saved unavailable choices and migration-versus-attachment eligibility. Accept optional `interface=<existing-logical-id>` for an unsaved selection; echo its identifier so late replies can be ignored. Preview never persists or reconciles. |
+| `POST status/generate_mac` | Return one random locally administered unicast MAC; no configuration/device changes. |
+| `GET status/environment` | Return the structured current observation described below. No raw all-interface/config dumps. |
+| `POST settings/set` | Receive both complete form roots and `revision`; validate/save together, release the config lock, then invoke apply. Return persistence and apply outcomes separately (section 21.7). |
+| `POST service/apply` | Retry convergence of saved settings only. No arbitrary carrier/role/MAC overrides and no configuration save. Also used for **Reconcile now**. |
+| `POST service/prepare` | Explicitly prepare/read back the detached owned device during disabled setup. Route through fixed configd/CLI `prepare_setup`, which checks disabled state and absence of attached/foreign topology under the existing root lock before reusing preparation. The ordinary boot `prepare` entry point must still support enabled configurations. No PHP ifconfig code. |
+
+`settings/set` replaces independent `shared/set` and `local/set` writes. Remove
+those exposed write routes in this experimental plugin so they cannot bypass
+combined validation. Update controllers, form mapping and ACL tests together;
+there is no published compatibility promise requiring an unsafe write path.
+Keep the Shared and Local XML mounts and shared-only XMLRPC registration intact.
+
+`status/environment` has a stable envelope with these named members:
+
+| Member | Meaning |
+|---|---|
+| `collected_at`, `result` | UTC observation time and `ok`, `partial` or `unavailable`. Collection time is not the last role transition. |
+| `local` | Hostname and installed OPNsense/plugin versions. |
+| `managed` | Logical identifier/description, configured native device and current IPv4 type. |
+| `controller` | `running` (boolean or null), `stopped` (boolean or null), `state`, stable `reason_code`, human `reason`. |
+| `attachment` | `desired`, `actual`, `owned`, selected carrier, observed members/MACs/MTUs; unknown observations use null, not false/empty success. |
+| `carp` | Authoritative observed global role, allowed/maintenance/demotion/preemption, expected/live instances and alignment. |
+| `connection` | Current IPv4 addresses/prefixes, native DHCP observation with availability/source, associated IPv4 gateway and monitor status. |
+| `ha` | Source-labeled pfsync and XMLRPC facts, synchronization selection, peer readiness `unverified` and its reason. |
+| `readiness`, `errors` | Readiness records above and per-source bounded error messages. No raw exceptions containing configuration. |
+| `removal` | Current logical assignments to `dhcpha0lagg`, verified detached/owned state and a computed package-removal readiness result. This is guidance only; the package guard remains authoritative. |
+
+Use root `status --from-config` as the source of controller/attachment eligibility,
+extending its output with structured checks rather than reverse-engineering
+`reason` strings. On the PHP side use native inventory, `interface address`,
+`OPNsense\Routing\Gateways::getInterfaceGateway(..., 'inet')` and
+`interface gateways status` in the same manner as core Interfaces Overview.
+Use native Autoconf observations where exposed; do not introduce a DHCP lease
+parser solely for this UI. The installed version's shape and field meaning MUST
+be verified with fixtures. In particular, native gateway output may say Online
+when no monitor is configured; preserve that distinction in the UI.
+
+Read-only observation calls must have explicit finite timeouts. Set a total
+server observation deadline of 15 seconds, with individual external observations
+bounded to at most 5 seconds and remaining-budget checks before each call. The
+root status command must itself finish within 5 seconds, using remaining-budget
+timeouts for its subprocesses; a PHP timeout alone cannot enforce this. Use
+Backend's supported timeout/connect_timeout arguments and the existing bounded
+Python runner; do not merely abandon a browser request while leaving PHP waiting
+on default 120-second backend calls. A required source failure makes controller
+state Unknown; an optional DHCP/gateway/pfsync failure produces partial data with
+that section unavailable. Do not repeat a failed configd connection for every
+field. Collect each native source once per response where possible.
+
+### 21.7 Save, validation, apply and failure semantics
+
+The action is **Save & Apply**, because the running controller observes persisted
+configuration independently of browser actions. Do not promise that saved settings
+remain inactive until a later Apply click.
+
+1. Require POST, normal write permissions and both form roots. Collect any needed
+   bounded runtime observations **before** acquiring the native config lock.
+   Never invoke configd, pluginctl, root status or any other config-reading child
+   while holding `Config::lock()`, including from model validation: a child may
+   wait on the same file lock while PHP waits on the child.
+2. Acquire `Config::lock()`, then instantiate/reload fresh models. Compare the
+   supplied revision against current persisted plugin settings; a mismatch
+   returns conflict with no writes. Build both candidates in memory and validate
+   field/cross-model rules using the current locked native configuration and the
+   previously collected observations. Reject enablement/identity changes if
+   needed evidence is unavailable or older than 15 seconds; release the lock
+   before requesting new evidence. Kernel state can still race; the root
+   controller must always revalidate before mutation. Existing Shared/Local
+   validators must not reload an old persisted counterpart or call a backend
+   during this transaction. Extract the PHP checks into a small function accepting
+   both candidates, current config and observations; retain independent root
+   safety validation.
+3. Disabled draft saves allow incomplete migration, an empty MAC/carrier and a
+   logical interface still using its original addressing. Validate supplied
+   values' syntax and reject unsafe identity edits while previously enabled.
+   Disable-only saves must work despite unavailable carrier/backend observations;
+   their apply result must still report any inability to verify fencing.
+4. Enablement requires the local prerequisites in section 22. Current BACKUP role,
+   unknown peer readiness, absent DHCP lease or a common gateway outage do not
+   prohibit a valid save. Root runtime validation remains mandatory after XMLRPC,
+   config reload and every transition; PHP validation does not replace it.
+5. After both candidates pass, serialize the separate XML sections and perform
+   one native config save/audit revision. Do not write the first section to disk
+   before validating the second. Native file-write failure must not be reported
+   as saved. Release the config lock before calling configd/apply; otherwise a
+   child that reads config can deadlock on the writer's lock. No backend call is
+   permitted inside serialization-time validation either.
+6. Request the existing root apply operation, then obtain/read back current status.
+   A saved request with failed/timed-out apply remains saved: no silent rollback
+   against a controller that may already have observed it. Explain this and offer
+   **Retry Apply**. After a transport timeout, persistence is **Unknown** until a
+   settings read establishes it; do not resubmit automatically.
+
+The JSON response uses `result` (`saved`, `failed`, `conflict`), `saved` (boolean),
+`applied` (boolean or null if not attempted/unknown), `validations` keyed by the
+existing form field IDs, `error` (safe message or null), and the new `revision`
+when saved. Include current status when obtainable. Omit `validations` entirely
+on success; the native form helper interprets its presence, even an empty object,
+as validation failure. The UI must inspect `result` and `saved` rather than assume
+the native callback means a commit succeeded. Validation/conflict responses
+make zero persistent changes. A successful save with apply failure uses
+`result=saved, saved=true, applied=false`; a timed-out apply whose outcome is not
+known uses `applied=null` and explains the uncertainty. HTTP 200 alone is never a
+success test.
+Device readiness on BACKUP can be a successful apply while intentionally fenced.
+`service/apply` returns `applied`, `error` and `status` with the same meanings;
+it never claims to save settings. `service/prepare` returns `prepared` (boolean,
+or null when the outcome cannot be established), `error` and readback `status`.
+Do not report preparation success solely from the command exit code.
+
+A browser disables duplicate submissions and shows progress until completion,
+restores controls on every success/error path, renders field errors inline and
+request errors visibly, and refreshes status after apply success or failure.
+Preserve entered values on failure. A read-only user can inspect the tabs but
+cannot save, prepare or reconcile, including by calling endpoints directly.
+
+### 21.8 Refresh and frontend failure behavior
+
+Status refreshes immediately when opened, on **Refresh**, and five seconds after
+the previous request completes while Status is visible. Allow at most one status
+request in flight per page. Pause when the document is hidden or another tab is
+active; refresh upon returning. Diagnostics refresh is explicit; Settings refresh
+checks on load, after Save & Apply/Prepare, and on **Recheck setup**. Do not add
+independent polling loops to every widget.
+
+Give status AJAX a 20-second timeout, longer than its server deadline. On failure,
+keep the last observation only with **Stale — last updated ...** or show
+**Unavailable** if no successful observation exists. Never retain a green Active
+badge as current. Distinguish a timed-out source, an expired login/HTML response,
+a malformed payload and an empty legitimate list. Readiness cannot turn green
+because error handling substituted `{}`. Polling never reloads the settings form.
+
+Render returned names/messages as text, use localized labels and native focus/
+validation behavior, and do not communicate state by color alone. Runtime and
+preview responses are tied to the requested logical identifier; late responses
+must not overwrite a newer interface selection.
 
 ## 22. Migration workflow
 
-Migration should be wizard-assisted and deliberately reversible.
+Migration MUST use an ordered, computed setup checklist in Settings. Each step shows its current observation, blocker/warning and next action. Native interface changes use links to the native pages and an explicit return/recheck; automated reassignment, native spoof-MAC removal and remote-node changes are outside this repair. This is a required guided workflow, not a future unspecified wizard.
 
 ### 22.1 Preconditions
 
@@ -574,8 +978,8 @@ Migration should be wizard-assisted and deliberately reversible.
 
 1. Install the plugin on both nodes with **Enable DHCP Interface HA off**.
 2. Configure each node's local carrier independently.
-3. Configure the shared managed-interface, shared-MAC, and failback settings on the preferred configuration source while the plugin remains disabled.
-4. Synchronize the **disabled** shared plugin configuration only after both nodes have valid node-local carrier configuration. A peer that has not yet migrated its logical WAN remains safe because the controller treats "managed interface is not assigned to `dhcpha0lagg`" as `UNMANAGED` and performs no carrier mutation.
+3. Select the managed logical interface and carrier independently on each node. Configure the shared MAC and failback settings on the preferred configuration source while the plugin remains disabled.
+4. Synchronize the **disabled** shared plugin configuration only after both nodes have valid node-local interface and carrier configuration. A peer that has not yet migrated its logical WAN remains safe because the controller treats "managed interface is not assigned to `dhcpha0lagg`" as `UNMANAGED` and performs no carrier mutation.
 5. Remove any CARP VIPs from the managed ISP-facing WAN, then validate native CARP/pfsync/global role and carrier compatibility on both nodes.
 6. Create/validate `dhcpha0lagg` detached on both nodes.
 7. Migrate the BACKUP logical WAN assignment to `dhcpha0lagg`; verify it remains fenced. This should not affect active Internet service.
@@ -588,7 +992,60 @@ Migration should be wizard-assisted and deliberately reversible.
 
 The UI/model MUST permit shared settings to be saved while disabled even when migration is incomplete, but MUST reject **enablement** until the local node has a valid carrier, a correctly created `dhcpha0lagg`, an enabled IPv4 DHCP logical interface assigned to that device, and no CARP VIP/native spoof-MAC conflict on the selected interface.
 
-Exact wizard automation is implementation-phase work; safety ordering is mandatory.
+### 22.3 Required checklist and native actions
+
+Use the section 22.2 order to derive these visible stages from current evidence:
+
+| Stage | Completion evidence and next action |
+|---|---|
+| Record this node's carrier and shared connection | Disabled draft saved; selected local device and shared identity shown. Prompt the administrator to perform local setup on the other node. |
+| Inspect native HA | Expected/live CARP membership available, no selected-interface CARP VIP; show pfsync as a separate session-preservation warning. Link to HA settings and VIP settings. |
+| Prepare the DHCP HA device | Device exists with verified ownership and failover topology. If absent, offer **Prepare device** while disabled; success leaves zero members and returns readback. If an active or unowned device already exists, report the conflict without detaching/adopting it. |
+| Migrate native interface | Selected logical interface uses the generated device, is enabled IPv4 DHCP with incompatible native settings cleared. Show old/current assignment and the exact destination in the instructions. Link to native assignments and that logical interface's settings. |
+| Enable and verify locally | Save & Apply enabled settings; show verified Active or intentionally fenced Standby with connection details, rather than completion based on a successful save response. |
+| Verify the pair | Explain the checks required on both nodes and link to native HA Status. Peer verification cannot become complete automatically from local state alone. |
+
+Native links for the reviewed 26.7 source are `/interfaces_assign.php`,
+`/interfaces.php?if=<encoded-existing-logical-id>`, `/ui/interfaces/overview`,
+`/ui/interfaces/vip`, `/ui/core/hasync`, `/ui/core/hasync_status`,
+`/ui/routing/configuration`, and `/ui/diagnostics/log/core/system`. Verify these
+against the installed series before implementation. Only use identifiers from
+native assignments and fixed internal routes; do not accept arbitrary URLs.
+
+Before directing a native reassignment or enabling/disabling an already-migrated
+interface, show that this can interrupt connectivity through that interface and
+identify it by description/device. Preserve console or another management path
+when that interface carries the administrator's access. The plugin cannot prove
+which browser path will survive; do not claim it can.
+
+Readiness is derived afresh; do not create a persistent wizard progress flag that
+can remain complete after native configuration changes. Page load, preview and
+**Recheck setup** are observational. Device preparation is a separately labeled
+explicit action. Do not make a GET create the missing device.
+
+### 22.4 Return to ordinary interface operation
+
+Settings MUST also contain **Disable and remove guidance**, not an uninstall
+button. Its ordered instructions are:
+
+1. Check the peer and plan which node will retain the upstream connection. Warn
+   against reconnecting two ordinary adapters with the shared identity.
+2. Save enable off and verify local fencing; coordinate shared XMLRPC disablement
+   deliberately because it affects the peer. Failed fencing is a visible blocker
+   to treating the interface as safely disconnected.
+3. Reassign the logical interface on each affected node through native Assignments
+   to the intended ordinary adapter; review native DHCP/MAC settings and apply.
+   Show the current mapping; do not guess the original adapter or restore a
+   hardware MAC automatically.
+4. Recheck that **no** logical assignment uses the plugin device and that the
+   plugin-owned path has no member. Only then show that normal package removal
+   through native Firmware/Plugins is possible. The package guard remains final
+   authority and must also inspect assignments other than the configured target.
+
+Disabling alone leaves a migrated interface disconnected. Removal alone does not
+restore native assignments. State both facts beside the guidance. Emergency
+console recovery after a boot failure is a separate maintainer procedure, not a
+UI button or a way around the normal assignment/fencing guards.
 
 ## 23. Repository and packaging plan
 
@@ -611,7 +1068,10 @@ The infrastructure generalization should be its own narrow PR before or independ
 
 ## 24. Proposed source layout
 
-Exact paths are provisional but should follow normal OPNsense plugin conventions:
+The existing implementation follows this layout. Extend these components for
+the repair; the companion plan maps exact current files. Boot/start rc hooks and
+the supervised service are already present in `src/etc/rc.d/` and
+`src/etc/rc.syshook.d/start/`:
 
 ```text
 net/dhcp-interface-ha/
@@ -623,7 +1083,7 @@ net/dhcp-interface-ha/
 │   │   │   └── dhcp_interface_ha.inc
 │   │   ├── rc.syshook.d/
 │   │   │   └── carp/
-│   │   │       └── 50-dhcp-interface-ha
+│   │   │       └── 10-dhcp-interface-ha
 │   │   └── rc.carp_service_status.d/
 │   │       └── dhcp-interface-ha
 │   └── opnsense/
@@ -642,7 +1102,14 @@ Only add abstractions that directly serve a requirement in this document.
 
 ## 25. Prototype gates before architecture freeze
 
-Production dataplane mutation MUST remain gated by focused prototypes. Non-activating package/UI scaffolding and pure decision tests may precede those prototypes when they encode durable requirements, but exploratory mutation code must not be treated as production implementation until the relevant gate passes.
+Production dataplane mutation MUST remain gated by focused prototypes. Local
+source/fixture work can precede appliance qualification, but an installed package
+can execute boot hooks while disabled. The UI repair's A01 callback compatibility
+check is required before test installation; A16 installs and boots the actual
+package in a designated disposable environment with console recovery. Passing
+isolated Python tests or syntax lint does not replace either gate. Exploratory
+mutation code must not be treated as production implementation until its gate
+passes.
 
 ### Recorded appliance evidence — 2026-09-24
 
@@ -675,6 +1142,61 @@ stopped, and hn1's original down/MAC/MTU state was restored.
 This demonstrates executor and service behavior on FreeBSD, not a two-node
 production WAN cutover. External cold-boot first-frame capture, full configured
 WAN routing/NAT/DNS, native pair handoff/pfsync and Gate C remain outstanding.
+
+### Boot integration regression — 2026-09-25
+
+HA-2 boot logs on OPNsense 26.7.3_11 recorded a fatal call to the removed
+`mwexec()` helper in `dhcp_interface_ha_prepare_device()`, reached from
+`interfaces_configure()` during boot. Removing the experimental package restored
+boot, SSH and the web UI. The hook now uses `mwexecf()`, and a regression test
+executes the actual callback against the supported command-helper boundary for
+both successful and failed preparation. The earlier isolated controller/service
+tests did not exercise this PHP boot callback; they did not establish that the
+installed plugin could boot safely. Full installed-package boot qualification
+remains required.
+
+### UI/API repair source verification — 2026-09-25
+
+The local source now contains the combined settings controller, normalized
+status/readiness API, one-form Settings/Status/Diagnostics view, guarded setup
+preparation, and removal guidance. Python tests invoke the real PHP callback and
+the real settings/status controller source with stubbed OPNsense core classes.
+Those fixtures cover transaction ordering, stale revisions, disabled drafts,
+detached identity edits, attached-path rejection, status-shape failure, address
+shape failure and exclusion of a fixture secret. They do not exercise native
+model serialization, a real config file/audit record, MVC routing or Volt
+rendering.
+
+The [repair-plan verification record](dhcp-interface-ha-ui-plan.md)
+contains the exact local checks and versions. A browser-handler smoke test could
+not be run: this checkout has no browser test runner, and npm registry access
+for jsdom returned HTTP 403. No browser test dependency was retained. No
+OPNsense package was installed and no appliance was modified for this
+source-verification pass. Native MVC/browser and installed-package
+qualification remain open under R6.
+
+### Independent local assignments and installed upgrade — 2026-09-25
+
+Package `os-dhcp-interface-ha-devel-0.2_1` (`product_hash=5765e6e83615`) is
+installed on HA-2 / OPNsense 26.7.3_11. Schema 1.1.0 moves the logical assignment
+into Local; NIC names and `optN` identifiers may differ between nodes. Upgrade
+preserved HA-2's disabled `opt7 → dhcpha0lagg → hn1` mapping and shared MAC.
+Native interface configuration matches the pre-upgrade backup.
+
+The Linux suite passes 65 tests, including independent mappings, shared-sync
+isolation, missing-local fencing, stale local revision and live identity guards.
+Ten native MVC migration cases passed in memory on HA-2, covering both model
+orders, existing/empty/unavailable selections, fresh install and subsequent
+legacy shared sync. Installed Settings/Status GET handlers and native form parsing
+pass; Status returns `ok` with no errors. Native addressless-interface placeholders
+are accepted. Native Volt compilation and package checksum checks pass, the
+controller is running and fenced, and HTTP remains reachable.
+
+See [repair plan section 9](dhcp-interface-ha-ui-plan.md#9-independent-local-assignments--package-02_1)
+for artifact provenance, backup location, commands and verification limits.
+The earlier repaired 0.1 package completed an HA-2 reboot in disabled setup;
+0.2_1 was not rebooted. Authenticated browser interactions, enabled two-node
+handoff and pfsync continuity with differing logical assignments remain unqualified.
 
 ### Gate A — stable virtual interface and hard fencing
 
@@ -726,7 +1248,7 @@ Compare candidate mechanisms and prove:
 
 ### Gate D — pfsync and session continuity
 
-With both nodes using the same selected logical kernel name:
+With both nodes using the same kernel interface name (`dhcpha0lagg`):
 
 - Confirm pfsync states reference the compatible interface identity.
 - Establish a long-lived TCP flow through MASTER.
@@ -734,7 +1256,7 @@ With both nodes using the same selected logical kernel name:
 - Confirm peer takes ownership and receives the same DHCP public IPv4 where the ISP permits it.
 - Verify whether the established flow survives.
 - Measure the planned-failover timeline from old-MASTER carrier detach to new-MASTER carrier attach and capture the ISP-facing segment for shared-MAC overlap/flapping.
-- If measurable overlap is unsafe, test the smallest fixed internal promotion-settle delay needed; do not expose another user tuning knob unless evidence requires one.
+- Qualify native CARP-driven transitions, including asymmetric hook delays and network partitions. Local role changes or a settling interval do not prove that the old carrier is fenced.
 - Repeat with pfsync defer off/on and document observed behavior without silently changing the user's setting.
 
 ## 26. Failure test matrix
@@ -795,7 +1317,7 @@ Repository policy requires every proposed abstraction/boundary/state store/retry
 | Global all-MASTER test | Keep all CARP ownership aligned with managed-interface attachment | Matches OPNsense's own master-only behavior |
 | `dhcpha0lagg` stable logical interface | pfsync/PF need matching selected-interface identity across heterogeneous NICs | Removes driver/interface-name mismatch from the PF-facing dataplane |
 | Provisional single-member LAGG | Need stable logical interface plus reversible hard L2 carrier fence | Minimal FreeBSD-native candidate; prototype-gated |
-| Node-local carrier field | Physical nodes may use `ix`, VM nodes `hn`, etc. | Cannot be shared/synchronized safely |
+| Node-local interface and carrier fields | Nodes may use different `optN` assignments and `ix`/`hn` adapters | Shared XMLRPC settings must never retarget a node |
 | Shared MAC field | ISP sees one stable ordinary DHCP Ethernet client across nodes | CARP MAC may be rejected; hardware MACs differ |
 | Generated private MAC action | Generic deployment where no existing accepted MAC must be cloned | Produces a standards-compliant ordinary unicast identity |
 | Failback delay | Avoid gratuitous second outage/MAC move immediately after preferred node recovers | Policy explicitly requested for stable recovery |
@@ -809,10 +1331,21 @@ Repository policy requires every proposed abstraction/boundary/state store/retry
 | Failure test matrix | Protect exclusivity, outage behavior, and state continuity | Each test maps to an externally observable HA invariant |
 | No lease replication in v1 | No demonstrated requirement yet | Avoid unnecessary OPNsense-internal coupling |
 | No Internet health election | Both nodes share upstream path in target topology; failover cannot repair common outage | Avoid needless complexity/flapping |
+| Combined local settings transaction | The controller polls persisted shared/local values | Prevents applying a half-saved pair of models |
+| Settings/Status/Diagnostics and computed checklist | Configure and retire the connection using native interface controls | Makes scope, order, interruption and current readiness explicit |
+| Structured state and evidence availability | Distinguish intentional standby, unsafe attachment and failed observation | Prevents a stale role label or empty JSON fallback from claiming health |
+| Bounded single-request refresh | Keep the UI responsive when configd or a source fails | Prevents accumulating polls and long-lived PHP workers |
+| Explicit unverified peer state | Local configuration cannot prove remote readiness | Avoids inventing cluster health or another peer protocol |
+| PHP callback, native MVC and installed boot checks | Known boot failure crossed a boundary missing from the old tests | Verifies real integration before treating a package as deployable |
 
 ## 29. Phased implementation plan
 
-Keep changes reviewable and avoid a large initial plugin PR.
+Keep changes reviewable. Phases below describe the overall product, not a claim
+that the existing skeleton/controller is complete. **The immediate work is the
+ordered R0–R6 repair plan**, followed by its actual qualification results. Do not
+rebuild earlier phases or generalize release infrastructure as a prerequisite to
+local UI repair. The separate [UI repair plan](dhcp-interface-ha-ui-plan.md) owns
+step dependencies, file boundaries and A01–A16 checks.
 
 ### Phase 0 — repository control-plane generalization
 
@@ -831,11 +1364,12 @@ No production plugin release yet:
 - Record commands/results and choose the minimal fencing/failback mechanisms.
 - Discard exploratory code that does not protect a durable behavior.
 - Update this design if the chosen primitive changes.
-- Obtain the independent-agent design/plan review required by repository `AGENTS.md` before implementation proceeds.
+- Follow the current repository review instructions; do not infer completed qualification or obsolete process requirements from earlier drafts of this specification.
 
 ### Phase 2 — plugin skeleton and read-only discovery
 
-Small PR:
+The original scaffold was incomplete. The UI/API source is now replaced by the
+R0–R5 repair shape; native qualification remains open:
 
 - `net/dhcp-interface-ha` package skeleton.
 - MVC model/controller/view.
@@ -847,7 +1381,8 @@ Small PR:
 
 ### Phase 3 — dataplane controller
 
-Focused PR:
+Experimental source exists, with the documented isolated evidence and boot
+regression. Preserve and qualify:
 
 - `dhcpha0lagg` lifecycle using the Gate A-selected primitive.
 - Idempotent reconciliation and transition lock.
@@ -858,15 +1393,29 @@ Focused PR:
 - Local health integration.
 - Focused tests for pure decision/state logic and command planning.
 
-### Phase 4 — failback and migration
+### Phase 4A — UI/API and guided migration repair (implemented locally; qualification open)
 
-Focused PR:
+The source changes for R0–R5 are present. Complete R6 in the companion plan and
+close each acceptance item from actual evidence:
 
-- Gate C-selected failback implementation.
-- Migration/validation workflow for existing DHCP client interface.
-- Existing spoof-MAC import/cleanup.
-- Disable/uninstall safeguards.
-- Status/diagnostics improvements.
+- Supported PHP boot callback and regression, followed by real package boot tests.
+- One validated local transaction for shared and node-local settings.
+- Structured observations and operational states with bounded reads.
+- Settings, Status and Diagnostics using native framework components.
+- Guided native migration, explicit detached preparation and removal instructions.
+- Live status, accurate failure/partial-save reporting and diagnostic snapshot.
+- Explicit peer evidence limits and manual verification on both nodes.
+- Native MVC/API/browser checks and installed-package boot evidence.
+
+Phase 4A is incomplete until its required checks pass. Report any unexecuted
+appliance checks as outstanding instead of claiming the UI or package qualified.
+
+### Phase 4B — delayed failback (separate, after Gate C)
+
+- Qualify the failback mechanism and emergency takeover during a hold.
+- Implement the backend and test restart/reboot/admin-preemption interactions.
+- Only then expose an editable delay, hold state and timing information in the UI.
+- Preserve the current value-zero validation until this work is complete.
 
 ### Phase 5 — HA integration qualification
 
@@ -880,7 +1429,7 @@ Focused PR:
 
 - Add per-series release metadata/profile for `os-dhcp-interface-ha`.
 - Build/package via generalized Resolver control plane.
-- Run repository-required independent code review, `code-simplifier`, `test-suite-simplifier`, and documentation-impact review.
+- Review correctness, supported core integration, test value and documentation against current repository instructions. Do not represent an unavailable review workflow as already run.
 - Publish only after blocking correctness/security/compatibility findings are resolved.
 
 ## 30. Durable testing strategy
@@ -902,6 +1451,13 @@ Use integration tests/harnesses only where they protect a real boundary:
 - package lifecycle.
 - runtime parsing of representative `ifconfig`/pfsync outputs.
 
+For the UI repair, the required behaviors and preferred seams are A01–A16 in
+[the implementation plan](dhcp-interface-ha-ui-plan.md#5-required-acceptance-scenarios).
+Tests must include real PHP callback execution, combined-save persistence/failure
+behavior, status failure/freshness behavior, native MVC/Volt rendering and an
+installed-package boot check. Source-text assertions, PHP lint and successful
+Python controller tests alone cannot establish those contracts.
+
 Do not retain exploratory tests merely because they were useful during investigation or increase coverage.
 
 ## 31. Acceptance criteria for v1
@@ -910,7 +1466,7 @@ A release candidate is acceptable only when all of the following are demonstrate
 
 1. Installs cleanly on supported OPNsense 26.7+ target(s) without core patching.
 2. Two heterogeneous nodes can select different local Ethernet-capable carriers.
-3. Both nodes expose the same PF-facing selected logical interface name.
+3. Both nodes expose the same PF-facing kernel interface name, `dhcpha0lagg`; local OPNsense assignment IDs may differ.
 4. BACKUP emits no ISP-facing frames/shared MAC through the managed path.
 5. Native CARP maintenance/demotion/disable controls continue to govern ownership.
 6. Hard MASTER failure transfers carrier ownership automatically.
@@ -926,6 +1482,11 @@ A release candidate is acceptable only when all of the following are demonstrate
 16. Session continuity succeeds when the ISP retains the public lease and normal pfsync prerequisites are satisfied.
 17. Diagnostic output is sufficient to identify local carrier incompatibility, MAC-spoofing restrictions, CARP misalignment, and pfsync problems.
 18. BIND package/release behavior remains unchanged by Resolver control-plane generalization.
+19. Settings, Status and Diagnostics satisfy section 21; one save cannot partially persist the shared/local pair.
+20. Setup/removal guidance satisfies section 22, including interruption notices, native links, detached preparation and all-assignment removal checks.
+21. Healthy standby, missing DHCP, unknown observations, stale data and unverified peer readiness have distinct truthful presentations.
+22. Boot completes with the installed package disabled and its device unassigned, with a disabled assigned test interface, and during controlled preparation failure; management access remains available.
+23. The actual target MVC renders/forms/API and the documented UI failure cases pass; operational reads are bounded and do not mutate networking.
 
 ## 32. Open questions intentionally left to prototypes
 
@@ -937,22 +1498,31 @@ Only these implementation questions remain intentionally unresolved:
 4. Which failback-hold mechanism prevents normal preemption while preserving immediate takeover after loss of the current MASTER?
 5. Is explicit lease-state replication necessary for any supported use case after same-MAC/native-DHCP testing? The default answer remains no unless evidence says otherwise.
 6. Does an administratively down/detached carrier on supported physical and virtual NICs retain a reliable media-link signal for standby health checks?
-7. Is any promotion-settle delay required to prevent unsafe transient same-MAC overlap during planned CARP transitions?
+7. What overlap and recovery timing does native CARP-driven handover produce on the supported boot/reconfigure paths? Can non-authoritative ping or passive conflict observations improve diagnostics without introducing another ownership protocol?
 
-No other speculative subsystem should be introduced until one of these gates proves it necessary.
+The API-coordinated handoff increment was withdrawn on 2026-09-27. Additional
+subsystems remain out of scope until evidence and a reviewed design establish
+their need.
 
 ## 33. Repository process requirements
 
-Implementation work must follow `resolver-plugins/plugins/AGENTS.md`, including:
+Read the current repository `AGENTS.md` before implementing. It remains the
+source of repository policy; this specification must not invent review skills
+or claim that earlier agent-process requirements are still present.
 
-- Do not open implementation PRs against official OPNsense repositories.
-- Keep changes narrow and reviewable.
-- Preserve Resolver package/provenance/signing boundaries.
-- Independently review the written implementation plan before implementation.
-- Independently review executable changes before declaring implementation PRs ready.
-- Run the required code-simplifier and test-suite-simplifier review passes.
-- Treat correctness, security, data-loss, compatibility, provenance, and public-contract findings as blocking.
-- Keep exploratory/process artifacts out of durable source unless they protect a current product/maintainer contract.
+- Do not use worktrees or open PRs against official OPNsense repositories.
+- Keep the DHCP Interface HA repair within its plugin, focused workflow/tests
+  and relevant documentation; preserve unrelated work and BIND package policy.
+- Preserve package provenance, pin/fingerprint checks and approved signing and
+  publication boundaries. Infrastructure/publication changes need their own
+  maintainer authorization and review.
+- Keep durable tests under `net/dhcp-interface-ha/tests/` for plugin behavior;
+  CI helper tests belong in `.github/ci/ci-tests/`. Exploratory CI harnesses may
+  use ignored `.github/ci-local/` and must not be committed.
+- Require executed evidence for correctness, compatibility and runtime safety.
+  An unmet or unexecuted blocking check remains visible in the handoff.
+- Update maintainer documentation with changed contracts. Do not claim a
+  successful appliance test, workflow run or deployment without its real result.
 
 ## 34. Upstream/reference points for implementers
 

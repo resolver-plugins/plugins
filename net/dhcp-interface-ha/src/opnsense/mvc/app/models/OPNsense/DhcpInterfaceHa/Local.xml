@@ -1,8 +1,11 @@
 <model>
     <mount>//OPNsense/DhcpInterfaceHaLocal</mount>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <description>DHCP Interface HA node-local settings</description>
     <items>
+        <managed_interface type="TextField">
+            <Required>N</Required>
+        </managed_interface>
         <carrier type="TextField">
             <Required>N</Required>
         </carrier>
