@@ -2,8 +2,8 @@
 
 Status: source implementation for experimental **0.2_9**, 2026-09-27, following
 the user’s implementation request. Local behavior checks and native source/
-syntax probes are recorded below. Appliance deployment and authenticated native
-acceptance remain separate, unperformed gates.
+syntax probes are recorded below. HA-2 deployment is recorded in section 10;
+authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
 bounded contracts below; do not reopen settled product choices or treat the
@@ -255,7 +255,7 @@ selection without changing anything else or contacting the peer.
   mark superseded instructions. Update the carrier/receive-mode ownership
   guidance without changing the existing controller safety contract.
 - [x] Build a versioned package after source verification.
-- [ ] Stage concrete rollback package/config backups before any authorized deployment. Preserve
+- [x] Stage concrete rollback package/config backups before any authorized deployment. Preserve
   node-local mappings, shared settings and operator-selected CARP maintenance.
 - [ ] When deployment is authorized, verify installed file hashes, package
   checksums, service state, actual native log registration/viewer and unchanged
@@ -428,9 +428,42 @@ source with `product_hash=unknown`; the recorded content hashes identify the
 exact artifact without inventing a source commit. HA-2 still reported
 `os-dhcp-interface-ha-devel-0.2_8` after the build.
 
-All scenarios in the native acceptance matrix above remain **unrun for 0.2_9**.
-In particular, no native assignment was changed, no peer sync or CARP transition
-was triggered, no package was installed and no running service was restarted
-during this increment. Before release qualification, exercise the assignment
+At the source/build checkpoint, the native acceptance matrix was **unrun for
+0.2_9**. No native assignment, peer sync, CARP transition, package installation
+or running-service restart was performed during source implementation. The
+subsequent authorized HA-2 deployment is recorded below. Before release qualification, exercise the assignment
 bridge in an authorized disposable native setup, authenticated browser roles,
 actual event delivery/filtering/rotation, and the specified live lifecycle cases.
+
+## 10. HA-2 deployment — 2026-09-27
+
+The user authorized deployment to HA-2. Installed the exact verified
+`os-dhcp-interface-ha-devel-0.2_9.pkg` candidate above on OPNsense 26.7.3_11.
+HA-1 was not changed. The prior 0.2_8 package and private configuration backup
+are in `/root/dhcpha-upgrade-0.2_9.moxwkta8` on HA-2, alongside installation,
+restart, status and native-log evidence. The rollback package SHA-256 is
+`d56ebe639d52f62f912d8a62b0bd572878da9b6944ec0a007f2d296d4b8f5f1f`.
+
+Deployment verification:
+
+- All **25 installed source files** match the build manifest; native package
+  checksum verification passes. Installed package reports **0.2_9**.
+- The controller was safely stopped for installation and restarted. Before
+  and after, it was enabled and **STANDBY / BACKUP / FENCED** with no IPv4
+  address on the detached plugin adapter. This is the expected standby state.
+- Configuration is byte-identical to its backup. Native CARP allow, demotion
+  and maintenance readback are unchanged; no role or maintenance action was
+  invoked. Local mapping, shared MAC and sync selection were preserved.
+- Cleared all five compiled Volt templates and restarted the native web GUI.
+  HTTPS responds **200**; installed Settings and Log templates compile.
+- Native Syslog registered `dhcpinterfaceha/core`; the native log query returns
+  actual new `dhcp-interface-ha` controller events, including the standby
+  observation. This verifies event delivery and backend reading.
+- A direct read-only invocation of the installed Status action using native
+  OPNsense request/models reports `ready / global_backup`, with no relevant
+  non-passing readiness checks. This is not an authenticated browser/ACL test.
+
+No Configure operation, peer sync, failover or reboot was performed. Native
+assignment/setup, authenticated browser and restricted-role behavior, log-viewer
+interaction/retention, enabled boot and live paired-network qualification remain
+outstanding. Deployment alone does not complete that acceptance matrix.

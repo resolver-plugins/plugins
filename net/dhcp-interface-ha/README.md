@@ -66,9 +66,11 @@ zero; native CARP preemption policy remains in effect.
 The API-coordinated handoff increment was withdrawn on 2026-09-27. Source and
 HA-2 were restored to the pre-handoff 0.2_1 baseline, preserving the UI repair, boot fix and
 independent local assignments. The controller follows native CARP without peer
-API credentials, a coordination switch or acknowledged release holds. The last
-verified package deployment on both nodes is 0.2_8; this source increment does
-not change the appliances. See the [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
+API credentials, a coordination switch or acknowledged release holds. HA-2 now
+runs 0.2_9 after the verified deployment recorded in the
+[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#10-ha-2-deployment--2026-09-27).
+HA-1’s last verified package deployment remains 0.2_8. See the
+[deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 
 Ping-based handover checks and passive conflict observations were discussed but
 are not implemented in this restored baseline. Native paired handover and boot
