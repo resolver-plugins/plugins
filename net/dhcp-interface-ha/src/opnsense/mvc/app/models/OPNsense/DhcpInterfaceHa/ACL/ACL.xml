@@ -9,7 +9,7 @@
     <page-diagnostics-logs-dhcp-interface-ha>
         <name>Services: DHCP Interface HA: Log File</name>
         <patterns>
-            <pattern>ui/dhcpinterfaceha/log</pattern>
+            <pattern>ui/dhcpinterfaceha/index/log</pattern>
             <pattern>api/diagnostics/log/dhcpinterfaceha/core</pattern>
             <pattern>api/diagnostics/log/dhcpinterfaceha/core/export</pattern>
             <pattern>api/diagnostics/log/dhcpinterfaceha/core/live</pattern>

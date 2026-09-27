@@ -1177,7 +1177,7 @@ $(document).ready(function() {
     <ul class="nav nav-tabs" data-tabs="tabs" id="maintabs">
         <li class="active" id="settingsTab"><a data-toggle="tab" href="#settings">{{ lang._('Settings') }}</a></li>
         <li id="diagnosticsTab"><a data-toggle="tab" href="#diagnostics">{{ lang._('Diagnostics') }}</a></li>
-        {% if canViewLogs %}<li id="logTab"><a href="/ui/dhcpinterfaceha/log">{{ lang._('Log') }}</a></li>{% endif %}
+        {% if canViewLogs %}<li id="logTab"><a href="/ui/dhcpinterfaceha/index/log">{{ lang._('Log') }}</a></li>{% endif %}
     </ul>
 
     <div class="tab-content content-box">

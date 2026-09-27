@@ -2,7 +2,7 @@
 
 Status: source implementation for experimental **0.2_9**, 2026-09-27, following
 the user’s implementation request. Local behavior checks and native source/
-syntax probes are recorded below. HA-2 deployment is recorded in section 10;
+syntax probes are recorded below. HA-2 deployments and the Log route fix are recorded in sections 10–11;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -467,3 +467,33 @@ No Configure operation, peer sync, failover or reboot was performed. Native
 assignment/setup, authenticated browser and restricted-role behavior, log-viewer
 interaction/retention, enabled boot and live paired-network qualification remain
 outstanding. Deployment alone does not complete that acceptance matrix.
+
+## 11. Log page route correction — HA-2 0.2_10, 2026-09-27
+
+The user reported “page not found” when opening Log. The 0.2_9 link
+`/ui/dhcpinterfaceha/log` addresses `LogController::indexAction`, which does
+not exist. The actual implementation is `IndexController::logAction`, so its
+native URL is `/ui/dhcpinterfaceha/index/log`. Corrected the menu, both views,
+Retry link and exact wrapper ACL together. Native log API permissions are
+unchanged. This was a plugin routing defect.
+
+The previous direct-action fixtures and Volt syntax checks did not exercise URL
+resolution. Added `tests/native/test_ui_routes.php`, which reads actual menu/tab
+links and uses the installed native router to resolve their controller/actions
+without dispatch or authentication changes. It reproduced the missing route on
+0.2_9, passed for the candidate links, and passed after installation. Run it on
+OPNsense with `php test_ui_routes.php` for installed files, or supply the
+candidate plugin `src` directory to check its links against native controllers.
+
+Both focused Log integration tests, both Node suites, XML parsing, PHP syntax
+and diff checks pass. Built and installed `os-dhcp-interface-ha-devel-0.2_10`
+on HA-2, package SHA-256
+`b2b12800d14f2b482d138cffb10ccfee0836515feb2d45a730cc53878db18802`.
+All 25 installed source hashes and package checksums pass. Compiled Volt cache
+was cleared and the web GUI restarted; HTTPS responds. Unauthenticated HTTP
+checks reach the login page and do not establish authenticated rendering; the
+native router regression verifies the reported missing-page cause.
+
+Private configuration backup, 0.2_9 rollback package and deployment logs are
+in `/root/dhcpha-log-route-0.2_10.640t_upb` on HA-2. Configuration remains
+byte-identical and the controller is running. HA-1 was not changed.

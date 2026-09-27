@@ -35,13 +35,13 @@ $(document).ajaxError(function(event, xhr, settings) {
     <ul class="nav nav-tabs" data-tabs="tabs" id="maintabs">
         <li><a href="/ui/dhcpinterfaceha">{{ lang._('Settings') }}</a></li>
         <li><a href="/ui/dhcpinterfaceha#diagnostics">{{ lang._('Diagnostics') }}</a></li>
-        <li class="active"><a href="/ui/dhcpinterfaceha/log">{{ lang._('Log') }}</a></li>
+        <li class="active"><a href="/ui/dhcpinterfaceha/index/log">{{ lang._('Log') }}</a></li>
     </ul>
 
     <div id="logAccessError" class="alert alert-danger{% if canViewLogs %} hidden{% endif %}" role="alert" aria-live="assertive">
         <strong>{{ lang._('Log access is unavailable.') }}</strong>
         {{ lang._('Check the account permissions, then retry the log request.') }}
-        <a href="/ui/dhcpinterfaceha/log">{{ lang._('Retry') }}</a>
+        <a href="/ui/dhcpinterfaceha/index/log">{{ lang._('Retry') }}</a>
     </div>
 
     {% if canViewLogs %}

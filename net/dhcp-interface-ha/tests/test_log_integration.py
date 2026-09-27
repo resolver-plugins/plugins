@@ -22,7 +22,7 @@ class LogIntegrationTests(unittest.TestCase):
         self.assertEqual(
             patterns,
             [
-                "ui/dhcpinterfaceha/log",
+                "ui/dhcpinterfaceha/index/log",
                 "api/diagnostics/log/dhcpinterfaceha/core",
                 "api/diagnostics/log/dhcpinterfaceha/core/export",
                 "api/diagnostics/log/dhcpinterfaceha/core/live",

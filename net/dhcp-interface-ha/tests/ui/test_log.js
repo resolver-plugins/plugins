@@ -14,7 +14,7 @@ const events = {
     ajaxSuccess(handler) { handlers.success = handler; return this; }
 };
 vm.runInNewContext(view.match(/<script>([\s\S]*?)<\/script>/)[1], {
-    document, URL, window: { location: { href: 'https://firewall/ui/dhcpinterfaceha/log' } },
+    document, URL, window: { location: { href: 'https://firewall/ui/dhcpinterfaceha/index/log' } },
     $(selector) {
         if (selector === document) { return events; }
         return {

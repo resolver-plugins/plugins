@@ -2,7 +2,7 @@
     <Services>
         <DhcpInterfaceHa VisibleName="DHCP Interface HA" cssClass="fa fa-random fa-fw">
             <Settings VisibleName="Settings" url="/ui/dhcpinterfaceha" order="1"/>
-            <Log VisibleName="Log" url="/ui/dhcpinterfaceha/log" order="100"/>
+            <Log VisibleName="Log" url="/ui/dhcpinterfaceha/index/log" order="100"/>
         </DhcpInterfaceHa>
     </Services>
 </menu>
