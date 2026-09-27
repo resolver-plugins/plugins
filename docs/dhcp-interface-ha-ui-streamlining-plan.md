@@ -1,8 +1,9 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_9**, 2026-09-27, following
+Status: source implementation for experimental **0.2_11**, 2026-09-27, following
 the user’s implementation request. Local behavior checks and native source/
-syntax probes are recorded below. HA-2 deployments and the Log route fix are recorded in sections 10–11;
+syntax probes are recorded below. HA-2 deployments and UI corrections are
+recorded in sections 10–12;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -497,3 +498,19 @@ native router regression verifies the reported missing-page cause.
 Private configuration backup, 0.2_9 rollback package and deployment logs are
 in `/root/dhcpha-log-route-0.2_10.640t_upb` on HA-2. Configuration remains
 byte-identical and the controller is running. HA-1 was not changed.
+
+## 12. Log navigation cleanup — HA-2 0.2_11, 2026-09-27
+
+Removed the separate Log child from the Services sidebar. The sidebar now has
+one DHCP Interface HA entry, which opens Settings. Log remains available through
+the Settings/Diagnostics/Log tabs within the plugin and keeps its dedicated ACL.
+
+The candidate passed both Node UI suites and the native route check. Installed
+`os-dhcp-interface-ha-devel-0.2_11` on HA-2, SHA-256
+`23999e03e09d63095658bc90a974aa955ebc57efd5de1956c63820f56637385c`.
+All 25 installed source hashes and package checksums pass. Installed menu XML
+contains only `/ui/dhcpinterfaceha`, the Log tab still targets the verified
+`/ui/dhcpinterfaceha/index/log` route, and HTTPS responds 200 after cache clearing
+and web GUI restart. Configuration is byte-identical and the controller remains
+running. The private 0.2.10 rollback package and deployment evidence are in
+`/root/dhcpha-menu-0.2_11.jkmcpenj` on HA-2. HA-1 was not changed.
