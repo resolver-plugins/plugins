@@ -15,8 +15,6 @@ class IndexController extends \OPNsense\Base\IndexController
         $this->view->canConfigureInterface = $this->view->canWriteSettings
             && $this->canAccess('/api/interfaces/assignment/reconfigure');
         $this->view->configureAllowedInterfaces = $this->configureAllowedInterfaces();
-        $this->view->canEnableSync = $this->view->canWriteSettings
-            && $this->canAccess('/api/core/hasync/set');
         $this->view->canRunRecovery = $this->view->canWriteSettings
             && $this->canAccess('/api/dhcpinterfaceha/service/prepare')
             && $this->canAccess('/api/dhcpinterfaceha/service/apply');

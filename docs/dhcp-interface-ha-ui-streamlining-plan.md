@@ -1,9 +1,9 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_11**, 2026-09-27, following
+Status: source implementation for experimental **0.2_12**, 2026-09-27, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
-recorded in sections 10–12;
+recorded in sections 10–13;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -514,3 +514,25 @@ contains only `/ui/dhcpinterfaceha`, the Log tab still targets the verified
 and web GUI restart. Configuration is byte-identical and the controller remains
 running. The private 0.2.10 rollback package and deployment evidence are in
 `/root/dhcpha-menu-0.2_11.jkmcpenj` on HA-2. HA-1 was not changed.
+
+## 13. UI density cleanup — HA-2 0.2_12, 2026-09-27
+
+Reduced Settings and Diagnostics to the controls and observations used in the
+normal workflow. Settings no longer renders the local carrier node or mapping,
+the configured-interface notice, observed timestamp, explanatory state sentence,
+or configuration-sync box. Diagnostics no longer renders Current issues, status
+checks, observation source errors or the CARP inventory. State remains the compact
+operational summary; Diagnostics retains observed details, guarded recovery,
+native links and snapshot download. The structured status/readiness data and
+sync API remain available to safety guards and support tooling.
+
+The candidate passed 108 Python tests, both Node UI suites, PHP lint, XML parsing,
+diff checks and native Volt compilation. Installed
+`os-dhcp-interface-ha-devel-0.2_12` on HA-2, package SHA-256
+`4fccc28da66dcf4a4df4919ebd7c6d0b04397cf95c38899885373cf317b16ac7`.
+All 25 installed source hashes and package checksums pass. The installed template
+contains none of the removed sections, native Settings and Log routes resolve,
+the Volt cache was cleared, the web GUI restarted and HTTPS responds 200.
+Configuration remains byte-identical and the controller remains running. The
+private 0.2.11 rollback package, configuration backup and deployment evidence are
+in `/root/dhcpha-ui-cleanup-0.2_12.m6SIUL` on HA-2. HA-1 was not changed.

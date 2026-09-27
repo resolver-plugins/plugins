@@ -23,8 +23,9 @@ OPNsense retains ownership of DHCP, addressing, routing, NAT and PF.
 The UI streamlining increment provides **Settings**, **Diagnostics** and **Log**.
 Settings keeps the current state and normal setup controls together. Configure
 interface captures the carrier and performs guarded native assignment setup;
-Diagnostics separates plugin recovery from user choices and native conflicts.
-The Log tab uses OPNsense's native local log viewer.
+Diagnostics keeps observed details, guarded recovery, native configuration links
+and the downloadable snapshot. The Log tab uses OPNsense's native local log
+viewer for operational events and problems.
 
 The [UI streamlining specification](../../docs/dhcp-interface-ha-ui-streamlining-spec.md)
 and [implementation plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md)
@@ -46,11 +47,8 @@ history. Source implementation does not imply that an appliance was updated.
   scopes while saving them in one local transaction.
 - Status reports backend CARP/attachment state, source-labeled HA context and
   computed migration/removal readiness; peer plugin readiness stays unverified.
-- Settings offers confirmed local setup, Save & Apply and optional inclusion in
-  an existing sender's native configuration synchronization selection.
+- Settings offers confirmed local setup and Save & Apply.
 - Diagnostics keeps detailed evidence and guarded recovery actions available.
-  A failed condition identifies its responsible component and allowed remedy;
-  unknown observations do not imply user error or successful recovery.
 - Log shows native controller/setup events and verified recovery. Repeated daemon
   failures are bounded; inspecting the page does not create a second event history.
 
@@ -67,8 +65,8 @@ The API-coordinated handoff increment was withdrawn on 2026-09-27. Source and
 HA-2 were restored to the pre-handoff 0.2_1 baseline, preserving the UI repair, boot fix and
 independent local assignments. The controller follows native CARP without peer
 API credentials, a coordination switch or acknowledged release holds. HA-2 now
-runs 0.2_11 after the navigation cleanup recorded in the
-[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#12-log-navigation-cleanup--ha-2-02_11-2026-09-27).
+runs 0.2_12 after the UI density cleanup recorded in the
+[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#13-ui-density-cleanup--ha-2-02_12-2026-09-27).
 HA-1’s last verified package deployment remains 0.2_8. See the
 [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 

@@ -157,7 +157,6 @@ function configureFixture(options = {}) {
     const context = vm.createContext(Object.assign({}, dom, {
         api: '/api/dhcpinterfaceha',
         canConfigureInterface: options.canConfigureInterface !== false,
-        canEnableSync: false,
         canWriteSettings: true,
         configureAllowedInterfaces: options.allowed === false ? [] : ['opt7'],
         configureBusy: false,
@@ -220,7 +219,7 @@ function configureFixture(options = {}) {
     }));
     vm.runInContext(between('    function verifiedDetached(', '    function statusIsFresh('), context);
     vm.runInContext(between('    function statusIsFresh(', '    function isConfiguredForForm('), context);
-    vm.runInContext(between('    function mappedDeviceNeedsRecovery(', '    function updateMapping('), context);
+    vm.runInContext(between('    function mappedDeviceNeedsRecovery(', '    function updateMacSuggestion('), context);
     vm.runInContext(between('    function detachedEvidenceFresh()', '    function requestStatusOnce('), context);
     vm.runInContext(between('    function blockConfigureOutcome(', '    async function readConfigureOutcome('), context);
     vm.runInContext(between('    async function configureSelectedLagg()', '    function runRecovery('), context);
@@ -265,7 +264,6 @@ function readbackFixture(settings, status, options = {}) {
     dom.setField('dhcphashared.enabled', '', {checked: options.enabledDraft === undefined ? true : options.enabledDraft});
     dom.setField('dhcphashared.shared_mac', options.currentMac || '02:00:00:00:00:01');
     dom.nodes['#revision'] = {props: {}, value: 'rev1', text: '', visible: true, children: []};
-    const updates = [];
     let settingsReads = 0;
     let statusReads = 0;
     const context = vm.createContext(Object.assign({}, dom, {
@@ -309,15 +307,14 @@ function readbackFixture(settings, status, options = {}) {
             && ['FENCED', 'UNMANAGED'].includes(data.attachment.actual)
             && Array.isArray(data.attachment.members) && data.attachment.members.length === 0
             && (data.attachment.device.exists === false || data.attachment.owned === true),
-        updateMapping: () => updates.push('mapping'),
-        updateMacSuggestion: () => updates.push('mac'),
+        updateMacSuggestion: () => {},
         updateActions: () => {},
         refreshStatus: () => {}
     }));
     vm.runInContext(between('    function statusIsFresh(', '    function isConfiguredForForm('), context);
     vm.runInContext(between('    function safelyRetryableSetup(', '    function mappedDeviceNeedsRecovery('), context);
     vm.runInContext(between('    function blockConfigureOutcome(', '    async function configureSelectedLagg('), context);
-    return {context, dom, updates, readCounts: () => ({settingsReads, statusReads})};
+    return {context, dom, readCounts: () => ({settingsReads, statusReads})};
 }
 
 function deferredAjax(onChange) {
@@ -529,7 +526,7 @@ async function testConfigureReadbackGuards() {
     assert.equal(stale.context.configureRetryReady, false, 'stale assignment evidence cannot claim a safe retry');
 }
 
-function testConfiguredBadgeRequiresVerifiedOwnership() {
+function testConfiguredStateRequiresVerifiedOwnership() {
     const dom = domFixture();
     dom.setField('dhcphalocal.managed_interface', 'opt7');
     const context = vm.createContext(Object.assign({}, dom, {
@@ -555,11 +552,11 @@ function testConfiguredBadgeRequiresVerifiedOwnership() {
     assert.equal(vm.runInContext('isConfiguredForForm()', context), true);
     context.statusData.attachment.owned = false;
     assert.equal(vm.runInContext('isConfiguredForForm()', context), false,
-        'a native mapping alone cannot show Interface configured for a foreign device');
+        'a native mapping alone cannot be treated as configured for a foreign device');
     context.statusData.attachment.owned = true;
     context.statusData.attachment.device.exists = false;
     assert.equal(vm.runInContext('isConfiguredForForm()', context), false,
-        'a native mapping alone cannot show Interface configured when the owned device is absent');
+        'a native mapping alone cannot be treated as configured when the owned device is absent');
 }
 
 function statusRequestSource() {
@@ -667,7 +664,6 @@ async function testOldCarrierAndMacSuggestions() {
         settingsBusy: false,
         statusIsFresh: () => false,
         updateMacSuggestion: data => { context.lastSuggestion = data.interface; },
-        updateMapping: () => {},
         updateActions: () => {},
         getJson: () => {
             const request = deferredAjax(() => {});
@@ -676,7 +672,7 @@ async function testOldCarrierAndMacSuggestions() {
         }
     }));
     vm.runInContext(between('    function invalidateStatus(', '    function verifiedDetached('), context);
-    vm.runInContext(between('    function loadCarrierPreview(', '    function checkLabel('), context);
+    vm.runInContext(between('    function loadCarrierPreview(', '    function updateAddressDetail('), context);
     vm.runInContext('loadCarrierPreview("opt7", "em0"); loadCarrierPreview("opt8", "");', context);
     requests[1].resolve({interface: 'opt8', managed: {current_device: 'em1', description: 'WAN'}, errors: {}});
     requests[0].resolve({interface: 'opt7', managed: {current_device: 'em0', description: 'LAN'}, errors: {}});
@@ -778,54 +774,10 @@ function testSummaryAndAddressMeaning() {
 
     const setup = summaryFixture('not_configured', 'DISABLED', 'FENCED', 'MASTER', 'interface_setup_required');
     vm.runInContext('renderSummary(summaryFixture)', Object.assign(context, {summaryFixture: setup}));
-    assert.match(dom.getText('#summaryDetails'), /Configure the selected interface/);
+    assert.equal(dom.getText('#summaryState'), 'Not configured');
     setup.managed.identifier = '';
     vm.runInContext('renderSummary(summaryFixture)', Object.assign(context, {summaryFixture: setup}));
-    assert.match(dom.getText('#summaryDetails'), /Select a managed logical interface/);
-}
-
-function testIssueFirstDiagnostics() {
-    const dom = domFixture();
-    dom.$('#showAllChecks').prop('checked', false);
-    const context = vm.createContext(Object.assign({}, dom, {
-        checkLabel: status => status === 'pass' ? 'Passing' : (status === 'fail' ? 'Needs attention' : 'Unknown'),
-        actionControl: () => null,
-        nativeLinks: {},
-        showTab: () => {}
-    }));
-    vm.runInContext(between('    function renderReadiness(', '    function renderSourceErrors('), context);
-    const records = [
-        {code: 'blocking', status: 'fail', relevant: true, message: 'block'},
-        {code: 'healthy', status: 'pass', relevant: true, message: 'pass'},
-        {code: 'context', status: 'fail', relevant: false, message: 'context'},
-        {code: 'unknown', status: 'unknown', relevant: true, message: 'unknown'}
-    ];
-    context.readinessFixture = records;
-    vm.runInContext('renderReadiness(readinessFixture)', context);
-    assert.equal(dom.nodes['#diagnosticsReadinessList'].children.length, 2,
-        'default Diagnostics shows only non-passing relevant checks');
-    dom.$('#showAllChecks').prop('checked', true);
-    vm.runInContext('renderReadiness(readinessFixture)', context);
-    assert.equal(dom.nodes['#diagnosticsReadinessList'].children.length, 4,
-        'Show all checks restores every check including passing and irrelevant context');
-}
-
-function testSenderGatesSyncAction() {
-    const dom = domFixture();
-    const context = vm.createContext(Object.assign({}, dom, {canEnableSync: true}));
-    vm.runInContext(between('    function updateSyncStatus(', '    function markStatusStale('), context);
-    vm.runInContext('updateSyncStatus({sender_configured:false, plugin_settings_sync:false})', context);
-    assert.equal(dom.nodes['#enableSyncBlock'].visible, true);
-    assert.equal(dom.nodes['#syncNoSender'].visible, true);
-    assert.equal(dom.nodes['#enableSync'].visible, false,
-        'a receiver without an outbound destination sees neutral context, never an include action');
-    vm.runInContext('updateSyncStatus({sender_configured:true, plugin_settings_sync:false})', context);
-    assert.equal(dom.nodes['#syncMissing'].visible, true);
-    assert.equal(dom.nodes['#enableSync'].visible, true);
-    vm.runInContext('updateSyncStatus({sender_configured:true, plugin_settings_sync:true})', context);
-    assert.equal(dom.nodes['#syncSelected'].visible, true);
-    assert.equal(dom.nodes['#enableSync'].visible, false,
-        'already-included membership is reported without a repeat action');
+    assert.equal(dom.getText('#summaryState'), 'Not configured');
 }
 
 (async () => {
@@ -833,10 +785,8 @@ function testSenderGatesSyncAction() {
     await testConfigureReadbackGuards();
     await testSharedStatusReadbackAndFreshness();
     await testOldCarrierAndMacSuggestions();
-    testConfiguredBadgeRequiresVerifiedOwnership();
+    testConfiguredStateRequiresVerifiedOwnership();
     testSummaryAndAddressMeaning();
-    testIssueFirstDiagnostics();
-    testSenderGatesSyncAction();
     console.log('DHCP Interface HA UI behavior checks passed');
 })().catch(error => {
     console.error(error);

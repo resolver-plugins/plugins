@@ -3,18 +3,11 @@ $(document).ready(function() {
     const api = "/api/dhcpinterfaceha";
     const canWriteSettings = {{ canWriteSettings ? 'true' : 'false' }};
     const canConfigureInterface = {{ canConfigureInterface ? 'true' : 'false' }};
-    const canEnableSync = {{ canEnableSync ? 'true' : 'false' }};
     const canRunRecovery = {{ canRunRecovery ? 'true' : 'false' }};
     const canGenerateMac = {{ canGenerateMac ? 'true' : 'false' }};
     const configureAllowedInterfaces = $("#configureAllowedInterfaces [data-interface]").map(function() {
         return $(this).data("interface");
     }).get();
-    const nativeLinks = {
-        interface_assignments: "/ui/interfaces/assign",
-        carp: "/ui/interfaces/vip",
-        hasync: "/ui/core/hasync",
-        peer_check: "/ui/core/hasync_status"
-    };
     let selectionGeneration = 0;
     let formGeneration = 0;
     let statusGeneration = 0;
@@ -170,26 +163,6 @@ $(document).ready(function() {
             && (pending.state === "clear" || (retryReady && pending.state === "selected_relink"));
     }
 
-    function updateMapping() {
-        const managed = field("dhcphalocal.managed_interface").val() || "";
-        if (!managed) {
-            $("#interfaceMapping").text("None");
-            return;
-        }
-        const label = managedDescription || managed;
-        let description = label + " (" + managed + ")";
-        if (previewDevice === "dhcpha0lagg") {
-            description += localCarrier
-                ? " → dhcpha0lagg (carrier " + localCarrier + ")"
-                : " → dhcpha0lagg (original carrier unavailable)";
-        } else if (previewDevice) {
-            description += " → " + previewDevice + " (Configure interface moves this assignment)";
-        } else {
-            description += " → current assignment unavailable";
-        }
-        $("#interfaceMapping").text(description);
-    }
-
     function updateMacSuggestion(data) {
         const selected = field("dhcphalocal.managed_interface").val() || "";
         if (data && data.interface && selected !== data.interface) {
@@ -225,7 +198,6 @@ $(document).ready(function() {
         $("#useCurrentMac").prop("disabled", true);
         if (!interfaceId) {
             managedDescription = "";
-            updateMapping();
             updateActions();
             return;
         }
@@ -243,7 +215,6 @@ $(document).ready(function() {
                 $("#carrierLoadError").toggle(!!(data.errors && Object.keys(data.errors).length))
                     .text("Carrier inventory has incomplete observations. Configure only after refreshing status.");
                 updateMacSuggestion(data);
-                updateMapping();
                 updateActions();
             })
             .fail(function() {
@@ -253,94 +224,8 @@ $(document).ready(function() {
                 previewDevice = "";
                 $("#carrierLoadError").text("Interface assignment inventory is unavailable. The saved selection and MAC field are unchanged.").show();
                 $("#currentMacDescription").text("Assignment observation unavailable");
-                updateMapping();
                 updateActions();
             });
-    }
-
-    function checkLabel(status) {
-        return status === "pass" ? "Passing" : (status === "fail" ? "Needs attention" : "Unknown");
-    }
-
-    function actionControl(action) {
-        const buttons = {
-            configure: "#configureLagg",
-            enable_sync: "#enableSync",
-            reset_failback: "#resetFailback",
-            prepare: "#prepareDevice",
-            reconcile: "#reconcileDiagnostics"
-        };
-        if (buttons[action]) {
-            const button = $("<button>").attr("type", "button").addClass("btn btn-link btn-xs")
-                .text(action.replaceAll("_", " "));
-            button.on("click", function() { $(buttons[action]).trigger("click"); });
-            return button;
-        }
-        if (action === "settings") {
-            return $("<a>").attr("href", "#settings").text("Settings").on("click", function(event) {
-                event.preventDefault();
-                showTab("#settings");
-            });
-        }
-        if (nativeLinks[action]) {
-            return $("<a>").attr("href", nativeLinks[action]).text("Open native settings");
-        }
-        return null;
-    }
-
-    function renderReadiness(records) {
-        const showAll = $("#showAllChecks").prop("checked");
-        const list = $("#diagnosticsReadinessList").empty();
-        const visible = (Array.isArray(records) ? records : []).filter(function(record) {
-            return showAll || (record.relevant === true && record.status !== "pass");
-        });
-        if (visible.length === 0) {
-            list.append($("<li>").text(showAll ? "No readiness checks were returned." : "No current relevant issues were observed."));
-            return;
-        }
-        visible.forEach(function(record) {
-            const row = $("<li>").addClass("readiness-" + (record.status || "unknown"));
-            row.append($("<strong>").text(checkLabel(record.status) + " — "));
-            row.append($("<span>").text(record.message || record.code || "Observation unavailable."));
-            const context = [];
-            if (record.responsibility) {
-                context.push("Responsibility: " + record.responsibility.replaceAll("_", " "));
-            }
-            if (record.resolution) {
-                context.push("Resolution: " + record.resolution.replaceAll("_", " "));
-            }
-            if (record.attempt && typeof record.attempt === "object") {
-                context.push("Attempt: " + (record.attempt.operation || "operation") + " · " + (record.attempt.outcome || "unknown"));
-            } else if (record.resolution === "automatic") {
-                context.push("Automatic recovery expected; refresh status.");
-            }
-            if (context.length) {
-                row.append(" ").append($("<small>").text("(" + context.join("; ") + ")"));
-            }
-            const action = actionControl(record.action);
-            if (action) {
-                row.append(" ").append(action);
-            }
-            if (record.relevant === false) {
-                row.append(" ").append($("<small>").text("Not relevant to local readiness."));
-            }
-            list.append(row);
-        });
-    }
-
-    function renderSourceErrors(errors) {
-        const list = $("#sourceErrors").empty();
-        const entries = errors && typeof errors === "object" ? Object.entries(errors) : [];
-        if (entries.length === 0) {
-            list.append($("<li>").text("No observation source errors were reported."));
-            return;
-        }
-        entries.forEach(function(entry) {
-            const row = $("<li>");
-            row.append($("<strong>").text(entry[0] + ": "));
-            row.append($("<span>").text(entry[1] || "Observation unavailable."));
-            list.append(row);
-        });
     }
 
     function updateAddressDetail(data) {
@@ -363,16 +248,8 @@ $(document).ready(function() {
         return "IPv4 address unavailable";
     }
 
-    function summaryReason(data) {
-        const summary = data.summary || {};
-        const checks = data.readiness || [];
-        const check = checks.find(function(item) { return item.code === summary.reason_code; });
-        return (check && check.message) || (data.controller && data.controller.reason) || summary.reason_code || "Current state is unavailable.";
-    }
-
-    function setSummary(state, detail, cssClass) {
+    function setSummary(state, cssClass) {
         $("#summaryState").text(state).removeClass().addClass("label " + cssClass);
-        $("#summaryDetails").text(detail || "");
     }
 
     function renderSummary(data) {
@@ -396,38 +273,31 @@ $(document).ready(function() {
                 || ["attachment_while_disabled_or_unmanaged", "attachment_when_carp_ineligible"].includes(reasonCode)));
         const managed = data.managed && data.managed.identifier;
         if (summary.state === "not_configured" && !managed) {
-            setSummary("Not configured", "Select a managed logical interface to begin local setup.", "label-default");
+            setSummary("Not configured", "label-default");
         } else if (summary.state === "status_unavailable" || data.result === "unavailable") {
-            setSummary("Status unavailable", summaryReason(data), "label-default");
+            setSummary("Status unavailable", "label-default");
         } else if (summary.state === "not_configured") {
-            setSummary("Not configured", managed
-                ? "Configure the selected interface while the plugin is disabled to complete local setup."
-                : "Select a managed logical interface to begin local setup.", "label-default");
+            setSummary("Not configured", "label-default");
         } else if (attachmentUnsafe) {
-            setSummary("Needs attention", summaryReason(data), "label-danger");
+            setSummary("Needs attention", "label-danger");
         } else if (controller.state === "DISABLED" && detached) {
             setSummary(summary.state === "ready" && data.managed && data.managed.device === "dhcpha0lagg"
                 ? "Ready to enable · Disabled" : "Disabled · Interface disconnected",
-                "The local adapter is verified detached." + (summary.state === "needs_attention" ? " " + summaryReason(data) : ""), "label-default");
+                "label-default");
         } else if (carp.maintenance === true && detached) {
-            setSummary("Maintenance · Interface disconnected", "Native CARP maintenance is active; the local adapter is detached."
-                + (summary.state === "needs_attention" ? " " + summaryReason(data) : ""), "label-warning");
+            setSummary("Maintenance · Interface disconnected", "label-warning");
         } else if ((controller.state === "STANDBY" || role === "BACKUP") && detached) {
-            setSummary("Standby · Interface intentionally disconnected", "Native CARP reports " + role + "; the local adapter is verified detached."
-                + (summary.state === "needs_attention" ? " " + summaryReason(data) : ""), "label-warning");
+            setSummary("Standby · Interface intentionally disconnected", "label-warning");
         } else if (controller.state === "ACTIVE" && role === "MASTER" && actual === "ATTACHED"
             && data.attachment && data.attachment.owned === true) {
-            setSummary("Active · CARP MASTER · " + address, "The plugin-owned adapter is verified attached."
-                + (summary.state === "needs_attention" ? " " + summaryReason(data) : ""), "label-success");
+            setSummary("Active · CARP MASTER · " + address, "label-success");
         } else if (summary.state === "needs_attention") {
-            setSummary("Needs attention", summaryReason(data), "label-danger");
+            setSummary("Needs attention", "label-danger");
         } else if (summary.state === "ready") {
-            setSummary("Unable to proceed", summaryReason(data), "label-warning");
+            setSummary("Unable to proceed", "label-warning");
         } else {
-            setSummary("Status unavailable", summaryReason(data), "label-default");
+            setSummary("Status unavailable", "label-default");
         }
-        $("#summaryFreshness").text("Observed " + (data.collected_at || "time unavailable")
-            + (data.result === "partial" ? " · Some optional observations are unavailable." : ""));
         clearTimeout(staleTimer);
         const remainingFreshMs = Math.max(0, 15000 - (Date.now() - statusObservedAt));
         if (remainingFreshMs === 0) {
@@ -441,14 +311,10 @@ $(document).ready(function() {
         statusData = null;
         statusObservedAt = 0;
         clearTimeout(staleTimer);
-        setSummary("Status unavailable", message || "Required observations could not be read. Refresh before relying on status.", "label-default");
-        $("#summaryFreshness").text("No current observation");
+        setSummary("Status unavailable", "label-default");
         $("#summaryInterface, #summaryMac, #detailRole, #detailAttachment, #detailAddress, #detailController, "
-            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailCarp, #detailHA, #detailRemoval")
+            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA, #detailRemoval")
             .text("Unavailable");
-        renderReadiness([]);
-        renderSourceErrors({status: message || "Required observations could not be read."});
-        updateSyncStatus(null);
         updateActions();
     }
 
@@ -491,21 +357,16 @@ $(document).ready(function() {
             gatewayText += " · " + (gateway.address || "address unavailable") + " · " + (gateway.status || "status unknown");
         }
         $("#detailGateway").text(gatewayText);
-        $("#detailCarp").text("Expected: " + JSON.stringify(carp.expected_instances || [])
-            + " · Live: " + JSON.stringify(carp.live_instances || []) + " · aligned " + String(carp.aligned));
         $("#detailHA").text("pfsync: " + (pfsync.configured_interface || "not configured")
             + " · peer " + (pfsync.configured_peer || "not configured")
             + " · XMLRPC destination " + (xmlrpc.sender_configured ? "configured" : "not configured")
             + " · this plugin " + (xmlrpc.plugin_settings_sync === true ? "included" : (xmlrpc.plugin_settings_sync === false ? "not included" : "unknown"))
             + " · peer readiness unverified");
-        updateSyncStatus(xmlrpc);
         $("#pfsyncRuntime").text(JSON.stringify(pfsync.runtime || "Unavailable", null, 2));
         $("#removalStatus").text(removal.allowed
             ? "Ready for native package removal: no logical assignments use dhcpha0lagg and the plugin path is verified detached."
             : ((removal.reason || "Removal safety could not be verified.") + (assignments.length ? " Current assignments: " + assignments.join(", ") + "." : "")));
         $("#detailRemoval").text($("#removalStatus").text());
-        renderReadiness(data.readiness);
-        renderSourceErrors(data.errors);
         updateMacSuggestion({interface: (data.managed || {}).identifier, managed: {
             current_device: (data.managed || {}).device,
             effective_mac_suggestion: (carrier || {}).mac,
@@ -520,20 +381,6 @@ $(document).ready(function() {
             + " · " + (controller.state || "Unknown") + " · " + (controller.reason || "reason unavailable");
     }
 
-    function updateSyncStatus(xmlrpc) {
-        xmlrpc = xmlrpc || {};
-        const sender = xmlrpc.sender_configured;
-        const selected = xmlrpc.plugin_settings_sync;
-        $("#enableSyncBlock").toggle(sender === true || sender === false);
-        $("#syncNoSender").toggle(sender === false);
-        $("#syncUnknown").toggle((sender !== true && sender !== false)
-            || (sender === true && selected !== true && selected !== false));
-        $("#syncSelected").toggle(sender === true && selected === true);
-        $("#syncMissing").toggle(sender === true && selected === false);
-        $("#syncPermission").toggle(sender === true && selected === false && !canEnableSync);
-        $("#enableSync").toggle(sender === true && selected === false && canEnableSync);
-    }
-
     function markStatusStale() {
         if (!statusData || statusObservedAt === 0) {
             return;
@@ -545,7 +392,6 @@ $(document).ready(function() {
         }
         const current = $("#summaryState").text().replace(/ · STALE$/, "");
         $("#summaryState").text(current + " · STALE").removeClass().addClass("label label-warning");
-        $("#summaryFreshness").text("Last observed " + (statusData.collected_at || "time unavailable") + " · " + age + " seconds ago; refresh before relying on this state.");
         updateActions();
     }
 
@@ -566,7 +412,6 @@ $(document).ready(function() {
             && !configureOutcomeBlocked && queueAllowsConfigure
             && configureAllowed && (retryReady || mappedDeviceNeedsRecovery(managed)
                 || (previewDevice !== "" && previewDevice !== "dhcpha0lagg"));
-        $("#configuredBadge").toggle(configured);
         $("#configureBlock").toggle((managed !== "" && !configured) || needsReadback);
         $("#configureLagg").toggle(!configured && !needsReadback)
             .prop("disabled", configureBusy || settingsBusy || !canConfigureNow)
@@ -598,9 +443,6 @@ $(document).ready(function() {
             .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || (savedEnabled && managed !== savedMapping.managed));
         $("#saveIdentityNote").toggle(savedEnabled && managed !== savedMapping.managed)
             .text("Save Disable with the current interface first, then wait for fresh detached status before changing identity.");
-        const xmlrpc = statusData && statusData.ha && statusData.ha.xmlrpc;
-        $("#enableSync").prop("disabled", !canEnableSync || configureBusy || settingsBusy || configureOutcomeBlocked || !statusIsFresh()
-            || !xmlrpc || xmlrpc.sender_configured !== true || xmlrpc.plugin_settings_sync !== false);
         $("#prepareDevice, #reconcileDiagnostics, #retryApply").prop("disabled", !canRunRecovery || configureBusy || settingsBusy || configureOutcomeBlocked);
         $("#generateMac").prop("disabled", !canGenerateMac || configureBusy || settingsBusy || configureOutcomeBlocked);
         if (!canWriteSettings) {
@@ -695,7 +537,6 @@ $(document).ready(function() {
                 managedDescription = (data.managed_choices && data.managed_choices[managed] && data.managed_choices[managed].description) || managed;
                 savedMapping = {managed: managed, carrier: savedCarrier};
                 savedEnabled = valueOf(data.dhcphashared.enabled) === "1";
-                $("#localNodeLabel").text(data.local_hostname || "Local node");
                 setFormData("frm_Settings", data);
                 $("#revision").val(data.revision || "");
                 $("#failbackDelay").val(valueOf(data.dhcphashared.failback_delay) || "0");
@@ -837,7 +678,6 @@ $(document).ready(function() {
             if (settingsMatch) {
                 previewDevice = (status.managed && status.managed.device) || "";
                 managedDescription = (status.managed && status.managed.description) || managedDescription;
-                updateMapping();
                 updateMacSuggestion({interface: managed, managed: {
                     current_device: previewDevice,
                     effective_mac_suggestion: status.attachment && status.attachment.carrier && status.attachment.carrier.mac,
@@ -961,7 +801,7 @@ $(document).ready(function() {
         const expectedFormGeneration = formGeneration;
         const expectedCarrier = managed === savedMapping.managed && localCarrier
             ? localCarrier : (previewDevice === "dhcpha0lagg" ? savedMapping.carrier : previewDevice);
-        const buttons = $("#configureLagg, #recheckConfigure, #saveDraft, #saveSettings, #enableSync, #prepareDevice, #reconcileDiagnostics, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
+        const buttons = $("#configureLagg, #recheckConfigure, #saveDraft, #saveSettings, #prepareDevice, #reconcileDiagnostics, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
         const inputs = $("#frm_Settings :input");
         const disabledStates = inputs.map(function() { return $(this).prop("disabled"); }).get();
         inputs.prop("disabled", true);
@@ -1079,37 +919,6 @@ $(document).ready(function() {
         showTab("#settings");
         updateActions();
     });
-    $("#enableSync").on("click", function() {
-        const xmlrpc = statusData && statusData.ha && statusData.ha.xmlrpc;
-        if (!canEnableSync || configureBusy || settingsBusy || configureOutcomeBlocked || !statusIsFresh()
-            || !xmlrpc || xmlrpc.sender_configured !== true || xmlrpc.plugin_settings_sync !== false) {
-            return;
-        }
-        const button = $(this).prop("disabled", true);
-        $("#syncResult").text("Adding this plugin to the latest native sender selection...");
-        invalidateStatus();
-        post(api + "/settings/enable_sync", {}, 30000).done(function(data) {
-            if (data.result === "saved" && data.selected === true) {
-                $("#syncResult").text(data.changed === false
-                    ? "Included in configuration sync already. This affects future native sync only."
-                    : "Included in future native configuration sync. This did not push settings or contact the peer.");
-            } else if (data.selected === null || data.changed === null) {
-                $("#syncResult").text(data.error || "Sync selection outcome is unknown. Refresh status before retrying.");
-            } else {
-                $("#syncResult").text(data.error || "The plugin was not included in native configuration sync.");
-            }
-            refreshStatus();
-        }).fail(function() {
-            $("#syncResult").text("Sync selection result is unknown. Refresh status before retrying.");
-            refreshStatus();
-        }).always(function() {
-            button.prop("disabled", false);
-            updateActions();
-        });
-    });
-    $("#showAllChecks").on("change", function() {
-        renderReadiness(statusData ? statusData.readiness : []);
-    });
     field("dhcphalocal.managed_interface").on("changed.bs.select change", function() {
         const managed = $(this).val() || "";
         formGeneration++;
@@ -1186,15 +995,12 @@ $(document).ready(function() {
             <div class="content-box" aria-live="polite">
                 <h4>{{ lang._('Current local state') }}</h4>
                 <p><strong>{{ lang._('State') }}:</strong> <span id="summaryState" class="label label-default">{{ lang._('Loading') }}</span></p>
-                <p id="summaryDetails">{{ lang._('Waiting for current observations.') }}</p>
                 <p><strong>{{ lang._('Node') }}:</strong> <span id="summaryNode">{{ lang._('Loading') }}</span></p>
                 <p><strong>{{ lang._('Interface') }}:</strong> <span id="summaryInterface">{{ lang._('Loading') }}</span></p>
                 <p><strong>{{ lang._('Shared MAC') }}:</strong> <span id="summaryMac">{{ lang._('Loading') }}</span></p>
-                <p id="summaryFreshness" role="status">{{ lang._('No current observation') }}</p>
                 <button class="btn btn-default" id="refreshStatus" type="button">{{ lang._('Refresh status') }}</button>
             </div>
 
-            <p><strong>{{ lang._('Local carrier node') }}:</strong> <span id="localNodeLabel">{{ lang._('Loading') }}</span></p>
             {% if not canWriteSettings %}
             <div class="alert alert-info">{{ lang._('This account can view settings and diagnostics but cannot save or run plugin actions.') }}</div>
             {% endif %}
@@ -1203,8 +1009,6 @@ $(document).ready(function() {
             <input type="hidden" id="failbackDelay" value="0" />
 
             <div class="content-box">
-                <p><strong>{{ lang._('Local carrier mapping') }}:</strong> <span id="interfaceMapping">{{ lang._('Loading') }}</span></p>
-                <p id="configuredBadge" class="text-success" style="display:none">{{ lang._('Interface configured. Save & Apply is the normal action for subsequent edits.') }}</p>
                 <p id="carrierLoadError" class="text-danger" style="display:none"></p>
                 <p id="configurePermissionNote" class="text-warning" style="display:none"></p>
                 <p id="configureSavedStateNote" class="text-warning" style="display:none"></p>
@@ -1239,27 +1043,9 @@ $(document).ready(function() {
                 <p id="setupResult" role="status"></p>
                 <p id="serviceResult" role="status"></p>
             </div>
-
-            <div class="content-box" id="enableSyncBlock" style="display:none">
-                <h4>{{ lang._('Configuration sync') }}</h4>
-                <p id="syncContext">{{ lang._('This action includes the plugin in future native XMLRPC configuration sync. It does not push settings, restart the peer, or synchronize the local interface mapping.') }}</p>
-                <p id="syncNoSender" style="display:none">{{ lang._('No outbound XMLRPC destination is configured on this node. Configure the destination in native High Availability settings on the sender. A receiving node does not need an outbound selection.') }} <a href="/ui/core/hasync">{{ lang._('Open native High Availability settings') }}</a></p>
-                <p id="syncUnknown" style="display:none">{{ lang._('Native sender selection is unavailable. Refresh status before changing sync membership.') }}</p>
-                <p id="syncSelected" style="display:none">{{ lang._('This plugin is included in future native configuration sync. Removal remains on the native High Availability page.') }}</p>
-                <p id="syncMissing" style="display:none">{{ lang._('A native sender is configured, but this plugin is not selected for future sync.') }}</p>
-                {% if canEnableSync %}<button class="btn btn-default" id="enableSync" type="button" style="display:none">{{ lang._('Include this plugin in configuration sync') }}</button>{% else %}<p id="syncPermission" style="display:none">{{ lang._('Native High Availability write permission is required to change sync selection.') }}</p>{% endif %}
-                <p id="syncResult" role="status"></p>
-                <a href="/ui/core/hasync">{{ lang._('Manage native sync selection') }}</a>
-            </div>
         </div>
 
         <div class="tab-pane fade" id="diagnostics">
-            <h4>{{ lang._('Current issues') }}</h4>
-            <p>{{ lang._('Unknown observations, automatic recovery and user decisions have separate responsibility and resolution labels. Status reads do not run recovery actions.') }}</p>
-            <label><input type="checkbox" id="showAllChecks"> {{ lang._('Show all checks') }}</label>
-            <ul id="diagnosticsReadinessList"><li>{{ lang._('Loading readiness checks...') }}</li></ul>
-            <h4>{{ lang._('Observation source errors') }}</h4>
-            <ul id="sourceErrors"><li>{{ lang._('Loading observations...') }}</li></ul>
             <h4>{{ lang._('Observed details') }}</h4>
             <dl class="dl-horizontal">
                 <dt>{{ lang._('CARP role') }}</dt><dd id="detailRole">{{ lang._('Unknown') }}</dd>
@@ -1270,7 +1056,6 @@ $(document).ready(function() {
                 <dt>{{ lang._('DHCP HA device') }}</dt><dd id="detailDevice">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('Native DHCP observation') }}</dt><dd id="detailDhcp">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('IPv4 gateway') }}</dt><dd id="detailGateway">{{ lang._('Unknown') }}</dd>
-                <dt>{{ lang._('CARP inventory') }}</dt><dd id="detailCarp">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('HA configuration') }}</dt><dd id="detailHA">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('Removal readiness') }}</dt><dd id="detailRemoval">{{ lang._('Unknown') }}</dd>
             </dl>

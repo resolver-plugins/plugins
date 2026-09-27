@@ -8,7 +8,7 @@ older manual-setup and UI presentation requirements below, particularly sections
 in the new documents are tracked with implementation and verification evidence
 in the linked plan; source changes are not evidence of deployed behavior.
 
-- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_11; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
+- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_12; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
 - **Plugin path:** `net/dhcp-interface-ha/`
 - **Last verified deployment (before this increment):** HA-1 and HA-2 have 0.2_8 with automatic carrier capture and no separate carrier selector. At that earlier verification both were configured and enabled, HA-1 was in operator-selected CARP maintenance and HA-2 was MASTER. HA-2 acquired 10.250.100.100 with automatic promiscuous reception verified. See the [deployment records](dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).

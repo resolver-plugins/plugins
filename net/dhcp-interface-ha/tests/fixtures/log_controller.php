@@ -124,7 +124,6 @@ namespace {
     check($controller->view->settings === 'settings', 'settings form capability was lost');
     check($controller->view->canWriteSettings === true, 'settings write capability was lost');
     check($controller->view->canConfigureInterface === true, 'interface setup capability was lost');
-    check($controller->view->canEnableSync === true, 'sync capability was lost');
     check($controller->view->canRunRecovery === true, 'recovery capability was lost');
     check($controller->view->canGenerateMac === true, 'MAC generation capability was lost');
     check($controller->view->canViewLogs === true, 'log viewer capability was lost');
