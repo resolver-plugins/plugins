@@ -839,3 +839,23 @@ Focused controller and UI suites pass. Deployed 0.2_28 to both nodes, verified
 installed source hashes/package integrity, cleared UI caches and restarted web
 UIs. Evidence: HA-1 `/root/dhcpha-upgrade-0.2_28.CAVIXz`;
 HA-2 `/root/dhcpha-fix-0.2_28.Jru4Ik`.
+
+### 0.2_29 — unchanged saves have no side effects
+
+Ordinary settings saves compare canonical values under the configuration lock,
+retaining revision conflict protection. Identical settings return `unchanged`
+without configuration writes, settings events, runtime inventory collection or
+controller apply. The UI accepts this quietly. Already-disabled, empty local
+mappings also skip work. Initial setup, teardown and explicit Retry Apply retain
+their existing guarded actions.
+
+Regression coverage checks enabled and cleared configurations perform zero writes
+and backend calls, and stale unchanged submissions still reject. The existing
+apply-outcome fixture now submits an actual change. All 116 Python tests, both UI
+checks, PHP lint and diff checks pass.
+
+Deployed to both nodes with installed source hashes and package integrity verified.
+Cleared compiled plugin templates and compressed UI caches, then restarted both
+web UIs. HA-1 configuration hash remained unchanged across installation.
+Evidence: HA-1 `/root/dhcpha-upgrade-0.2_29.7RPu0G`;
+HA-2 `/root/dhcpha-fix-0.2_29.0j2BpV`.

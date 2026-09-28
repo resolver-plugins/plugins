@@ -568,10 +568,15 @@ namespace {
         'lan' => 'hn2',
     ];
     \OPNsense\Core\Config::$pending = [];
-    if (str_starts_with($case, 'teardown_') || $case === 'save_unchanged_enabled') {
+    if (str_starts_with($case, 'teardown_') || str_starts_with($case, 'save_unchanged')) {
         \OPNsense\Core\Config::$shared['enabled'] = $case === 'teardown_disabled' ? '0' : '1';
         \OPNsense\Core\Config::$local = ['managed_interface' => 'wan', 'carrier' => 'hn1'];
         \OPNsense\Core\Config::$assignments['wan'] = 'dhcpha0lagg';
+    }
+    if ($case === 'save_unchanged_disabled') {
+        \OPNsense\Core\Config::$shared['enabled'] = '0';
+        \OPNsense\Core\Config::$local = ['managed_interface' => '', 'carrier' => ''];
+        \OPNsense\Core\Config::$assignments['wan'] = 'hn1';
     }
     if ($case === 'configure_unrelated_pending') {
         \OPNsense\Core\Config::$pending = ['lan' => ['pending_action' => 'relink', 'pending_if' => 'hn3']];
@@ -666,7 +671,7 @@ namespace {
         \FixtureRequest::$invalidSync = true;
     }
 
-    if ($action === 'settings' && $case !== 'save_unchanged_enabled') {
+    if ($action === 'settings' && !str_starts_with($case, 'save_unchanged')) {
         \FixtureRequest::$post['dhcphashared'] = [
             'enabled' => '0',
             'shared_mac' => '02:11:22:33:44:55',
@@ -675,9 +680,13 @@ namespace {
         \FixtureRequest::$post['dhcphalocal'] = ['managed_interface' => '', 'carrier' => ''];
     }
 
-    if ($case === 'save_unchanged_enabled') {
+    if (str_starts_with($case, 'save_unchanged')) {
         \FixtureRequest::$post['dhcphashared'] = \OPNsense\Core\Config::$shared;
         \FixtureRequest::$post['dhcphalocal'] = \OPNsense\Core\Config::$local;
+    }
+
+    if ($case === 'save_unchanged_stale') {
+        \FixtureRequest::$post['revision'] = 'stale';
     }
 
     try {

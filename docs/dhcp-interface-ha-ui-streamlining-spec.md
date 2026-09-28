@@ -636,3 +636,10 @@ An ordinary save for an enabled, unchanged interface uses settings/set, never
 settings/configure or native assignment apply. Preserve its assignment preview.
 Do not display automatic pending-relink advice; explain a real queue blocker
 only when an attempted setup/save fails its checks.
+
+An unchanged ordinary Save & Apply returns `unchanged` without writing configuration,
+logging a settings change, starting the controller, or reconciling runtime state.
+Compare canonical settings under the configuration lock and reject stale revisions.
+This also applies when the plugin is already disabled and its local mapping is empty.
+Explicit Retry Apply remains available for a failed apply; initial setup and teardown
+retain their guarded runtime operations.

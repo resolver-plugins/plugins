@@ -69,14 +69,26 @@ class SettingsStreamliningTests(unittest.TestCase):
         failed = run_controller("configure_apply_failed", flags={"enabled": "1"})
         self.assertEqual(failed["shared"]["enabled"], "0")
 
-    def test_unchanged_enabled_save_does_not_relink(self):
+    def test_unchanged_enabled_save_does_not_write_or_apply(self):
         outcome = run_controller("save_unchanged_enabled", action="settings")
-        self.assertEqual(outcome["response"]["result"], "saved")
+        self.assertEqual(outcome["response"]["result"], "unchanged")
+        self.assertEqual(outcome["save_count"], 0)
+        self.assertEqual(outcome["events"], [])
+        self.assertEqual(outcome["logs"], [])
         self.assertEqual(outcome["assignments"]["wan"], "dhcpha0lagg")
         self.assertEqual(outcome["pending"], [])
         self.assertNotIn("interface apply", outcome["events"])
         self.assertNotIn("dhcp_interface_ha prepare_setup", outcome["events"])
         self.assertEqual(outcome["shared"]["enabled"], "1")
+
+    def test_unchanged_disabled_save_and_stale_revision_have_no_side_effects(self):
+        for case, result in (("save_unchanged_disabled", "unchanged"), ("save_unchanged_stale", "conflict")):
+            with self.subTest(case=case):
+                outcome = run_controller(case, action="settings")
+                self.assertEqual(outcome["response"]["result"], result)
+                self.assertEqual(outcome["save_count"], 0)
+                self.assertEqual(outcome["events"], [])
+                self.assertEqual(outcome["logs"], [])
 
     def test_configure_defaults_empty_shared_mac_to_selected_interface(self):
         outcome = run_controller("configure_default_mac")

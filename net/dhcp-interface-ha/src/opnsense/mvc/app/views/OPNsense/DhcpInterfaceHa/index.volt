@@ -524,7 +524,9 @@ $(document).ready(function() {
         post(api + "/settings/set", payload, managed === "" ? 70000 : 35000)
             .done(function(data) {
                 handleFormValidation("frm_Settings", data.validations);
-                if (data.result === "staged" && data.saved === true) {
+                if (data.result === "unchanged") {
+                    refreshStatus();
+                } else if (data.result === "staged" && data.saved === true) {
                     $("#revision").val(data.revision || $("#revision").val());
                     $("#settingsResult").text(data.error || "HA DHCP Interface was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
                     loadSettings();

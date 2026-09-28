@@ -100,7 +100,7 @@ class SettingsController extends ApiControllerBase
             return $this->disableAndClear($sharedInput, $revision);
         }
 
-        $saved = $this->saveSettings($sharedInput, $localInput, $revision, unknownSaveOutcome: false);
+        $saved = $this->saveSettings($sharedInput, $localInput, $revision, unknownSaveOutcome: false, skipUnchanged: true);
         if ($saved['result'] !== 'saved') {
             return $saved;
         }
@@ -141,6 +141,13 @@ class SettingsController extends ApiControllerBase
             'failback_delay' => '0',
         ];
         $targetLocal = ['managed_interface' => '', 'carrier' => ''];
+
+        if (empty((string)$currentShared->enabled) && $managedName === '' && $carrier === '') {
+            $unchanged = $this->saveSettings($targetShared, $targetLocal, $revision, unknownSaveOutcome: false, validateOnly: true, skipUnchanged: true);
+            if ($unchanged['result'] !== 'valid') {
+                return $unchanged;
+            }
+        }
 
         if (!empty((string)$currentShared->enabled)) {
             $current = self::canonical($currentShared, $currentLocal);
@@ -366,7 +373,7 @@ class SettingsController extends ApiControllerBase
      * Save both plugin model roots using the revision, validation and lock
      * boundary shared by normal Save and Configure interface.
      */
-    private function saveSettings(array $sharedInput, array $localInput, $revision, $unknownSaveOutcome, $validateOnly = false, $knownObservations = null)
+    private function saveSettings(array $sharedInput, array $localInput, $revision, $unknownSaveOutcome, $validateOnly = false, $knownObservations = null, $skipUnchanged = false)
     {
         // Read candidates before locking only to decide whether runtime evidence
         // is needed. The revision check under the lock rejects any intervening write.
@@ -381,7 +388,8 @@ class SettingsController extends ApiControllerBase
             return ['result' => 'failed', 'saved' => false, 'applied' => null, 'error' => gettext('Invalid settings data.')];
         }
         $identityChanged = self::identityChanged($oldShared, $oldLocal, $probeShared, $probeLocal);
-        $needsEvidence = !empty((string)$probeShared->enabled) || $identityChanged;
+        $unchanged = hash_equals(self::revision($oldShared, $oldLocal), self::revision($probeShared, $probeLocal));
+        $needsEvidence = (!$skipUnchanged || !$unchanged) && (!empty((string)$probeShared->enabled) || $identityChanged);
         $observations = $needsEvidence
             ? ($knownObservations ?? self::collectObservations())
             : ['collected_at' => microtime(true)];
@@ -406,6 +414,12 @@ class SettingsController extends ApiControllerBase
             $candidateLocal = new Local();
             $candidateShared->setNodes($sharedInput);
             $candidateLocal->setNodes($localInput);
+
+            // An ordinary unchanged save is not a request to repair runtime state.
+            // Check under the lock so a stale page cannot bypass conflict detection.
+            if ($skipUnchanged && hash_equals(self::revision($candidateShared, $candidateLocal), $revision)) {
+                return ['result' => 'unchanged', 'saved' => false, 'applied' => null, 'revision' => $revision];
+            }
 
             $validations = self::modelValidations($candidateShared, 'dhcphashared');
             $validations += self::modelValidations($candidateLocal, 'dhcphalocal');

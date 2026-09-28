@@ -300,7 +300,7 @@ namespace {
         'dhcphashared' => [
             'enabled' => in_array($case, ['enable', 'attached_enable'], true) ? '1' : '0',
                 'shared_mac' => $case === 'draft' ? '' : '02:11:22:33:44:66',
-            'failback_delay' => '0',
+            'failback_delay' => $case === 'draft' ? '30' : '0',
         ],
         'dhcphalocal' => [
             'managed_interface' => 'wan',
