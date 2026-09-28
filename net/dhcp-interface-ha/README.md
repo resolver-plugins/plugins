@@ -2,6 +2,9 @@
 
 Experimental `os-dhcp-interface-ha` plugin.
 
+The [release guide](../../docs/dhcp-interface-ha-releases.md) covers the packaging
+workflow and signed `os-dhcp-interface-ha-devel` feed for OPNsense 26.7 amd64.
+
 This plugin implements the experimental carrier controller described in
 [the design specification](../../docs/dhcp-interface-ha.md). It follows native CARP
 on other interfaces and attaches one dedicated Ethernet adapter to

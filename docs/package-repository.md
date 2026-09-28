@@ -349,3 +349,11 @@ If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
 the replacement public key, and republish every channel for every supported
 series. Announce the new fingerprint; existing clients must update their key
 before they can verify the replacement catalogues.
+
+## HA DHCP Interface
+
+The experimental HA DHCP Interface plugin uses the same signing key and publisher
+App with independent signed current and rollback Release channels in the
+distribution repository. See [HA DHCP Interface releases](dhcp-interface-ha-releases.md)
+for its workflow and separate feed configuration. BIND channel contents and URLs
+are unchanged.

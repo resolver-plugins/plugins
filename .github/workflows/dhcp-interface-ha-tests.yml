@@ -5,11 +5,34 @@ on:
     paths:
       - 'net/dhcp-interface-ha/**'
       - '.github/workflows/dhcp-interface-ha-tests.yml'
+      - '.github/workflows/dhcp-interface-ha-release.yml'
+      - '.github/ci/build-dhcp-interface-ha.sh'
+      - '.github/ci/publish-dhcp-interface-ha.py'
+      - '.github/ci/dhcp_interface_ha_channel.py'
+      - '.github/ci/verify-dhcp-interface-ha.sh'
+      - '.github/ci/release_channel.py'
+      - '.github/ci/target_pkg.py'
+      - '.github/ci/package_checksums.py'
+      - '.github/ci/setup-opnsense-repository.sh'
+      - '.resolver-plugins/target-pkg.json'
+      - '.github/ci/ci-tests/test_dhcp_interface_ha_release.py'
   pull_request:
     paths:
       - 'net/dhcp-interface-ha/**'
       - '.github/workflows/dhcp-interface-ha-tests.yml'
+      - '.github/workflows/dhcp-interface-ha-release.yml'
+      - '.github/ci/build-dhcp-interface-ha.sh'
+      - '.github/ci/publish-dhcp-interface-ha.py'
+      - '.github/ci/dhcp_interface_ha_channel.py'
+      - '.github/ci/verify-dhcp-interface-ha.sh'
+      - '.github/ci/release_channel.py'
+      - '.github/ci/target_pkg.py'
+      - '.github/ci/package_checksums.py'
+      - '.github/ci/setup-opnsense-repository.sh'
+      - '.resolver-plugins/target-pkg.json'
+      - '.github/ci/ci-tests/test_dhcp_interface_ha_release.py'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,3 +72,9 @@ jobs:
           find net/dhcp-interface-ha/src/etc/rc.d net/dhcp-interface-ha/src/etc/rc.syshook.d net/dhcp-interface-ha/src/etc/rc.carp_service_status.d -type f -print0 | xargs -0 -n1 sh -n
           shellcheck -s sh -e SC1091 net/dhcp-interface-ha/+PRE_DEINSTALL.pre net/dhcp-interface-ha/+POST_DEINSTALL.post
           find net/dhcp-interface-ha/src/etc/rc.d net/dhcp-interface-ha/src/etc/rc.syshook.d net/dhcp-interface-ha/src/etc/rc.carp_service_status.d -type f -exec shellcheck -s sh -e SC1091 {} +
+      - name: Release helper regression tests
+        run: |
+          python -m pip install --disable-pip-version-check 'pytest==8.3.5'
+          python -m pytest -q .github/ci/ci-tests/test_dhcp_interface_ha_release.py
+          sh -n .github/ci/build-dhcp-interface-ha.sh .github/ci/verify-dhcp-interface-ha.sh
+          shellcheck -s sh .github/ci/build-dhcp-interface-ha.sh .github/ci/verify-dhcp-interface-ha.sh
