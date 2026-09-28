@@ -884,3 +884,17 @@ A lifecycle regression check covers first install, running-service preservation,
 offline roots and start failure. Both native build and signed-install workflow
 gates now require readable initial status, a running controller and no configured
 or attached interface. The runtime status reader remains read-only.
+
+Native verification: removed the unconfigured 0.2_30 package, then installed
+0.2_31 on reset HA-2. The package hook started the controller automatically.
+Fresh-status and native menu/tab route checks passed; settings readback selected
+Disabled with Enable off. The environment API reported SETUP_INCOMPLETE with no
+observation errors, and the native log stream recorded service_started and the
+initial state. Installed source hashes and package integrity match. UI caches
+were cleared and the web UI restarted. Native interface assignments and HA-2's
+maintenance state remained unchanged. HA-1 remained ACTIVE/MASTER at
+10.250.100.100. Evidence: `/root/dhcpha-clean-install-0.2_31.DMU0Jj`.
+
+117 plugin tests, 16 focused release-helper tests, shell lint and workflow lint
+pass. The local test package is built from commit `2d5533de4`; SHA-256:
+`892a4e2349f75ab5c6336aa8ad27b3fdc9c9ffc20e695142c0835c51fa3d6384`.
