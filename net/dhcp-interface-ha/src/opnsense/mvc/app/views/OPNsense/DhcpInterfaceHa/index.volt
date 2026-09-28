@@ -343,10 +343,6 @@ $(document).ready(function() {
         updateActions();
     }
 
-    function detachedEvidenceFresh() {
-        return statusIsFresh() && verifiedDetached(statusData);
-    }
-
     function updateActions() {
         const idle = !configureBusy && !settingsBusy;
         const managed = field("dhcphalocal.managed_interface").val() || "";
@@ -371,8 +367,6 @@ $(document).ready(function() {
                 : "Your account needs native interface assignment and apply permissions to configure this interface.");
         $("#configureSavedStateNote").toggle(idle && managed !== "" && !configured && savedEnabled)
             .text("The saved plugin is still enabled. Save Disable and verify detachment before changing the assignment.");
-        $("#configureEvidenceNote").toggle(idle && managed !== "" && !configured && !savedEnabled && !detachedEvidenceFresh())
-            .text("Save & Apply requires fresh status confirming the disabled, detached adapter before changing the assignment.");
         $("#configureCarrierNote").toggle(idle && managed !== "" && previewDevice === "dhcpha0lagg" && !savedMapping.carrier)
             .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Save is blocked; do not guess.");
         const identityChangeBlocked = savedEnabled && !disabledSelection && managed !== savedMapping.managed;
@@ -941,7 +935,6 @@ $(document).ready(function() {
                 <p id="carrierLoadError" class="text-danger" style="display:none"></p>
                 <p id="configurePermissionNote" class="text-warning" style="display:none"></p>
                 <p id="configureSavedStateNote" class="text-warning" style="display:none"></p>
-                <p id="configureEvidenceNote" class="text-warning" style="display:none"></p>
                 <p id="configureCarrierNote" class="text-warning" style="display:none"></p>
                 <p id="saveIdentityNote" class="text-warning" style="display:none"></p>
                 <div id="configureBlock" style="display:none">

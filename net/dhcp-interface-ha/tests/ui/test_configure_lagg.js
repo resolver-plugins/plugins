@@ -225,7 +225,7 @@ function configureFixture(options = {}) {
     vm.runInContext(between('    function verifiedDetached(', '    function statusIsFresh('), context);
     vm.runInContext(between('    function statusIsFresh(', '    function isConfiguredForForm('), context);
     vm.runInContext(between('    function mappedDeviceNeedsRecovery(', '    function loadCarrierPreview('), context);
-    vm.runInContext(between('    function detachedEvidenceFresh()', '    function requestStatusOnce('), context);
+    vm.runInContext(between('    function updateActions()', '    function requestStatusOnce('), context);
     vm.runInContext(between('    function blockConfigureOutcome(', '    async function readConfigureOutcome('), context);
     vm.runInContext(between('    async function configureSelectedLagg()', '    function runRecovery('), context);
     return {context, dom, calls, readbacks};
@@ -640,7 +640,6 @@ function testDisabledSelectionCanBeSaved() {
         statusData: null,
         isConfiguredForForm: () => false,
         statusIsFresh: () => false,
-        detachedEvidenceFresh: () => false,
         mappedDeviceNeedsRecovery: () => false,
         pendingAssignmentAllowsConfigure: () => false
     }));

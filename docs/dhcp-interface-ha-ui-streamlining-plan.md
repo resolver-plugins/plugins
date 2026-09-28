@@ -859,3 +859,15 @@ Cleared compiled plugin templates and compressed UI caches, then restarted both
 web UIs. HA-1 configuration hash remained unchanged across installation.
 Evidence: HA-1 `/root/dhcpha-upgrade-0.2_29.7RPu0G`;
 HA-2 `/root/dhcpha-fix-0.2_29.0j2BpV`.
+
+### 0.2_30 — remove transient fresh-status advisory
+
+Remove the automatic “Save & Apply requires fresh status” note and its unused
+predicate. It flashed during page initialization before settings and observations
+were loaded. Save-time freshness/detachment checks and their failure explanations
+remain unchanged. Both UI behavior suites and diff checks pass.
+
+Deployed 0.2_30 to both nodes, verified installed source hashes and package integrity,
+cleared compiled plugin templates/compressed caches and restarted both web UIs.
+Evidence: HA-1 `/root/dhcpha-upgrade-0.2_30.aOC78J`;
+HA-2 `/root/dhcpha-fix-0.2_30.pRjAC7`.
