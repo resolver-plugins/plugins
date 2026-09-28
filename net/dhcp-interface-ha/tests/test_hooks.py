@@ -12,6 +12,27 @@ PLUGIN = Path(__file__).resolve().parents[1]
 
 
 class HookTests(unittest.TestCase):
+    def test_disabled_plugin_releases_carrier_for_native_assignment_restoration(self):
+        fixture = r'''
+            namespace OPNsense\Core {
+                class Config {
+                    public static function getInstance() { return new self(); }
+                    public function object() {
+                        return simplexml_load_string('<opnsense><interfaces><opt7><if>dhcpha0lagg</if></opt7></interfaces><OPNsense><DhcpInterfaceHaLocal><carrier>hn1</carrier></DhcpInterfaceHaLocal><DhcpInterfaceHaShared><enabled>' . $GLOBALS['argv'][2] . '</enabled></DhcpInterfaceHaShared></OPNsense></opnsense>');
+                    }
+                }
+            }
+            namespace {
+                require $argv[1];
+                echo json_encode(dhcp_interface_ha_devices()[0]['names']['dhcpha0lagg']['exclude']);
+            }
+        '''
+        hook = PLUGIN / 'src/etc/inc/plugins.inc.d/dhcp_interface_ha.inc'
+        for enabled, excluded in (('1', ['hn1']), ('0', [])):
+            result = subprocess.run(['php', '-r', fixture, str(hook), enabled],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout), excluded)
+
     def test_device_preparation_uses_supported_core_command_helper(self):
         # OPNsense 26.7 provides mwexecf(), not the removed mwexec(). Invoke
         # the real boot callback with only the supported command/log boundary.

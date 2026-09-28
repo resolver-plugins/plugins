@@ -613,3 +613,9 @@ Baseline evidence is experimental 0.2_8 on both appliances, with 72 controller
 and API tests plus the existing UI setup-flow checks. HA-2 acquired an address
 after the receive-filter correction; this does not qualify every routing,
 firewall, reboot, failback or session-continuity scenario.
+
+
+Carrier reservation applies while the plugin is enabled. When disabled, native
+assignment options must include its original carrier so Disabled + Save can
+restore the logical assignment before clearing local settings. Enabling still
+validates exclusive carrier use; a conflicting native assignment blocks it.

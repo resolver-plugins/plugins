@@ -34,7 +34,9 @@ function dhcp_interface_ha_devices()
         }
     }
 
-    if ($dhcpha_assigned && !empty($carrier)) {
+    // Disabled setup must allow native assignment restoration to the carrier.
+    if ($dhcpha_assigned && !empty($carrier)
+        && !empty((string)($config->OPNsense->DhcpInterfaceHaShared->enabled ?? '0'))) {
         $exclude[] = $carrier;
     }
 

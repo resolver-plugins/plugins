@@ -1,6 +1,6 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_18**, 2026-09-28, following
+Status: source implementation for experimental **0.2_19**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -670,3 +670,21 @@ This checks the native controller, not authenticated browser interaction.
 Package SHA-256: `655d63667b52d72fb0b4235612b4dea6a0e28a3fcf61d3fa8d15bf0abbffbd2e`.
 Evidence: `/root/dhcpha-save-0.2_17.41sdAs` (includes initial 0.2_17 investigation
 and final `save-result-18.json`). HA-1 was not changed.
+
+
+### 0.2_19 — release disabled carrier reservation
+
+Disabled + Save previously stopped after disabling because the device hook
+excluded the saved carrier even while disabled. Native DeviceField validation
+therefore rejected restoring the assignment, retaining opt7 and reloading it in
+the form. Reserve the carrier only while enabled; keep existing native validation
+and the saved carrier until restoration is verified. A real hook regression
+checks both enabled exclusion and disabled availability.
+
+Verified 0.2_19 on HA-2: the installed settings action returned saved=true,
+applied=true, cleared=true. Native opt7 was restored to hn1; managed_interface
+and carrier are empty, enabled=0, shared MAC retained. settings/get selects only
+the empty-value Disabled option. All 114 Python tests and both UI suites pass;
+PHP lint, package integrity and all 25 installed source hashes pass. UI cache
+cleared and web UI restarted. Evidence: `/root/dhcpha-fix-0.2_19.WTt7KG`.
+Package SHA-256: `544475ad850ffaae5cdd578e43649f0e92ec80263527bbc1a9945105df9ca455`.
