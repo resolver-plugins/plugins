@@ -1,17 +1,9 @@
 <form>
     <field>
-        <type>header</type>
-        <label>Shared connection</label>
-    </field>
-    <field>
         <id>dhcphashared.enabled</id>
         <label>Enable DHCP Interface HA</label>
         <type>checkbox</type>
         <help>Enable only after the local interface is configured and all required checks pass. This setting is shared by native XMLRPC configuration sync.</help>
-    </field>
-    <field>
-        <type>header</type>
-        <label>This node's connection</label>
     </field>
     <field>
         <id>dhcphalocal.managed_interface</id>
@@ -20,13 +12,9 @@
         <help>Select the local OPNsense assignment to manage. Configure interface captures its current device and moves the assignment to the plugin-owned adapter. Choose None to clear this node's plugin mapping while retaining the shared MAC; native assignments are not deleted.</help>
     </field>
     <field>
-        <type>header</type>
-        <label>Shared network identity</label>
-    </field>
-    <field>
         <id>dhcphashared.shared_mac</id>
         <label>Shared interface MAC</label>
         <type>text</type>
-        <help>This unicast identity is used by the active node and should match on both peers. It is saved only when you choose a save action.</help>
+        <help>This unicast identity is used by the active node and should match on both peers. This setting is shared through XMLRPC configuration sync.</help>
     </field>
 </form>

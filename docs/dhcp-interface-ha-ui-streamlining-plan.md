@@ -1,9 +1,9 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_12**, 2026-09-27, following
+Status: source implementation for experimental **0.2_13**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
-recorded in sections 10–13;
+recorded in sections 10–14;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -536,3 +536,24 @@ the Volt cache was cleared, the web GUI restarted and HTTPS responds 200.
 Configuration remains byte-identical and the controller remains running. The
 private 0.2.11 rollback package, configuration backup and deployment evidence are
 in `/root/dhcpha-ui-cleanup-0.2_12.m6SIUL` on HA-2. HA-1 was not changed.
+
+## 14. Settings form cleanup — HA-2 0.2_13, 2026-09-28
+
+Removed the Shared connection, This node's connection and Shared network
+identity collapsible section headers while retaining their form controls. The
+MAC utilities now appear directly under Shared interface MAC without a separate
+collapsible heading. Removed the page-level topology/XMLRPC explanation and the
+save-action helper sentence. The MAC field now states only that the identity is
+used by the active node, must match on both peers and is shared through native
+XMLRPC configuration sync.
+
+The candidate passed 108 Python tests, both Node UI suites, PHP lint, XML parsing,
+diff checks and native Volt compilation. Installed
+`os-dhcp-interface-ha-devel-0.2_13` on HA-2, package SHA-256
+`9111653499814a34940c59c2798d6285dadc6eb5152e3c684c9ff9ae5fec91dd`.
+All 25 installed source hashes and package checksums pass. The removed labels are
+absent from the installed form and view, the Volt cache was cleared, the web GUI
+restarted and HTTPS responds 200. Configuration remains byte-identical and the
+controller remains running. The private 0.2.12 rollback package, configuration
+backup and deployment evidence are in
+`/root/dhcpha-settings-flat-0.2_13.K9Ywjj` on HA-2. HA-1 was not changed.

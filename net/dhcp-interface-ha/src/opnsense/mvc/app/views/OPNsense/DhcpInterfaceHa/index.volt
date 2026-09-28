@@ -991,7 +991,6 @@ $(document).ready(function() {
 
     <div class="tab-content content-box">
         <div class="tab-pane fade in active" id="settings">
-            <p>{{ lang._('Enable and shared MAC can be included in native XMLRPC sync. The managed interface and carrier belong to this firewall only. NIC names may differ between nodes; both use dhcpha0lagg and the same shared MAC on the same Ethernet segment.') }}</p>
             <div class="content-box" aria-live="polite">
                 <h4>{{ lang._('Current local state') }}</h4>
                 <p><strong>{{ lang._('State') }}:</strong> <span id="summaryState" class="label label-default">{{ lang._('Loading') }}</span></p>
@@ -1024,13 +1023,12 @@ $(document).ready(function() {
                     <p id="configureOutcomeNote" class="help-block" style="display:none">{{ lang._('Configure remains blocked until a read-only check confirms the saved settings and current assignment. Recheck outcome reads both again. If your form changed or readback remains unavailable, copy any unsaved values and reload this page to load current saved settings.') }}</p>
                     <p class="help-block">{{ lang._('This saves the submitted settings disabled and uses native assignment apply. It may interrupt this interface. Use a separate management path and do not edit native assignments concurrently.') }}</p>
                 </div>
-                <details class="form-group" id="macHelpers">
-                    <summary>{{ lang._('MAC helpers and current carrier address') }}</summary>
+                <div class="form-group" id="macHelpers">
                     <p><strong>{{ lang._('Current interface MAC') }}:</strong> <span id="currentMacDescription">{{ lang._('Loading') }}</span> — <code id="currentMacSuggestion">{{ lang._('Unavailable') }}</code> (<span id="currentMacSource">{{ lang._('unavailable') }}</span>)</p>
                     <button class="btn btn-default" id="useCurrentMac" type="button" disabled>{{ lang._('Use current interface MAC') }}</button>
                     {% if canGenerateMac %}<button class="btn btn-default" id="generateMac" type="button">{{ lang._('Generate') }}</button>{% endif %}
                     <p class="help-block">{{ lang._('These helpers change only the unsaved shared MAC. The native spoof setting must still be clear on the managed interface.') }}</p>
-                </details>
+                </div>
                 <p id="failbackWarning" class="text-warning" style="display:none">
                     {{ lang._('A nonzero legacy delayed failback value is saved:') }} <span id="storedFailbackValue"></span>.
                     <a href="#diagnostics" data-toggle="tab">{{ lang._('Review the corrective check in Diagnostics.') }}</a>
