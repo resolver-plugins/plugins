@@ -70,7 +70,7 @@ independent local assignments. The controller follows native CARP without peer
 API credentials, a coordination switch or acknowledged release holds. HA-2 now
 runs 0.2_16 with verified native assignment teardown recorded in the
 [streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#17-verified-native-teardown--ha-2-02_16-2026-09-28).
-HA-1 and HA-2 now run 0.2_23; HA-1’s upgrade preserved configuration and verified ACTIVE/MASTER with its DHCP address. See the
+HA-1 and HA-2 now run 0.2_24; HA-1’s upgrade preserved configuration and verified ACTIVE/MASTER with its DHCP address. See the
 [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 
 Ping-based handover checks and passive conflict observations were discussed but
@@ -138,11 +138,10 @@ valid. Do not dynamically choose whichever node obtains DHCP first.
    observations. Native DHCP runs on `dhcpha0lagg`; standby intentionally keeps
    its carrier detached. Address observations do not elect the active node.
 
-After migration, an empty `dhcpha0lagg` can report an all-zero MAC. **Use current
-interface MAC** is unavailable for that value; retain the chosen shared MAC or
-generate one and use the same value on both nodes. Polling reflects saved runtime
-state and preserves unsaved form edits. Diagnostics retains the full evidence,
-including advanced recovery actions and a diagnostic snapshot.
+Settings displays the configured shared MAC, without a separate physical MAC
+suggestion. Use the same shared MAC on both nodes. Generate supplies a new value;
+Save & Apply stores it. Polling reflects saved runtime state and preserves
+unsaved form edits. Diagnostics shows connection details and native settings links.
 
 The **Log** tab displays the native `dhcpinterfaceha/core` stream with normal
 Informational events visible by default. It retains native filters and retention.

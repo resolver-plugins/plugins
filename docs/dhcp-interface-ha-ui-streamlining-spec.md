@@ -188,14 +188,12 @@ DHCP-server fault in this increment.
 
 ### 2. Settings and the normal setup path
 
-The main form has Enable, Interface and Shared MAC. Show the detected carrier
-as read-only mapping text. The full internal LAGG topology is available in
-Diagnostics. Put Use current MAC and Generate next to the MAC field; neither
-changes saved state until a save action. Do not suggest an empty LAGG's zero MAC.
-Use current MAC reads the verified original carrier before migration or the
-saved carrier afterward. If that observation is unavailable/invalid, leave the
-field unchanged and explain why; never replace it with zeros or stale data from
-a previously selected interface. Generate remains an explicit user choice.
+The main form has Enable, Interface and Shared MAC. Detailed carrier and LAGG
+observations are available in Diagnostics. Put Generate next to the MAC field;
+it changes saved state only when saved.
+Settings shows only the configured shared MAC. Do not display a separate
+current-interface MAC or offer a copy-current-MAC button. Generate remains an
+explicit user choice; an empty shared MAC still defaults during initial setup.
 
 **Save & Apply** is the only settings action. While migration is required, it
 saves the submitted plugin form with enablement off, captures the current native

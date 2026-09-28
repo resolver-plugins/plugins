@@ -163,39 +163,11 @@ $(document).ready(function() {
             && (pending.state === "clear" || (retryReady && pending.state === "selected_relink"));
     }
 
-    function updateMacSuggestion(data) {
-        const selected = field("dhcphalocal.managed_interface").val() || "";
-        if (data && data.interface && selected !== data.interface) {
-            return;
-        }
-        const managed = data && data.managed ? data.managed : {};
-        let suggestion = managed.effective_mac_suggestion || "";
-        let source = managed.mac_source || "unavailable";
-        if (managed.current_device === "dhcpha0lagg") {
-            const savedCarrierObserved = statusIsFresh() && data.interface === savedMapping.managed
-                && selected === savedMapping.managed && savedMapping.carrier && statusData
-                && statusData.managed && statusData.managed.identifier === savedMapping.managed
-                && statusData.attachment && statusData.attachment.carrier
-                && statusData.attachment.carrier.selected === savedMapping.carrier
-                && statusData.attachment.carrier.exists === true;
-            suggestion = savedCarrierObserved ? (statusData.attachment.carrier.mac || "") : "";
-            source = suggestion ? "observed saved carrier" : "unavailable";
-        }
-        const usable = usableMac(suggestion);
-        $("#currentMacSuggestion").text(usable ? suggestion : "Unavailable");
-        $("#currentMacSource").text(source);
-        $("#useCurrentMac").prop("disabled", !canWriteSettings || !usable || configureBusy || settingsBusy);
-    }
-
     function loadCarrierPreview(interfaceId, savedCarrier) {
         const request = ++selectionGeneration;
         invalidateStatus();
         localCarrier = savedCarrier || "";
         previewDevice = "";
-        $("#currentMacSuggestion").text("Unavailable");
-        $("#currentMacSource").text("unavailable");
-        $("#currentMacDescription").text(interfaceId ? "Checking selected interface" : "Disabled");
-        $("#useCurrentMac").prop("disabled", true);
         if (!interfaceId) {
             managedDescription = "";
             updateActions();
@@ -209,12 +181,8 @@ $(document).ready(function() {
                 const managed = data.managed || {};
                 previewDevice = managed.current_device || "";
                 managedDescription = managed.description || interfaceId;
-                $("#currentMacDescription").text(
-                    managedDescription + " (" + interfaceId + ") on " + (previewDevice || "unknown assignment")
-                );
                 $("#carrierLoadError").toggle(!!(data.errors && Object.keys(data.errors).length))
                     .text("Carrier inventory has incomplete observations. Refresh status before Save & Apply.");
-                updateMacSuggestion(data);
                 updateActions();
             })
             .fail(function() {
@@ -223,7 +191,6 @@ $(document).ready(function() {
                 }
                 previewDevice = "";
                 $("#carrierLoadError").text("Interface assignment inventory is unavailable. The saved selection and MAC field are unchanged.").show();
-                $("#currentMacDescription").text("Assignment observation unavailable");
                 updateActions();
             });
     }
@@ -352,11 +319,6 @@ $(document).ready(function() {
             + " · XMLRPC destination " + (xmlrpc.sender_configured ? "configured" : "not configured")
             + " · this plugin " + (xmlrpc.plugin_settings_sync === true ? "included" : (xmlrpc.plugin_settings_sync === false ? "not included" : "unknown"))
             + " · peer readiness unverified");
-        updateMacSuggestion({interface: (data.managed || {}).identifier, managed: {
-            current_device: (data.managed || {}).device,
-            effective_mac_suggestion: (carrier || {}).mac,
-            mac_source: "observed carrier"
-        }});
         updateActions();
     }
 
@@ -665,11 +627,6 @@ $(document).ready(function() {
             if (settingsMatch) {
                 previewDevice = (status.managed && status.managed.device) || "";
                 managedDescription = (status.managed && status.managed.description) || managedDescription;
-                updateMacSuggestion({interface: managed, managed: {
-                    current_device: previewDevice,
-                    effective_mac_suggestion: status.attachment && status.attachment.carrier && status.attachment.carrier.mac,
-                    mac_source: "observed carrier"
-                }});
             }
             if (mappingVerified && settingsMatch) {
                 configureRetryReady = false;
@@ -784,7 +741,7 @@ $(document).ready(function() {
         const expectedFormGeneration = formGeneration;
         const expectedCarrier = managed === savedMapping.managed && localCarrier
             ? localCarrier : (previewDevice === "dhcpha0lagg" ? savedMapping.carrier : previewDevice);
-        const buttons = $("#recheckConfigure, #saveSettings, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
+        const buttons = $("#recheckConfigure, #saveSettings, #retryApply, #generateMac, #resetFailback").prop("disabled", true);
         const inputs = $("#frm_Settings :input");
         const disabledStates = inputs.map(function() { return $(this).prop("disabled"); }).get();
         inputs.prop("disabled", true);
@@ -893,12 +850,6 @@ $(document).ready(function() {
             $("#settingsResult").text("MAC generation failed. Existing form values are unchanged.");
         });
     });
-    $("#useCurrentMac").on("click", function() {
-        const suggestion = $("#currentMacSuggestion").text();
-        if (canWriteSettings && usableMac(suggestion)) {
-            field("dhcphashared.shared_mac").val(suggestion).trigger("change");
-        }
-    });
     $("#resetFailback").on("click", function() {
         $("#failbackDelay").val("0");
         $("#failbackWarning").hide();
@@ -989,10 +940,8 @@ $(document).ready(function() {
                     <p class="help-block">{{ lang._('Save & Apply configures the interface, then applies Enable. Setup may interrupt this interface. Use a separate management path and do not edit native assignments concurrently.') }}</p>
                 </div>
                 <div class="form-group" id="macHelpers">
-                    <p><strong>{{ lang._('Current interface MAC') }}:</strong> <span id="currentMacDescription">{{ lang._('Loading') }}</span> — <code id="currentMacSuggestion">{{ lang._('Unavailable') }}</code> (<span id="currentMacSource">{{ lang._('unavailable') }}</span>)</p>
-                    <button class="btn btn-default" id="useCurrentMac" type="button" disabled>{{ lang._('Use current interface MAC') }}</button>
                     {% if canGenerateMac %}<button class="btn btn-default" id="generateMac" type="button">{{ lang._('Generate') }}</button>{% endif %}
-                    <p class="help-block">{{ lang._('These helpers change only the unsaved shared MAC. The native spoof setting must still be clear on the managed interface.') }}</p>
+                    <p class="help-block">{{ lang._('Generate fills in a new shared MAC. Save & Apply stores it.') }}</p>
                 </div>
                 <p id="failbackWarning" class="text-warning" style="display:none">
                     {{ lang._('A nonzero legacy delayed failback value is saved:') }} <span id="storedFailbackValue"></span>.

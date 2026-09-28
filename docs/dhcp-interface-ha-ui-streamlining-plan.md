@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_23**, 2026-09-28, following
+Status: source implementation for experimental **0.2_24**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -754,3 +754,17 @@ Final runtime was ACTIVE, CARP MASTER, hn0 attached to owned dhcpha0lagg,
 shared MAC 00:15:5d:05:74:26, IPv4 10.250.100.100. Native assignment controller
 matches HA-2; its older interface model differs only in new-interface identifier
 handling, outside this plugin's existing-assignment relink path.
+
+
+### 0.2_24 — remove physical MAC suggestion from Settings
+
+Remove Current interface MAC and Use current interface MAC, plus their unused
+rendering/copy logic. Keep the shared MAC field, Generate, and the existing
+server-side default for initial setup. Retain the stale-interface preview test;
+remove tests for the deleted suggestion control.
+
+UI behavior checks and diff checks pass. Deployed 0.2_24 to both nodes; package
+integrity and all installed source hashes verified. Cleared plugin compiled
+UI templates and compressed caches, then restarted both web UIs. HA-1 evidence:
+`/root/dhcpha-upgrade-0.2_24.CypXry`; HA-2:
+`/root/dhcpha-fix-0.2_24.JNAeMN`.

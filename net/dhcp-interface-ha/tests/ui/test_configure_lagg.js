@@ -219,7 +219,7 @@ function configureFixture(options = {}) {
     }));
     vm.runInContext(between('    function verifiedDetached(', '    function statusIsFresh('), context);
     vm.runInContext(between('    function statusIsFresh(', '    function isConfiguredForForm('), context);
-    vm.runInContext(between('    function mappedDeviceNeedsRecovery(', '    function updateMacSuggestion('), context);
+    vm.runInContext(between('    function mappedDeviceNeedsRecovery(', '    function loadCarrierPreview('), context);
     vm.runInContext(between('    function detachedEvidenceFresh()', '    function requestStatusOnce('), context);
     vm.runInContext(between('    function blockConfigureOutcome(', '    async function readConfigureOutcome('), context);
     vm.runInContext(between('    async function configureSelectedLagg()', '    function runRecovery('), context);
@@ -307,7 +307,6 @@ function readbackFixture(settings, status, options = {}) {
             && ['FENCED', 'UNMANAGED'].includes(data.attachment.actual)
             && Array.isArray(data.attachment.members) && data.attachment.members.length === 0
             && (data.attachment.device.exists === false || data.attachment.owned === true),
-        updateMacSuggestion: () => {},
         updateActions: () => {},
         refreshStatus: () => {}
     }));
@@ -714,7 +713,7 @@ async function testSharedStatusReadbackAndFreshness() {
     assert.deepEqual(delayed.context.freshAtRender, [false]);
 }
 
-async function testOldCarrierAndMacSuggestions() {
+async function testOldCarrierPreview() {
     const requests = [];
     const dom = domFixture();
     const context = vm.createContext(Object.assign({}, dom, {
@@ -737,7 +736,6 @@ async function testOldCarrierAndMacSuggestions() {
         configureBusy: false,
         settingsBusy: false,
         statusIsFresh: () => false,
-        updateMacSuggestion: data => { context.lastSuggestion = data.interface; },
         updateActions: () => {},
         getJson: () => {
             const request = deferredAjax(() => {});
@@ -752,37 +750,8 @@ async function testOldCarrierAndMacSuggestions() {
     requests[0].resolve({interface: 'opt7', managed: {current_device: 'em0', description: 'LAN'}, errors: {}});
     assert.equal(context.managedDescription, 'WAN');
     assert.equal(context.previewDevice, 'em1');
-    assert.equal(context.lastSuggestion, 'opt8', 'a late preview for the old interface cannot replace the current preview');
 
-    const macDom = domFixture();
-    macDom.setField('dhcphalocal.managed_interface', 'opt7');
-    const macContext = vm.createContext(Object.assign({}, macDom, {
-        savedMapping: {managed: 'opt7', carrier: 'em0'},
-        statusData: null,
-        statusObservedAt: 0,
-        canWriteSettings: true,
-        configureBusy: false,
-        settingsBusy: false
-    }));
-    vm.runInContext(between('    function usableMac(', '    function selectedOption('), macContext);
-    vm.runInContext(between('    function statusIsFresh(', '    function isConfiguredForForm('), macContext);
-    vm.runInContext(between('    function updateMacSuggestion(', '    function loadCarrierPreview('), macContext);
-    const laggMac = '02:aa:bb:cc:dd:ee';
-    vm.runInContext('updateMacSuggestion({interface:"opt7", managed:{current_device:"dhcpha0lagg", effective_mac_suggestion:"' + laggMac + '"}})', macContext);
-    assert.equal(macDom.getText('#currentMacSuggestion'), 'Unavailable',
-        'a LAGG address is never used as a carrier MAC before fresh saved-carrier readback');
-    macContext.statusData = {
-        managed: {identifier: 'opt7'},
-        attachment: {carrier: {selected: 'em0', exists: true, mac: '02:11:22:33:44:55'}}
-    };
-    macContext.statusObservedAt = Date.now();
-    vm.runInContext('updateMacSuggestion({interface:"opt7", managed:{current_device:"dhcpha0lagg", effective_mac_suggestion:"' + laggMac + '"}})', macContext);
-    assert.equal(macDom.getText('#currentMacSuggestion'), '02:11:22:33:44:55',
-        'a fresh observation uses the saved original carrier MAC');
-    macDom.setField('dhcphalocal.managed_interface', 'opt8');
-    vm.runInContext('updateMacSuggestion({interface:"opt7", managed:{current_device:"dhcpha0lagg", effective_mac_suggestion:"' + laggMac + '"}})', macContext);
-    assert.equal(macDom.getText('#currentMacSuggestion'), '02:11:22:33:44:55',
-        'a status response for the saved old selection cannot overwrite a dirty current selection preview');
+
 }
 
 function testSummaryAndAddressMeaning() {
@@ -858,7 +827,7 @@ function testSummaryAndAddressMeaning() {
     await testConfigureHandler();
     await testConfigureReadbackGuards();
     await testSharedStatusReadbackAndFreshness();
-    await testOldCarrierAndMacSuggestions();
+    await testOldCarrierPreview();
     testSaveDispatchesSetup();
     testConfiguredStateRequiresVerifiedOwnership();
     testDisabledSelectionCanBeSaved();
