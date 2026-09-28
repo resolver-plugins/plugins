@@ -149,6 +149,14 @@ records any resulting state change; unchanged polls and read-only status calls
 do not repeat these events. Observations use the existing inventory without
 additional probes or interface changes.
 
+Save & Apply opens a scrolling progress panel below the button, using the same
+plain-text presentation as OPNsense firmware updates. Actual configuration steps
+show WORKING, OK, FAIL or UNKNOWN; failures retain the completed steps and their
+reason. A successful save does not imply a working link: the final readiness
+check reports controller faults separately. A timeout is UNKNOWN, because the
+firewall may still be applying configuration. Use the existing outcome check
+before retrying setup. Unchanged saves report that no actions were needed.
+
 Read current status without changing interfaces:
 
 ```sh

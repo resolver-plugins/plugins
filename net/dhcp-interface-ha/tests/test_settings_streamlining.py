@@ -1,4 +1,5 @@
 import json
+import secrets
 import subprocess
 import unittest
 from pathlib import Path
@@ -34,6 +35,42 @@ def run_controller(case, action="configure", flags=None):
 
 
 class SettingsStreamliningTests(unittest.TestCase):
+    def test_progress_is_live_request_scoped_and_not_configuration_authority(self):
+        outcome = run_controller('configure_success', flags={'progress_id': secrets.token_hex(16)})
+        applying = next(item['progress'] for item in outcome['progress_reads'] if item['event'] == 'interface apply')
+        self.assertEqual(applying['state'], 'running')
+        self.assertEqual(applying['steps'][-1]['state'], 'running')
+        self.assertIn('assignment', applying['steps'][-1]['message'])
+        self.assertEqual(outcome['progress_checks']['own']['state'], 'success')
+        for key in ('wrong_id', 'other_user', 'expired'):
+            self.assertEqual(outcome['progress_checks'][key]['state'], 'unavailable')
+        invalid = run_controller('configure_success', flags={'progress_id': '../invalid'})
+        self.assertEqual(invalid['save_count'], 0)
+        self.assertEqual(invalid['events'], [])
+
+    def test_progress_does_not_confuse_saved_settings_with_runtime_readiness(self):
+        failed = run_controller('configure_success', flags={'enabled': '1', 'runtime_state': 'FAULT'})['response']
+        self.assertTrue(failed['saved'])
+        self.assertTrue(failed['applied'])
+        self.assertEqual(failed['progress']['state'], 'failed')
+        self.assertIn('no link', failed['progress']['steps'][-1]['message'])
+        unknown = run_controller('configure_timeout')['response']
+        self.assertEqual(unknown['progress']['state'], 'unknown')
+
+    def test_save_progress_preserves_steps_and_the_failed_operation(self):
+        success = run_controller('configure_success')['response']['progress']
+        self.assertEqual(success['state'], 'success')
+        self.assertGreaterEqual(len(success['steps']), 5)
+        self.assertTrue(all(step['state'] == 'success' for step in success['steps']))
+        failed = run_controller('configure_apply_failed')['response']['progress']
+        self.assertEqual(failed['state'], 'failed')
+        self.assertEqual(failed['steps'][-1]['state'], 'failed')
+        self.assertIn('assignment', failed['steps'][-1]['message'].lower())
+        self.assertTrue(any(step['state'] == 'success' for step in failed['steps'][:-1]))
+        unchanged = run_controller('save_unchanged_enabled', action='settings')['response']['progress']
+        self.assertEqual(unchanged['state'], 'success')
+        self.assertIn('Nothing changed', unchanged['steps'][-1]['message'])
+
     def test_configure_derives_carrier_and_verifies_native_apply(self):
         outcome = run_controller("configure_success")
 

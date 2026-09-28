@@ -30,6 +30,8 @@ $(document).ready(function() {
     let pendingConfigureOutcome = null;
     let settingsBusy = false;
     let populatingSettings = false;
+    let saveProgress = null;
+    let saveProgressTimer = null;
 
     function field(id) {
         return $('[id="' + id + '"]');
@@ -78,6 +80,89 @@ $(document).ready(function() {
             type: "POST", url: url, data: JSON.stringify(data || {}),
             dataType: "json", contentType: "application/json", timeout: timeout || 30000
         });
+    }
+
+    function renderSaveProgress() {
+        if (!saveProgress) {
+            return;
+        }
+        const labels = {running: "WORKING", success: "OK", failed: "FAIL", unknown: "UNKNOWN"};
+        const headings = {running: "Saving and applying…", success: "Save & Apply completed",
+            failed: "Save & Apply needs attention", unknown: "Save outcome needs verification"};
+        const lines = saveProgress.steps.map(step => "[" + (labels[step.state] || "UNKNOWN") + "] " + step.message);
+        lines.push(...(saveProgress.notes || []));
+        const output = $("#saveProgressOutput");
+        const element = output[0];
+        const scroll = !element || element.scrollTop + element.clientHeight >= element.scrollHeight - 4;
+        // Treat all backend details as text, including native validation errors.
+        output.val(lines.join("\n"));
+        if (element && scroll) {
+            element.scrollTop = element.scrollHeight;
+        }
+        $("#saveProgressSummary").text(headings[saveProgress.state] || headings.unknown);
+        $("#saveProgressPanel").show();
+    }
+
+    function saveMessage(selector, message) {
+        $(selector).text(message);
+        if (!message) {
+            return;
+        }
+        if (!saveProgress) {
+            saveProgress = {state: "failed", steps: [], notes: []};
+        }
+        if (!saveProgress.steps.some(step => step.message.includes(message)) && !saveProgress.notes.includes(message)) {
+            saveProgress.notes.push(message);
+        }
+        if (saveProgress.state === "success") {
+            saveProgress.state = "unknown";
+        }
+        renderSaveProgress();
+    }
+
+    function startSaveProgress(payload) {
+        clearTimeout(saveProgressTimer);
+        const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+        payload.progress_id = id;
+        saveProgress = {id: id, state: "running", steps: [{state: "running", message: "Check settings and current interface state"}], notes: []};
+        renderSaveProgress();
+        async function poll() {
+            try {
+                const data = await getJson(api + "/settings/progress/" + id + "?t=" + Date.now(), 5000);
+                if (saveProgress?.id !== id || saveProgress.state !== "running") {
+                    return;
+                }
+                if (data.id === id && Array.isArray(data.steps)) {
+                    saveProgress = Object.assign({}, data, {notes: saveProgress.notes});
+                    renderSaveProgress();
+                }
+            } catch (error) {
+                // A disconnected management path cannot prove save failure.
+                if (saveProgress?.id === id && saveProgress.state === "running") {
+                    $("#saveProgressSummary").text("Waiting for connection — the firewall may still be configuring");
+                }
+            }
+            if (saveProgress?.id === id && saveProgress.state === "running") {
+                saveProgressTimer = setTimeout(poll, 750);
+            }
+        }
+        saveProgressTimer = setTimeout(poll, 250);
+    }
+
+    function finishSaveProgress(result) {
+        clearTimeout(saveProgressTimer);
+        if (result && result.progress && Array.isArray(result.progress.steps)) {
+            saveProgress = Object.assign({}, result.progress, {notes: []});
+        } else {
+            saveProgress = saveProgress || {steps: [], notes: []};
+            saveProgress.state = result ? "failed" : "unknown";
+            saveProgress.steps = saveProgress.steps.map(step => step.state === "running"
+                ? Object.assign({}, step, {state: saveProgress.state}) : step);
+            saveProgress.notes.push(result
+                ? (result.error || "The server did not return configuration progress. Reload this page and review the plugin Log.")
+                : "Connection lost or request timed out. The firewall may still be configuring. Verify the saved outcome before retrying.");
+        }
+        renderSaveProgress();
     }
 
     function currentTabVisible() {
@@ -460,7 +545,7 @@ $(document).ready(function() {
         getJson(api + "/settings/get", 10000)
             .done(function(data) {
                 if (!data.dhcphashared || !data.dhcphalocal) {
-                    $("#settingsResult").text("Settings could not be loaded. Refresh the page or check system logs.");
+                    $("#settingsResult").text("Settings could not be loaded. Refresh the page or check system logs.").show();
                     return;
                 }
                 const managed = selectedOption(data.dhcphalocal.managed_interface) || data.managed_interface_value || "";
@@ -486,7 +571,7 @@ $(document).ready(function() {
                 refreshStatus();
             })
             .fail(function() {
-                $("#settingsResult").text("Settings could not be loaded. Check that the UI service and plugin API are available.");
+                $("#settingsResult").text("Settings could not be loaded. Check that the UI service and plugin API are available.").show();
                 renderStatusUnavailable("Settings are unavailable; live saved configuration cannot be summarized.");
             });
     }
@@ -497,7 +582,7 @@ $(document).ready(function() {
         }
         const managed = field("dhcphalocal.managed_interface").val() || "";
         if (savedEnabled && managed !== "" && managed !== savedMapping.managed) {
-            $("#settingsResult").text("Save Disable with the current interface before changing the local identity.");
+            saveMessage("#settingsResult", "Save Disable with the current interface before changing the local identity.");
             return;
         }
         const button = $("#saveSettings");
@@ -511,25 +596,27 @@ $(document).ready(function() {
             payload.dhcphashared.enabled = "0";
             payload.dhcphalocal.carrier = "";
         }
-        $("#settingsResult, #setupResult").text("");
+        $("#settingsResult, #setupResult").text("").hide();
         updateActions();
         $("#retryApply").hide();
         invalidateStatus();
+        startSaveProgress(payload);
         post(api + "/settings/set", payload, managed === "" ? 70000 : 35000)
             .done(function(data) {
+                finishSaveProgress(data);
                 handleFormValidation("frm_Settings", data.validations);
                 if (data.result === "unchanged") {
                     refreshStatus();
                 } else if (data.result === "staged" && data.saved === true) {
                     $("#revision").val(data.revision || $("#revision").val());
-                    $("#settingsResult").text(data.error || "HA DHCP Interface was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
+                    saveMessage("#settingsResult", data.error || "HA DHCP Interface was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
                     loadSettings();
                 } else if (data.result === "saved" && data.saved === true) {
                     savedMapping = {managed: payload.dhcphalocal.managed_interface || "", carrier: payload.dhcphalocal.carrier || ""};
                     savedEnabled = valueOf(payload.dhcphashared.enabled) === "1";
                     $("#revision").val(data.revision || $("#revision").val());
                     const status = data.status || {};
-                    $("#settingsResult").text(data.applied === true
+                    saveMessage("#settingsResult", data.applied === true
                         ? ""
                         : (data.error || "Settings saved; controller apply needs attention."));
                     $("#retryApply").toggle(data.applied !== true);
@@ -539,22 +626,23 @@ $(document).ready(function() {
                     }
                     refreshStatus();
                 } else {
-                    $("#settingsResult").text(data.error || (data.result === "conflict"
+                    saveMessage("#settingsResult", data.error || (data.result === "conflict"
                         ? "Settings changed elsewhere. Reload before saving."
                         : "Settings were not saved."));
                     refreshStatus();
                 }
             })
             .fail(function() {
-                $("#settingsResult").text("Save result is unknown. Your form values are preserved; checking the saved revision before retrying.");
+                finishSaveProgress(null);
+                saveMessage("#settingsResult", "Save result is unknown. Your form values are preserved; checking the saved revision before retrying.");
                 getJson(api + "/settings/get", 10000).done(function(saved) {
                     if (saved.revision && saved.revision !== payload.revision) {
-                        $("#settingsResult").text("The saved revision changed while the request timed out. Your form still contains the submitted values; reload and compare before saving again.");
+                        saveMessage("#settingsResult", "The saved revision changed while the request timed out. Your form still contains the submitted values; reload and compare before saving again.");
                     } else {
-                        $("#settingsResult").text("The saved revision could not be confirmed. Your form values are preserved; reload settings before retrying.");
+                        saveMessage("#settingsResult", "The saved revision could not be confirmed. Your form values are preserved; reload settings before retrying.");
                     }
                 }).fail(function() {
-                    $("#settingsResult").text("Save result is unknown and the saved revision could not be read. Do not resubmit until settings can be checked.");
+                    saveMessage("#settingsResult", "Save result is unknown and the saved revision could not be read. Do not resubmit until settings can be checked.");
                 });
             })
             .always(function() {
@@ -580,7 +668,7 @@ $(document).ready(function() {
     }
 
     async function readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, backendVerified) {
-        $("#setupResult").text("");
+        saveMessage("#setupResult", "");
         configureRetryReady = false;
         configureRetryGeneration = -1;
         try {
@@ -593,7 +681,7 @@ $(document).ready(function() {
             const savedCarrier = valueOf(settings.dhcphalocal && settings.dhcphalocal.carrier);
             const savedEnabledValue = valueOf(settings.dhcphashared && settings.dhcphashared.enabled);
             if (expectedFormGeneration !== formGeneration) {
-                $("#setupResult").text("Readback completed after the form changed, so the saved revision was not advanced. Recheck after reviewing the saved settings, or reload this page to discard the unsaved values and load current settings.");
+                saveMessage("#setupResult", "Readback completed after the form changed, so the saved revision was not advanced. Recheck after reviewing the saved settings, or reload this page to discard the unsaved values and load current settings.");
                 return;
             }
             const settingsMatch = !!settings.revision && savedManaged === managed
@@ -632,7 +720,7 @@ $(document).ready(function() {
                 configureRetryReady = false;
                 configureOutcomeBlocked = false;
                 pendingConfigureOutcome = null;
-                $("#setupResult").text(savedEnabledValue === valueOf(payload.dhcphashared.enabled)
+                saveMessage("#setupResult", savedEnabledValue === valueOf(payload.dhcphashared.enabled)
                     ? "" : "Interface configured, but Enable was not applied. Review the marked settings and save again.");
             } else if (settingsMatch && statusIsFresh() && status.result !== "unavailable"
                 && status.managed && status.managed.identifier === managed) {
@@ -642,18 +730,18 @@ $(document).ready(function() {
                     configureOutcomeBlocked = false;
                     pendingConfigureOutcome = null;
                 }
-                $("#setupResult").text(backendVerified
-                    ? "Save & Apply reported verified setup, but current readback does not confirm the full mapping. Current status needs attention; refresh Diagnostics before enabling."
+                saveMessage("#setupResult", backendVerified
+                    ? "The server completed setup, but the current interface assignment no longer matches. Check the plugin Log and recheck the save outcome before enabling."
                     : (configureRetryReady
-                        ? "Fresh readback confirms a safe disabled setup state. Review the result, then retry Save & Apply to resume guarded setup."
-                        : "Fresh readback found a conflicting or unverified device state. Save retry is blocked; inspect Diagnostics before continuing."));
+                        ? "The saved settings were checked. The plugin is disabled and its carrier is detached; Save & Apply can safely resume the incomplete setup."
+                        : "The current interface state could not be verified, so another save is blocked. Check the plugin Log, then use Recheck save outcome."));
             } else {
-                $("#setupResult").text(backendVerified
+                saveMessage("#setupResult", backendVerified
                     ? "Save & Apply reported success, but readback differs or is unavailable. Refresh Diagnostics before relying on the current state."
                     : "Readback could not confirm a safe retry. Saved settings, assignment or runtime state differs or is unavailable; inspect Diagnostics before continuing.");
             }
         } catch (error) {
-            $("#setupResult").text(backendVerified
+            saveMessage("#setupResult", backendVerified
                 ? "Save & Apply verified setup, but current saved settings and assignment could not be read. Use Recheck outcome or reload this page after copying any unsaved values."
                 : "Save result remains unknown because saved settings and assignment status could not both be read. Use Recheck outcome; if it remains blocked, reload this page after copying any unsaved values.");
         }
@@ -672,7 +760,7 @@ $(document).ready(function() {
             const queue = statusData && statusData.setup && statusData.setup.pending_assignment;
             if (!statusIsFresh() || !queue || queue.available !== true || queue.state !== "selected_relink"
                 || savedEnabled || managed !== savedMapping.managed || !savedMapping.carrier) {
-                $("#setupResult").text("The saved setup intent is unavailable. Reload settings and review Diagnostics before resuming.");
+                saveMessage("#setupResult", "The saved setup intent is unavailable. Reload settings and review Diagnostics before resuming.");
                 return;
             }
             const payload = getFormData("frm_Settings");
@@ -702,27 +790,27 @@ $(document).ready(function() {
             return;
         }
         if (configureOutcomeBlocked) {
-            $("#setupResult").text("Save remains blocked until Recheck outcome confirms the saved settings and current assignment. Reload this page if you need to discard changed form values.");
+            saveMessage("#setupResult", "Save remains blocked until Recheck outcome confirms the saved settings and current assignment. Reload this page if you need to discard changed form values.");
             return;
         }
         const managed = field("dhcphalocal.managed_interface").val() || "";
         const retryReady = configureRetryReady && configureRetryGeneration === formGeneration;
         if (!managed || savedEnabled) {
-            $("#setupResult").text("Save and verify the disabled state before configuring the native assignment.");
+            saveMessage("#setupResult", "Save and verify the disabled state before configuring the native assignment.");
             return;
         }
         if (!canConfigureInterface || !configureAllowedInterfaces.includes(managed)) {
-            $("#setupResult").text("Native interface assignment write permission is required for this interface.");
+            saveMessage("#setupResult", "Native interface assignment write permission is required for this interface.");
             return;
         }
         if (!statusIsFresh() || !verifiedDetached(statusData)) {
-            $("#setupResult").text("Fresh status must verify the saved disabled state and detached adapter before configuring.");
+            saveMessage("#setupResult", "The plugin could not confirm that the HA interface is disabled and detached. Refresh status and retry; check the plugin Log if this continues.");
             refreshStatus();
             return;
         }
         if (!pendingAssignmentAllowsConfigure(retryReady)) {
             const pending = statusData && statusData.setup && statusData.setup.pending_assignment;
-            $("#setupResult").text(!pending || pending.available !== true || pending.state === "unknown"
+            saveMessage("#setupResult", !pending || pending.available !== true || pending.state === "unknown"
                 ? "The native assignment queue could not be verified. Refresh status and inspect Diagnostics before Save & Apply."
                 : (pending.state === "conflict"
                     ? "The native assignment queue contains another pending change. Resolve it in Interface Assignments before Save & Apply."
@@ -731,7 +819,7 @@ $(document).ready(function() {
         }
         if (!retryReady && !mappedDeviceNeedsRecovery(managed)
             && (!previewDevice || previewDevice === "dhcpha0lagg")) {
-            $("#setupResult").text("The original native device is unavailable or ambiguous. Refresh the assignment before continuing.");
+            saveMessage("#setupResult", "The original native device is unavailable or ambiguous. Refresh the assignment before continuing.");
             return;
         }
 
@@ -750,32 +838,35 @@ $(document).ready(function() {
         payload.dhcphashared.failback_delay = $("#failbackDelay").val();
         payload.revision = $("#revision").val();
         handleFormValidation("frm_Settings", []);
-        $("#settingsResult, #setupResult").text("");
+        $("#settingsResult, #setupResult").text("").hide();
         updateActions();
         invalidateStatus();
+        startSaveProgress(payload);
         try {
             const result = await post(api + "/settings/configure", payload, 120000);
+            finishSaveProgress(result);
             handleFormValidation("frm_Settings", result.validations);
             const complete = result.result === "saved" && result.saved === true && result.applied === true
                 && result.assignment_verified === true && result.setup_stage === "verified";
             if (complete) {
-                $("#setupResult").text("");
+                saveMessage("#setupResult", "");
                 blockConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, true);
                 await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, true);
                 refreshStatus();
             } else {
-                $("#setupResult").text(result.error || "Save & Apply could not complete the interface configuration.");
+                saveMessage("#setupResult", result.error || "Save & Apply could not complete the interface configuration.");
                 if (result.saved === true || result.saved === null || result.applied === null || result.assignment_verified === null) {
                     blockConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, false);
                     await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier);
                     if (result.error && $("#setupResult").text()) {
-                        $("#setupResult").text(result.error);
+                        saveMessage("#setupResult", result.error);
                     }
                 } else {
                     refreshStatus();
                 }
             }
         } catch (error) {
+            finishSaveProgress(null);
             blockConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, false);
             await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier);
         } finally {
@@ -802,7 +893,7 @@ $(document).ready(function() {
             }
             refreshStatus();
         }).fail(function() {
-            $("#settingsResult").text("Recovery result is unknown. Refresh status before retrying.");
+            saveMessage("#settingsResult", "Recovery result is unknown. Refresh status before retrying.");
             renderStatusUnavailable("Recovery result is unknown. Refresh status before relying on the previous state.");
         }).always(function() {
             button.prop("disabled", false);
@@ -818,6 +909,11 @@ $(document).ready(function() {
     }
 
     function saveFromForm() {
+        if (settingsBusy || configureBusy) {
+            return;
+        }
+        clearTimeout(saveProgressTimer);
+        saveProgress = null;
         const managed = field("dhcphalocal.managed_interface").val() || "";
         const setupRequired = managed !== "" && !savedEnabled && (
             managed !== savedMapping.managed || !savedMapping.carrier
@@ -850,13 +946,13 @@ $(document).ready(function() {
                 field("dhcphashared.shared_mac").val(data.mac).trigger("change");
             }
         }).fail(function() {
-            $("#settingsResult").text("MAC generation failed. Existing form values are unchanged.");
+            $("#settingsResult").text("MAC generation failed. Existing form values are unchanged.").show();
         });
     });
     $("#resetFailback").on("click", function() {
         $("#failbackDelay").val("0");
         $("#failbackWarning").hide();
-        $("#settingsResult").text("Reset selected in the unsaved form. Return to Settings and choose Save & Apply to store it.");
+        $("#settingsResult").text("Reset selected in the unsaved form. Return to Settings and choose Save & Apply to store it.").show();
         showTab("#settings");
         updateActions();
     });
@@ -939,7 +1035,7 @@ $(document).ready(function() {
                 <p id="saveIdentityNote" class="text-warning" style="display:none"></p>
                 <div id="configureBlock" style="display:none">
                     <button class="btn btn-default" id="recheckConfigure" type="button" style="display:none">{{ lang._('Recheck save outcome') }}</button>
-                    <p id="configureOutcomeNote" class="help-block" style="display:none">{{ lang._('Save remains blocked until a read-only check confirms the saved settings and current assignment. Recheck outcome reads both again. If your form changed or readback remains unavailable, copy any unsaved values and reload this page to load current saved settings.') }}</p>
+                    <p id="configureOutcomeNote" class="help-block" style="display:none">{{ lang._('The previous save could not be verified. Use Recheck save outcome before retrying.') }}</p>
                     <p class="help-block">{{ lang._('Save & Apply configures the interface, then applies Enable. Setup may interrupt this interface. Use a separate management path and do not edit native assignments concurrently.') }}</p>
                 </div>
                 <div class="form-group" id="macHelpers">
@@ -952,8 +1048,12 @@ $(document).ready(function() {
                 </p>
                 <button class="btn btn-primary" id="saveSettings" type="button">{{ lang._('Save & Apply') }}</button>
                 <button class="btn btn-default" id="retryApply" type="button" style="display:none">{{ lang._('Retry Apply') }}</button>
-                <p id="settingsResult" role="status"></p>
-                <p id="setupResult" role="status"></p>
+                <div id="saveProgressPanel" style="display:none; margin-top:15px">
+                    <p id="saveProgressSummary" role="status" aria-live="polite"></p>
+                    <textarea id="saveProgressOutput" class="form-control" rows="12" wrap="soft" readonly="readonly" aria-label="{{ lang._('Configuration progress') }}" style="max-width:100%; font-family:monospace"></textarea>
+                </div>
+                <p id="settingsResult" role="status" style="display:none"></p>
+                <p id="setupResult" class="hidden"></p>
                 <p id="serviceResult" role="status"></p>
             </div>
         </div>

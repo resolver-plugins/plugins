@@ -17,6 +17,16 @@ function between(start, end) {
     return view.slice(first, last);
 }
 
+function progressContext(values) {
+    const context = vm.createContext(Object.assign({
+        saveProgress: null, saveProgressTimer: null, settingsBusy: false, configureBusy: false,
+        crypto: {getRandomValues: bytes => bytes.fill(1)}, Uint8Array,
+        setTimeout: () => 1, clearTimeout: () => {}
+    }, values));
+    vm.runInContext(between('    function renderSaveProgress()', '    function currentTabVisible()'), context);
+    return context;
+}
+
 function domFixture() {
     const nodes = Object.create(null);
     const fields = Object.create(null);
@@ -159,7 +169,7 @@ function configureFixture(options = {}) {
     dom.nodes['#failbackDelay'] = {props: {}, value: '0', text: '', visible: true, children: []};
     const calls = [];
     const readbacks = [];
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         api: '/api/dhcpinterfaceha',
         canConfigureInterface: options.canConfigureInterface !== false,
         canWriteSettings: true,
@@ -271,7 +281,7 @@ function readbackFixture(settings, status, options = {}) {
     dom.nodes['#revision'] = {props: {}, value: 'rev1', text: '', visible: true, children: []};
     let settingsReads = 0;
     let statusReads = 0;
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         api: '/api/dhcpinterfaceha',
         statusData: null,
         statusObservedAt: Date.now(),
@@ -407,7 +417,8 @@ async function testConfigureHandler() {
     assert.deepEqual(submitted.payload, {
         dhcphashared: {enabled: '1', shared_mac: '02:00:00:00:00:01', failback_delay: '0'},
         dhcphalocal: {managed_interface: 'opt7', carrier: 'em0'},
-        revision: 'rev1'
+        revision: 'rev1',
+        progress_id: '01'.repeat(16)
     }, 'Configure submits both complete roots and the current revision, honoring Enable');
     finishPost({result: 'saved', saved: true, applied: true, assignment_verified: true, setup_stage: 'verified', revision: 'rev2'});
     await first;
@@ -449,7 +460,7 @@ function testSaveDispatchesSetup() {
     const dom = domFixture();
     dom.setField('dhcphalocal.managed_interface', 'opt7');
     const calls = [];
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         savedEnabled: false,
         savedMapping: {managed: '', carrier: ''},
         previewDevice: 'hn1',
@@ -589,7 +600,7 @@ async function testConfigureReadbackGuards() {
 function testConfiguredStateRequiresVerifiedOwnership() {
     const dom = domFixture();
     dom.setField('dhcphalocal.managed_interface', 'opt7');
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         statusData: null,
         statusObservedAt: Date.now(),
         savedMapping: {managed: 'opt7', carrier: 'em0'}
@@ -623,7 +634,7 @@ function testDisabledSelectionCanBeSaved() {
     const dom = domFixture();
     dom.setField('dhcphalocal.managed_interface', '');
     dom.setField('dhcphashared.enabled', '', {checked: true});
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         canWriteSettings: true,
         canConfigureInterface: true,
         canRunRecovery: true,
@@ -669,7 +680,7 @@ function statusFixture(clock) {
     let maximumActive = 0;
     let nextTimer = 1;
     const timers = [];
-    const context = vm.createContext({
+    const context = progressContext({
         Date: {now: () => clock.now},
         Error,
         api: '/api/dhcpinterfaceha',
@@ -740,7 +751,7 @@ async function testSharedStatusReadbackAndFreshness() {
 async function testOldCarrierPreview() {
     const requests = [];
     const dom = domFixture();
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         api: '/api/dhcpinterfaceha',
         selectionGeneration: 0,
         statusGeneration: 0,
@@ -780,7 +791,7 @@ async function testOldCarrierPreview() {
 
 function testSummaryAndAddressMeaning() {
     const dom = domFixture();
-    const context = vm.createContext(Object.assign({}, dom, {
+    const context = progressContext(Object.assign({}, dom, {
         statusObservedAt: Date.now(),
         staleTimer: null,
         clearTimeout: () => {},
@@ -885,7 +896,44 @@ function testSettingsPopulationDoesNotActLikeUserEdits() {
         'a real Disabled selection still clears Enable');
 }
 
+async function testSaveProgress() {
+    const dom = domFixture();
+    const timers = [];
+    let reply;
+    const context = progressContext(Object.assign({}, dom, {
+        api: '/api/dhcpinterfaceha', payload: {},
+        setTimeout: callback => { timers.push(callback); return timers.length; },
+        getJson: () => Promise.resolve(reply)
+    }));
+    vm.runInContext('startSaveProgress(payload)', context);
+    assert.match(dom.getValue('#saveProgressOutput'), /\[WORKING\]/);
+    const id = context.payload.progress_id;
+    reply = {id, state: 'running', steps: [
+        {state: 'success', message: 'Prepare HA interface'},
+        {state: 'running', message: 'Apply native assignment'}
+    ]};
+    await timers.shift()();
+    assert.match(dom.getValue('#saveProgressOutput'), /\[OK\] Prepare HA interface/);
+    assert.match(dom.getValue('#saveProgressOutput'), /\[WORKING\] Apply native assignment/);
+    context.result = {progress: {id, state: 'failed', steps: [
+        reply.steps[0], {state: 'failed', message: 'Apply native assignment — <error> no link'}
+    ]}};
+    vm.runInContext('finishSaveProgress(result); saveMessage("#setupResult", "Verification remains unavailable.")', context);
+    assert.match(dom.getValue('#saveProgressOutput'), /\[FAIL\] Apply native assignment — <error> no link/);
+    assert.match(dom.getValue('#saveProgressOutput'), /Verification remains unavailable/);
+    assert.equal(dom.getText('#saveProgressSummary'), 'Save & Apply needs attention');
+    assert.equal(dom.nodes['#saveProgressOutput'].children.length, 0, 'errors remain text, never HTML');
+    // An already in-flight poll cannot overwrite the final result.
+    await timers.shift()();
+    assert.match(dom.getValue('#saveProgressOutput'), /\[FAIL\]/);
+    vm.runInContext('startSaveProgress(payload); finishSaveProgress(null)', context);
+    assert.match(dom.getValue('#saveProgressOutput'), /\[UNKNOWN\]/);
+    assert.match(dom.getValue('#saveProgressOutput'), /may still be configuring/);
+    assert.doesNotMatch(dom.getText('#saveProgressSummary'), /completed/);
+}
+
 (async () => {
+    await testSaveProgress();
     await testConfigureHandler();
     await testConfigureReadbackGuards();
     await testSharedStatusReadbackAndFreshness();

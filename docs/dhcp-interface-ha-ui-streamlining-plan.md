@@ -955,3 +955,30 @@ while the plugin is unmanaged. Evidence:
 `f11e3c224057e02c2fe91508583c073af09ef23d5810613fbc7e82b07be1ab9a`.
 HA-2 was unavailable over SSH; it was not updated. No live WAN setup retry was
 performed, and the ix0 failure is not yet resolved.
+
+### 0.2_34 — live Save & Apply progress
+
+Replace transient save/setup messages with a persistent, scrolling plain-text
+panel below Save & Apply, matching the native firmware output presentation.
+The existing synchronous save operations publish their actual step boundaries;
+there is no background job, simulated percentage, extra interface operation or
+automatic retry. Native validation and controller failure details remain visible
+when subsequent readback is unavailable. A saved configuration whose controller
+reports FAULT fails the final readiness step. Timeout or unavailable verification
+is UNKNOWN, never an assumed failure or success. Unchanged saves remain no-ops.
+
+`settings/progress/<request-id>` is a read-only Settings API route. A private
+atomic temporary-file snapshot holds the last attempt per authenticated account
+for 15 minutes of readable history, with a random request ID separating tabs.
+Newer attempts may replace that account's cached transcript; each original save
+response still contains its own complete transcript. Expiry does not stop a save
+or authorize retry. Cache failures do not interrupt configuration, and the cache
+is not a source of configuration authority. The existing native revision,
+assignment, ownership, write ACL and readback guards remain in force. OPNsense's
+session implementation releases its lock before controller execution, allowing
+progress requests while save is running. Progress output is rendered as text.
+
+Regression checks cover live intermediate progress, request/account isolation,
+expiry, rejected IDs, saved-but-faulted readiness, timeouts, unchanged saves,
+preservation of failed steps, literal error rendering and stale polling replies.
+Live WAN setup is excluded from deployment validation until a coordinated retry.

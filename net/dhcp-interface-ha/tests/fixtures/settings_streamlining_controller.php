@@ -19,7 +19,7 @@ namespace OPNsense\Base {
 
         public function getUserName()
         {
-            return 'fixture-admin';
+            return \FixtureRequest::$username;
         }
     }
 }
@@ -155,6 +155,15 @@ namespace OPNsense\Core {
                 throw new \RuntimeException('configd called under config lock');
             }
             \FixtureRequest::$events[] = $event;
+            if (!empty(\FixtureRequest::$post['progress_id'])) {
+                $method = \FixtureRequest::$method;
+                \FixtureRequest::$method = 'GET';
+                \FixtureRequest::$progressReads[] = [
+                    'event' => $event,
+                    'progress' => (new \OPNsense\DhcpInterfaceHa\Api\SettingsController())->progressAction(\FixtureRequest::$post['progress_id']),
+                ];
+                \FixtureRequest::$method = $method;
+            }
             if ($event === 'dhcp_interface_ha status') {
                 if (\FixtureRequest::$statusUnavailable) {
                     throw new \RuntimeException('status unavailable');
@@ -218,6 +227,8 @@ namespace OPNsense\Core {
         private static function statusJson()
         {
             return json_encode([
+                'state' => Config::$shared['enabled'] === '1' ? \FixtureRequest::$runtimeState : 'DISABLED',
+                'reason' => \FixtureRequest::$runtimeState === 'FAULT' ? 'selected carrier has no link' : 'fixture controller state',
                 'actual_attachment' => (\FixtureRequest::$needsReconcile && Config::$assignments['wan'] === 'dhcpha0lagg') ? 'UNVERIFIED' : 'FENCED',
                 'desired_attachment' => 'FENCED',
                 'enabled' => Config::$shared['enabled'] === '1',
@@ -501,6 +512,9 @@ namespace {
     class FixtureRequest
     {
         public static $method = 'GET';
+        public static $username = 'fixture-admin';
+        public static $progressReads = [];
+        public static $runtimeState = 'STANDBY';
         public static $post = [];
         public static $readOnly = false;
         public static $events = [];
@@ -544,6 +558,7 @@ namespace {
     \FixtureRequest::$assignmentCacheStale = str_starts_with($case, 'teardown_');
     $action = $argv[4] ?? 'configure';
     $requestFlags = json_decode($argv[5] ?? '{}', true) ?: [];
+    \FixtureRequest::$runtimeState = $requestFlags['runtime_state'] ?? 'STANDBY';
     \FixtureRequest::$inventoryMembers = $requestFlags['inventory_members'] ?? null;
     \FixtureRequest::$leaseOnOriginal = in_array($case, ['configure_success', 'configure_timeout', 'configure_native_save_unknown'], true);
     \FixtureRequest::$devicePresent = $case !== 'configure_missing_device_retry';
@@ -689,6 +704,11 @@ namespace {
         \FixtureRequest::$post['revision'] = 'stale';
     }
 
+    if (isset($requestFlags['progress_id'])) {
+        \FixtureRequest::$username = 'fixture-admin-' . getmypid();
+        \FixtureRequest::$post['progress_id'] = $requestFlags['progress_id'];
+    }
+
     try {
         $response = $action === 'sync'
             ? $controller->enable_syncAction()
@@ -697,7 +717,28 @@ namespace {
         $response = ['result' => 'denied', 'error' => $exception->getMessage()];
     }
 
+    $progressChecks = [];
+    if (isset($requestFlags['progress_id'])) {
+        \FixtureRequest::$method = 'GET';
+        $progressChecks['own'] = $controller->progressAction($requestFlags['progress_id']);
+        $progressChecks['wrong_id'] = $controller->progressAction(str_repeat('0', 32));
+        $user = \FixtureRequest::$username;
+        \FixtureRequest::$username = $user . '-other';
+        $progressChecks['other_user'] = $controller->progressAction($requestFlags['progress_id']);
+        \FixtureRequest::$username = $user;
+        $file = sys_get_temp_dir() . '/dhcpha-save-' . hash('sha256', $user) . '.json';
+        if (is_file($file)) {
+            $data = json_decode(file_get_contents($file), true);
+            $data['updated'] = time() - 1000;
+            file_put_contents($file, json_encode($data));
+            $progressChecks['expired'] = $controller->progressAction($requestFlags['progress_id']);
+            unlink($file);
+        }
+    }
+
     echo json_encode([
+        'progress_reads' => \FixtureRequest::$progressReads,
+        'progress_checks' => $progressChecks,
         'response' => $response,
         'save_count' => \OPNsense\Core\Config::$saveCount,
         'shared' => \OPNsense\Core\Config::$shared,

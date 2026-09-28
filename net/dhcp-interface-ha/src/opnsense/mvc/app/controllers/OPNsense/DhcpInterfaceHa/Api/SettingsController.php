@@ -17,6 +17,141 @@ class SettingsController extends ApiControllerBase
     private const LOCAL_FIELDS = ['managed_interface', 'carrier'];
     private $eventLogger = null;
 
+    private $saveProgress = null;
+
+    // One bounded, short-lived transcript per account. A request ID prevents
+    // overlapping tabs from displaying another save. It is observation only:
+    // cache failures must never change configuration or authorize retries.
+    private function progressPath()
+    {
+        return sys_get_temp_dir() . '/dhcpha-save-' . hash('sha256', $this->getUserName()) . '.json';
+    }
+
+    public function progressAction($id = '')
+    {
+        if (!$this->request->isGet() || !is_string($id) || !preg_match('/^[a-f0-9]{32}$/D', $id)) {
+            return ['state' => 'unavailable'];
+        }
+        $path = $this->progressPath();
+        $data = is_file($path) && !is_link($path)
+            ? json_decode((string)@file_get_contents($path, false, null, 0, 65536), true) : null;
+        if (!is_array($data) || ($data['id'] ?? '') !== $id || ($data['updated'] ?? 0) < time() - 900) {
+            return ['state' => 'unavailable'];
+        }
+        return $data;
+    }
+
+    private function publishProgress()
+    {
+        if (empty($this->saveProgress['id'])) {
+            return;
+        }
+        $temporary = false;
+        try {
+            $this->saveProgress['updated'] = time();
+            // tempnam creates a private 0600 file; rename gives readers a complete
+            // snapshot and never follows a pre-existing target symlink.
+            $temporary = @tempnam(sys_get_temp_dir(), 'dhcpha-save-');
+            if ($temporary !== false && @file_put_contents($temporary, json_encode($this->saveProgress)) !== false) {
+                @rename($temporary, $this->progressPath());
+            }
+        } catch (\Throwable $exception) {
+            // The ordinary API response still carries the complete transcript.
+        } finally {
+            if ($temporary !== false && is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
+    }
+
+    private function progressStep($message)
+    {
+        if ($this->saveProgress === null) {
+            return;
+        }
+        $last = count($this->saveProgress['steps']) - 1;
+        if ($last >= 0) {
+            $this->saveProgress['steps'][$last]['state'] = 'success';
+        }
+        $this->saveProgress['steps'][] = ['state' => 'running', 'message' => $message];
+        $this->publishProgress();
+    }
+
+    private function finishProgress($state, $message)
+    {
+        $last = count($this->saveProgress['steps']) - 1;
+        $this->saveProgress['steps'][$last]['state'] = $state;
+        if ($message !== '') {
+            $this->saveProgress['steps'][$last]['message'] .= ' — ' . mb_substr($message, 0, 1600);
+        }
+        $this->saveProgress['state'] = $state;
+        $this->publishProgress();
+    }
+
+    private function withSaveProgress($operation)
+    {
+        if (!$this->request->isPost()) {
+            return ['result' => 'failed', 'saved' => false, 'applied' => false, 'error' => gettext('POST required.')];
+        }
+        $this->throwReadOnly();
+        $id = $this->request->getPost('progress_id', null, '');
+        if (!is_string($id) || ($id !== '' && !preg_match('/^[a-f0-9]{32}$/D', $id))) {
+            return ['result' => 'failed', 'saved' => false, 'applied' => false, 'error' => gettext('Invalid save request ID. Reload this page and retry.')];
+        }
+        $this->saveProgress = ['id' => $id, 'state' => 'running', 'steps' => []];
+        $this->progressStep(gettext('Check settings and current interface state'));
+        try {
+            $result = $operation();
+        } catch (\Throwable $exception) {
+            $this->finishProgress('unknown', gettext('The request stopped unexpectedly. Recheck the saved settings before retrying; see the system log for details.'));
+            throw $exception;
+        }
+        $success = ($result['result'] ?? '') === 'unchanged'
+            || (($result['result'] ?? '') === 'saved' && ($result['applied'] ?? null) === true);
+        $state = $success ? 'success' : 'failed';
+        $saveUnknown = array_key_exists('saved', $result) && $result['saved'] === null;
+        $assignmentUnknown = array_key_exists('assignment_verified', $result) && $result['assignment_verified'] === null;
+        $applyUnknown = !empty($result['saved']) && (($result['applied'] ?? null) === null || $assignmentUnknown);
+        if (!$success && ($saveUnknown || $applyUnknown)) {
+            $state = 'unknown';
+        }
+        $message = $result['error'] ?? '';
+        if (!empty($result['validations'])) {
+            $message .= ' ' . implode(' ', array_unique(array_values($result['validations'])));
+        }
+        if (($result['result'] ?? '') === 'unchanged') {
+            $message = gettext('Nothing changed; no configuration or interface actions were needed.');
+        } elseif ($success) {
+            $this->progressStep(gettext('Check interface readiness'));
+            $status = $result['status'] ?? [];
+            $runtimeState = $status['state'] ?? 'UNKNOWN';
+            $message = $status['reason'] ?? gettext('Current runtime status is unavailable.');
+            if ($runtimeState === 'FAULT') {
+                $state = 'failed';
+                $message .= ' ' . gettext('Settings were saved, but the interface is not ready. Review the plugin Log before retrying.');
+            } elseif (!empty($result['cleared']) && ($status['enabled'] ?? null) === false
+                && ($status['actual_attachment'] ?? '') === 'UNMANAGED') {
+                $message = gettext('Plugin disabled and interface configuration cleared. The shared MAC was retained.');
+            } elseif (in_array($runtimeState, ['UNKNOWN', 'SETUP_INCOMPLETE'], true)) {
+                $state = 'unknown';
+                $message .= ' ' . gettext('Settings were saved; current readiness could not be confirmed.');
+            }
+        }
+        $this->finishProgress($state, trim($message));
+        $result['progress'] = $this->saveProgress;
+        return $result;
+    }
+
+    public function setAction()
+    {
+        return $this->withSaveProgress(fn() => $this->setSettings());
+    }
+
+    public function configureAction()
+    {
+        return $this->withSaveProgress(fn() => $this->configureInterface());
+    }
+
     public function getAction()
     {
         if (!$this->request->isGet()) {
@@ -78,12 +213,8 @@ class SettingsController extends ApiControllerBase
         ];
     }
 
-    public function setAction()
+    private function setSettings()
     {
-        if (!$this->request->isPost()) {
-            return ['result' => 'failed', 'saved' => false, 'applied' => null, 'error' => gettext('POST required.')];
-        }
-        $this->throwReadOnly();
         $sharedInput = $this->request->getPost('dhcphashared');
         $localInput = $this->request->getPost('dhcphalocal');
         $revisionInput = $this->request->getPost('revision', null, '');
@@ -111,6 +242,7 @@ class SettingsController extends ApiControllerBase
                 'outcome' => 'saved',
             ]);
         }
+        $this->progressStep(gettext('Apply saved settings to the controller'));
         $apply = self::applySavedSettings();
         $response = [
             'result' => 'saved',
@@ -150,6 +282,7 @@ class SettingsController extends ApiControllerBase
         }
 
         if (!empty((string)$currentShared->enabled)) {
+            $this->progressStep(gettext('Disable HA DHCP Interface and detach its carrier'));
             $current = self::canonical($currentShared, $currentLocal);
             $disableShared = $current['dhcphashared'];
             $disableShared['enabled'] = '0';
@@ -187,6 +320,7 @@ class SettingsController extends ApiControllerBase
         }
 
         if ($managedName !== '' && $carrier !== '') {
+            $this->progressStep(gettext('Restore the original interface assignment'));
             $restored = $this->restoreNativeAssignment($managedName, $carrier, $revision);
             if (empty($restored['restored'])) {
                 return [
@@ -206,6 +340,7 @@ class SettingsController extends ApiControllerBase
             ]);
         }
 
+        $this->progressStep(gettext('Clear plugin configuration and retain the shared MAC'));
         $cleared = $this->saveSettings($targetShared, $targetLocal, $revision, unknownSaveOutcome: false);
         if ($cleared['result'] !== 'saved') {
             if (!empty((string)$currentShared->enabled)) {
@@ -223,6 +358,7 @@ class SettingsController extends ApiControllerBase
                 'outcome' => 'saved',
             ]);
         }
+        $this->progressStep(gettext('Apply saved settings to the controller'));
         $apply = self::applySavedSettings();
         $response = [
             'result' => 'saved',
@@ -298,7 +434,8 @@ class SettingsController extends ApiControllerBase
                     return [
                         'restored' => false,
                         'applied' => false,
-                        'error' => gettext('Native assignment validation rejected restoration; plugin settings were retained.'),
+                        'error' => gettext('OPNsense rejected the original interface assignment. Plugin settings were retained.')
+                            . ' ' . implode(' ', array_values($staged['validations'] ?? [])),
                     ];
                 }
                 $pending = $bridge->pendingChanges();
@@ -476,12 +613,8 @@ class SettingsController extends ApiControllerBase
         return $result ?? ['result' => 'failed', 'saved' => false, 'applied' => null, 'error' => gettext('Settings were not saved.')];
     }
 
-    public function configureAction()
+    private function configureInterface()
     {
-        if (!$this->request->isPost()) {
-            return self::setupResponse(result: 'failed', saved: false, applied: false, assignmentVerified: null, stage: 'none', error: gettext('POST required.'));
-        }
-        $this->throwReadOnly();
 
         $sharedInput = $this->request->getPost('dhcphashared');
         $localInput = $this->request->getPost('dhcphalocal');
@@ -557,6 +690,7 @@ class SettingsController extends ApiControllerBase
                 validations: $preflight['validations'] ?? []
             );
         }
+        $this->progressStep(gettext('Prepare and verify the detached HA interface'));
         if (!$initial['device_present']) {
             $guard = self::checkSetupIntent($managedName, $carrier, $revision, $initial['committed_device'], $initial['assignment_map']);
             if ($guard !== null) {
@@ -581,6 +715,7 @@ class SettingsController extends ApiControllerBase
         }
         $stage = 'prepared';
 
+        $this->progressStep(gettext('Save interface settings with HA temporarily disabled'));
         $saved = $this->saveSettings($sharedInput, $localInput, $revision, unknownSaveOutcome: true);
         if ($saved['result'] !== 'saved') {
             return self::setupResponse(
@@ -604,6 +739,7 @@ class SettingsController extends ApiControllerBase
         }
 
         if (!empty($saved['changed'])) {
+            $this->progressStep(gettext('Verify the carrier is safely detached'));
             $controllerApply = self::applySavedSettings();
             if ($controllerApply['applied'] !== true || !self::isDisabledDetachedStatus($controllerApply['status'] ?? null)) {
                 $this->logEvent('error', 'setup_failed', [
@@ -625,6 +761,7 @@ class SettingsController extends ApiControllerBase
             }
         }
 
+        $this->progressStep(gettext('Prepare the native interface assignment'));
         $stageResult = self::stageAssignment(
             $managedName,
             $carrier,
@@ -653,6 +790,7 @@ class SettingsController extends ApiControllerBase
             $stage = 'assignment_staged';
         }
 
+        $this->progressStep(gettext('Apply and verify the native interface assignment'));
         $apply = $stageResult['result'] === 'complete'
             ? ['applied' => true, 'error' => null]
             : self::applyStagedAssignment(
@@ -677,6 +815,7 @@ class SettingsController extends ApiControllerBase
             // Setup stays disabled until native assignment and detachment are
             // verified. Then honor Enable through the normal validation/apply path.
             if ($requestedEnabled !== '0') {
+                $this->progressStep(gettext('Enable HA DHCP Interface and apply the CARP role'));
                 $sharedInput['enabled'] = $requestedEnabled;
                 $enabled = $this->saveSettings($sharedInput, $localInput, $saved['revision'], unknownSaveOutcome: true);
                 if ($enabled['result'] !== 'saved') {
@@ -1105,7 +1244,7 @@ class SettingsController extends ApiControllerBase
             return [
                 'result' => 'conflict',
                 'assignment_verified' => false,
-                'error' => gettext('The existing plugin device is not verified as an owned, detached failover device.'),
+                'error' => gettext('Setup stopped before reassignment: the plugin could not verify ownership and detachment of dhcpha0lagg. Check the plugin Log, then recheck status.'),
                 'status' => is_array($status) ? $status : null,
             ];
         } elseif (!self::isDisabledDetachedStatus($status)) {
@@ -1886,7 +2025,9 @@ class SettingsController extends ApiControllerBase
                 $status = $apply;
             } elseif ($raw !== '') {
                 $applied = false;
-                $error = gettext('Settings were saved, but apply failed. Use Retry Apply.');
+                $error = gettext('Settings were saved, but the controller could not apply them.')
+                    . ' ' . (is_string($apply['error'] ?? null) ? $apply['error'] : gettext('No usable controller response was returned.'))
+                    . ' ' . gettext('Review the plugin Log before using Retry Apply.');
             }
         } catch (\Throwable $exception) {
             // Readback below may explain the current state, but does not prove

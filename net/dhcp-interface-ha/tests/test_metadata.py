@@ -336,7 +336,7 @@ namespace {{
         controller = PLUGIN / "src/opnsense/mvc/app/controllers/OPNsense/DhcpInterfaceHa/Api/SettingsController.php"
         errors = {
             "settings": {
-                False: "Settings were saved, but apply failed. Use Retry Apply.",
+                False: "Settings were saved, but the controller could not apply them. apply failed Review the plugin Log before using Retry Apply.",
                 None: "Settings were saved, but the apply result is unknown. Check status before retrying.",
             },
             "service": {
