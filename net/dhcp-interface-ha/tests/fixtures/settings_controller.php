@@ -15,10 +15,23 @@ namespace OPNsense\Base {
                 throw new \RuntimeException('read-only');
             }
         }
+
+        public function getUserName()
+        {
+            return 'fixture-admin';
+        }
     }
 }
 
 namespace OPNsense\Core {
+    class ACL
+    {
+        public function isPageAccessible($user, $route)
+        {
+            return true;
+        }
+    }
+
     class Config
     {
         private static $instance;
@@ -38,7 +51,9 @@ namespace OPNsense\Core {
 
         public function object()
         {
-            $device = in_array(\FixtureRequest::$case, ['enable', 'attached_enable'], true) ? 'dhcpha0lagg' : 'hn0';
+            $device = str_starts_with(\FixtureRequest::$case, 'clear_')
+                ? 'hn1'
+                : (in_array(\FixtureRequest::$case, ['enable', 'attached_enable'], true) ? 'dhcpha0lagg' : 'hn0');
             return simplexml_load_string(
                 '<opnsense><interfaces><wan><enable>1</enable><if>' . $device . '</if><descr>WAN</descr>' .
                 '<ipaddr>dhcp</ipaddr><ipaddrv6>none</ipaddrv6></wan></interfaces>' .
@@ -121,6 +136,14 @@ namespace OPNsense\Core {
 }
 
 namespace OPNsense\DhcpInterfaceHa {
+    class SetupAssignmentBridge
+    {
+        public function pendingChanges()
+        {
+            return [];
+        }
+    }
+
     class Shared
     {
         public $enabled;

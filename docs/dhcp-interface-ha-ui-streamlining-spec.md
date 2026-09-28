@@ -202,12 +202,12 @@ Configure or Save draft actions.
 
 | Saved state / selected form value | Available action and meaning |
 |---|---|
-| Disabled; Disabled | Save & Apply clears the local mapping, enablement and failback value, preserving MAC. |
+| Disabled; Disabled | Save & Apply restores the native logical assignment to its saved carrier, verifies it, then clears the local mapping, enablement and failback value while preserving MAC. |
 | Disabled; eligible original native device | Save & Apply captures the carrier and completes guarded native setup. Setup forces Enable off even if checked in the submitted form. |
 | Disabled; selected assignment already maps to the owned LAGG with a known carrier | Save & Apply performs an ordinary settings save. Remaining prerequisites appear separately. |
 | Enabled; identity unchanged | Save & Apply performs ordinary edits or disables the service. |
 | Enabled; interface/MAC changed | Require saving Disable with the old identity first, then fresh detached evidence before identity changes. |
-| Enabled; Disabled selected | Save & Apply first disables and fences the saved identity, then clears the local mapping only after fresh detached evidence. A failed or unknown fence retains the mapping. |
+| Enabled; Disabled selected | Save & Apply first disables and fences the saved identity, restores and verifies its native carrier assignment, then clears the local mapping. A failed or unknown fence or restoration retains the mapping. |
 | Foreign device, ambiguous carrier, stale observation or missing permission | Explain the specific blocker; Save & Apply never bypasses it. |
 
 “Interface configured” proves committed native mapping, recorded carrier and

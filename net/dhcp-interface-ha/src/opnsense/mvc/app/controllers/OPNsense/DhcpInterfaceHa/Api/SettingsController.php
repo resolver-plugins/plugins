@@ -133,6 +133,8 @@ class SettingsController extends ApiControllerBase
     {
         $currentShared = new Shared();
         $currentLocal = new Local();
+        $managedName = trim((string)$currentLocal->managed_interface);
+        $carrier = trim((string)$currentLocal->carrier);
         $targetShared = [
             'enabled' => '0',
             'shared_mac' => (string)$sharedInput['shared_mac'],
@@ -177,6 +179,26 @@ class SettingsController extends ApiControllerBase
             $revision = $disabled['revision'];
         }
 
+        if ($managedName !== '' && $carrier !== '') {
+            $restored = $this->restoreNativeAssignment($managedName, $carrier, $revision);
+            if (empty($restored['restored'])) {
+                return [
+                    'result' => 'staged',
+                    'saved' => true,
+                    'applied' => $restored['applied'] ?? false,
+                    'cleared' => false,
+                    'revision' => $revision,
+                    'error' => $restored['error'],
+                ];
+            }
+            $this->logEvent('info', 'assignment_restored', [
+                'operation' => 'settings_clear',
+                'interface' => $managedName,
+                'carrier' => $carrier,
+                'outcome' => 'verified',
+            ]);
+        }
+
         $cleared = $this->saveSettings($targetShared, $targetLocal, $revision, unknownSaveOutcome: false);
         if ($cleared['result'] !== 'saved') {
             if (!empty((string)$currentShared->enabled)) {
@@ -207,6 +229,127 @@ class SettingsController extends ApiControllerBase
             $response['status'] = $apply['status'];
         }
         return $response;
+    }
+
+    /** Restore the logical interface through OPNsense's native assignment path. */
+    private function restoreNativeAssignment($managedName, $carrier, $revision)
+    {
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,14}$/', $managedName)
+            || !preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,14}$/', $carrier)) {
+            return ['restored' => false, 'applied' => false, 'error' => gettext('The saved interface identity is invalid; plugin settings were retained.')];
+        }
+        if (!$this->nativeRouteAllowed('/api/interfaces/assignment/set_item/' . $managedName)
+            || !$this->nativeRouteAllowed('/api/interfaces/assignment/reconfigure')) {
+            return ['restored' => false, 'applied' => false, 'error' => gettext('Native interface assignment write permission is required to remove this configuration.')];
+        }
+        $config = Config::getInstance();
+        $config->lock(true);
+        try {
+            $shared = new Shared();
+            $local = new Local();
+            $nativeConfig = $config->object();
+            $assignments = self::assignmentMap($nativeConfig);
+            $bridge = new \OPNsense\DhcpInterfaceHa\SetupAssignmentBridge();
+            $pending = $bridge->pendingChanges();
+            if (!hash_equals(self::revision($shared, $local), $revision)
+                || !empty((string)$shared->enabled)
+                || (string)$local->managed_interface !== $managedName
+                || trim((string)$local->carrier) !== $carrier) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('Saved settings changed during removal; reload before retrying.')];
+            }
+            if (!is_array($pending) || !self::isAssignmentMap($assignments)) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('Native assignment state cannot be inspected safely; plugin settings were retained.')];
+            }
+            $currentDevice = $assignments[$managedName] ?? null;
+            if ($currentDevice === $carrier && $pending === []) {
+                return ['restored' => true, 'applied' => true, 'error' => null];
+            }
+            if ($currentDevice !== 'dhcpha0lagg') {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('The managed interface assignment changed; plugin settings were retained for review.')];
+            }
+            foreach ($assignments as $name => $device) {
+                if ($name !== $managedName && $device === $carrier) {
+                    return ['restored' => false, 'applied' => false, 'error' => gettext('The saved carrier is assigned elsewhere; plugin settings were retained.')];
+                }
+            }
+            if ($pending !== [] && !self::isSelectedPendingRelink($pending, $managedName, $carrier)) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('Other native assignment changes are pending; apply or discard them before retrying.')];
+            }
+            if ($pending === []) {
+                $staged = $bridge->stageRelink($managedName, $carrier);
+                if (empty($staged['staged'])) {
+                    return [
+                        'restored' => false,
+                        'applied' => false,
+                        'error' => gettext('Native assignment validation rejected restoration; plugin settings were retained.'),
+                    ];
+                }
+                $pending = $bridge->pendingChanges();
+            }
+            if (!self::isSelectedPendingRelink($pending, $managedName, $carrier)) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('The native restoration queue could not be verified; plugin settings were retained.')];
+            }
+        } catch (\Throwable $exception) {
+            return ['restored' => false, 'applied' => false, 'error' => gettext('Native assignment restoration could not be staged; plugin settings were retained.')];
+        } finally {
+            $config->unlock();
+        }
+
+        $config->lock(true);
+        try {
+            $shared = new Shared();
+            $local = new Local();
+            $assignments = self::assignmentMap($config->object());
+            $pending = (new \OPNsense\DhcpInterfaceHa\SetupAssignmentBridge())->pendingChanges();
+            if (!hash_equals(self::revision($shared, $local), $revision)
+                || !empty((string)$shared->enabled)
+                || (string)$local->managed_interface !== $managedName
+                || trim((string)$local->carrier) !== $carrier
+                || ($assignments[$managedName] ?? null) !== 'dhcpha0lagg'
+                || !self::isSelectedPendingRelink($pending, $managedName, $carrier)) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('Native assignments changed before restoration apply; plugin settings were retained.')];
+            }
+        } catch (\Throwable $exception) {
+            return ['restored' => false, 'applied' => false, 'error' => gettext('Native restoration intent could not be rechecked; plugin settings were retained.')];
+        } finally {
+            $config->unlock();
+        }
+
+        $applied = false;
+        try {
+            $result = (new \OPNsense\DhcpInterfaceHa\SetupAssignmentBridge())->applyStagedChanges($this->request);
+            $applied = ($result['status'] ?? '') === 'ok';
+        } catch (\Throwable $exception) {
+            $applied = null;
+        }
+
+        $verified = false;
+        $config->lock(true);
+        try {
+            $shared = new Shared();
+            $local = new Local();
+            $assignments = self::assignmentMap($config->object());
+            $pending = (new \OPNsense\DhcpInterfaceHa\SetupAssignmentBridge())->pendingChanges();
+            $verified = hash_equals(self::revision($shared, $local), $revision)
+                && empty((string)$shared->enabled)
+                && (string)$local->managed_interface === $managedName
+                && trim((string)$local->carrier) === $carrier
+                && ($assignments[$managedName] ?? null) === $carrier
+                && $pending === [];
+        } catch (\Throwable $exception) {
+            $verified = false;
+        } finally {
+            $config->unlock();
+        }
+        return $verified
+            ? ['restored' => true, 'applied' => true, 'error' => null]
+            : [
+                'restored' => false,
+                'applied' => $applied,
+                'error' => $applied === null
+                    ? gettext('Native assignment restoration result is unknown; plugin settings were retained for safe retry.')
+                    : gettext('Native assignment restoration was not verified; plugin settings were retained for safe retry.'),
+            ];
     }
 
     /**
@@ -1373,14 +1516,14 @@ class SettingsController extends ApiControllerBase
         return true;
     }
 
-    private static function isSelectedPendingRelink($pending, $managedName)
+    private static function isSelectedPendingRelink($pending, $managedName, $target = 'dhcpha0lagg')
     {
         return is_array($pending)
             && count($pending) === 1
             && isset($pending[$managedName])
             && is_array($pending[$managedName])
             && ($pending[$managedName]['pending_action'] ?? null) === 'relink'
-            && ($pending[$managedName]['pending_if'] ?? null) === 'dhcpha0lagg';
+            && ($pending[$managedName]['pending_if'] ?? null) === $target;
     }
 
     private static function syncItems(string $value)

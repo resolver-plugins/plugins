@@ -547,6 +547,11 @@ namespace {
         'lan' => 'hn2',
     ];
     \OPNsense\Core\Config::$pending = [];
+    if (str_starts_with($case, 'teardown_')) {
+        \OPNsense\Core\Config::$shared['enabled'] = $case === 'teardown_disabled' ? '0' : '1';
+        \OPNsense\Core\Config::$local = ['managed_interface' => 'wan', 'carrier' => 'hn1'];
+        \OPNsense\Core\Config::$assignments['wan'] = 'dhcpha0lagg';
+    }
     if ($case === 'configure_unrelated_pending') {
         \OPNsense\Core\Config::$pending = ['lan' => ['pending_action' => 'relink', 'pending_if' => 'hn3']];
     } elseif ($case === 'configure_exact_pending') {
@@ -617,6 +622,12 @@ namespace {
         \OPNsense\Core\Config::$nativeApply = 'save_unknown';
         \OPNsense\Core\Config::$failSave = 'native';
     }
+    if ($case === 'teardown_apply_failed') {
+        \OPNsense\Core\Config::$nativeApply = 'failed';
+    }
+    if ($case === 'teardown_unrelated_pending') {
+        \OPNsense\Core\Config::$pending = ['lan' => ['pending_action' => 'relink', 'pending_if' => 'hn3']];
+    }
 
     if (in_array($case, ['configure_apply_failed', 'configure_timeout', 'configure_native_save_unknown'], true)) {
         \OPNsense\Core\Config::$nativeApply = $case === 'configure_apply_failed'
@@ -634,8 +645,19 @@ namespace {
         \FixtureRequest::$invalidSync = true;
     }
 
+    if ($action === 'settings') {
+        \FixtureRequest::$post['dhcphashared'] = [
+            'enabled' => '0',
+            'shared_mac' => '02:11:22:33:44:55',
+            'failback_delay' => '0',
+        ];
+        \FixtureRequest::$post['dhcphalocal'] = ['managed_interface' => '', 'carrier' => ''];
+    }
+
     try {
-        $response = $action === 'sync' ? $controller->enable_syncAction() : $controller->configureAction();
+        $response = $action === 'sync'
+            ? $controller->enable_syncAction()
+            : ($action === 'settings' ? $controller->setAction() : $controller->configureAction());
     } catch (\Throwable $exception) {
         $response = ['result' => 'denied', 'error' => $exception->getMessage()];
     }

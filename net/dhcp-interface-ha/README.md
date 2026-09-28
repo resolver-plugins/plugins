@@ -66,8 +66,8 @@ The API-coordinated handoff increment was withdrawn on 2026-09-27. Source and
 HA-2 were restored to the pre-handoff 0.2_1 baseline, preserving the UI repair, boot fix and
 independent local assignments. The controller follows native CARP without peer
 API credentials, a coordination switch or acknowledged release holds. HA-2 now
-runs 0.2_15 with the unified Save & Apply setup flow recorded in the
-[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#16-unified-save-and-setup--ha-2-02_15-2026-09-28).
+runs 0.2_16 with verified native assignment teardown recorded in the
+[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#17-verified-native-teardown--ha-2-02_16-2026-09-28).
 HA-1’s last verified package deployment remains 0.2_8. See the
 [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 

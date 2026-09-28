@@ -59,6 +59,33 @@ class SettingsStreamliningTests(unittest.TestCase):
         self.assertTrue(outcome["response"]["assignment_verified"])
         self.assertEqual(outcome["shared"]["shared_mac"], "02:11:22:33:44:01")
 
+    def test_disabled_restores_native_assignment_before_clearing_plugin_identity(self):
+        for case in ("teardown_success", "teardown_disabled"):
+            with self.subTest(case=case):
+                outcome = run_controller(case, action="settings")
+
+                self.assertEqual(outcome["response"]["result"], "saved")
+                self.assertTrue(outcome["response"]["cleared"])
+                self.assertEqual(outcome["assignments"]["wan"], "hn1")
+                self.assertEqual(outcome["pending"], [])
+                self.assertEqual(outcome["local"], {"managed_interface": "", "carrier": ""})
+                self.assertEqual(outcome["shared"]["shared_mac"], "02:11:22:33:44:55")
+                self.assertIn("interface apply", outcome["events"])
+
+    def test_disabled_retains_carrier_when_native_restore_fails_or_conflicts(self):
+        failed = run_controller("teardown_apply_failed", action="settings")
+        self.assertEqual(failed["response"]["result"], "staged")
+        self.assertFalse(failed["response"]["cleared"])
+        self.assertEqual(failed["assignments"]["wan"], "dhcpha0lagg")
+        self.assertEqual(failed["local"], {"managed_interface": "wan", "carrier": "hn1"})
+        self.assertEqual(failed["shared"]["enabled"], "0")
+
+        conflict = run_controller("teardown_unrelated_pending", action="settings")
+        self.assertEqual(conflict["response"]["result"], "staged")
+        self.assertFalse(conflict["response"]["cleared"])
+        self.assertEqual(conflict["assignments"]["wan"], "dhcpha0lagg")
+        self.assertEqual(conflict["local"], {"managed_interface": "wan", "carrier": "hn1"})
+
     def test_revision_validation_and_unrelated_pending_edits_block_before_mutation(self):
         stale = run_controller("configure_stale_revision")
         self.assertEqual(stale["response"]["result"], "conflict")

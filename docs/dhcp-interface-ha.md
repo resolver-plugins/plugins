@@ -8,7 +8,7 @@ older manual-setup and UI presentation requirements below, particularly sections
 in the new documents are tracked with implementation and verification evidence
 in the linked plan; source changes are not evidence of deployed behavior.
 
-- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_15; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
+- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_16; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
 - **Plugin path:** `net/dhcp-interface-ha/`
 - **Last verified deployment (before this increment):** HA-1 and HA-2 have 0.2_8 with automatic carrier capture and no separate carrier selector. At that earlier verification both were configured and enabled, HA-1 was in operator-selected CARP maintenance and HA-2 was MASTER. HA-2 acquired 10.250.100.100 with automatic promiscuous reception verified. See the [deployment records](dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
@@ -20,6 +20,7 @@ in the linked plan; source changes are not evidence of deployed behavior.
 - **Source 0.2_8:** The controller automatically sets promiscuous receive mode on its owned LAGG before attachment, verifies member inheritance before activation, and repairs cleared filters on an otherwise correct active attachment without bringing it down. This addresses Hyper-V receive filtering with cloned MACs. Failed filter verification fences the attachment. The setting is scoped to the runtime LAGG; native configuration is unchanged, and detached members release the inherited filter.
 - **Source 0.2_9:** The UI/setup/logging increment adds a guarded server-side Configure action, sender-specific sync selection, structured diagnostic responsibility/resolution and native event logging. Settings, Diagnostics and Log replace the separate Status tab. See the linked plan for source verification and outstanding native acceptance; HA-2 deployment is recorded in section 10 of that plan; HA-2 was STANDBY before and after installation.
 - **Source 0.2_15:** Save & Apply is the only Settings mutation action. It invokes guarded native setup when the selected logical interface is not migrated, and ordinary settings save afterward. Initial setup defaults an empty shared MAC to the freshly observed usable MAC of the selected carrier. The separate Configure and Save draft controls are removed.
+- **Source 0.2_16:** Saving Disabled restores the managed logical interface to its saved carrier through the native assignment controller and verifies the committed mapping before clearing plugin settings. Failed or uncertain restoration retains the saved carrier for a safe retry.
 - **Next work:** complete the linked increment's browser/native acceptance gates and retain outstanding controller and paired handover qualification. Passive conflict observations and ping checks remain proposals; delayed failback (Gate C) is separate work.
 
 ## 1. Problem statement
@@ -635,9 +636,12 @@ form's interface and carrier selections, unchecks and locks enablement, and
 resets failback delay to zero while retaining the shared MAC. **Save & Apply**
 persists this reset; the API also normalizes these fields for direct callers.
 When the saved configuration is enabled, the request first saves and applies
-Disable with the old identity, then clears the mapping only after fresh detached
-evidence. A failed or unknown fence retains the mapping. This removes the plugin
-setup, not the native logical interface, its assignments or firewall rules.
+Disable with the old identity. It then restores the logical interface to its
+saved carrier through the native assignment controller and verifies the
+committed mapping and empty pending queue before clearing plugin settings. A
+failed or unknown fence or restoration retains the mapping for a safe retry.
+This removes the plugin setup without deleting the native logical interface or
+its firewall rules.
 
 Carrier candidates must use the existing capability/reservation checks. Preserve
 a configured carrier in the selector when it is excluded from general native

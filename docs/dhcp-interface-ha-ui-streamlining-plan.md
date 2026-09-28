@@ -1,6 +1,6 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_15**, 2026-09-28, following
+Status: source implementation for experimental **0.2_16**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -271,7 +271,7 @@ selection without changing anything else or contacting the peer.
 |---|---|
 | New disabled setup on a spare DHCP interface | One selection and confirmed Configure interface capture the original device and migrate; no carrier selector or manual receive-mode step; stays disabled. |
 | Existing configured 0.2_8 node | Correct summary and stored mapping; opening/saving unrelated UI changes does not rerun migration. |
-| None while disabled / identity edit while enabled | None retains MAC and native assignments; enabled identity edits retain the disable-and-fence guard. |
+| Disabled while configured / identity edit while enabled | Disabled retains the MAC, restores the selected logical interface to its saved native carrier, then clears plugin settings; enabled identity edits retain the disable-and-fence guard. |
 | Foreign device, missing original mapping, observed other pending assignments | Specific blocked condition; no guessed carrier, no foreign-device modification, no apply of observed unrelated edits. Document the native check/apply race. |
 | Timeout after a save or native apply | Unknown result is shown honestly; readback precedes retry; captured carrier retained and no false “nothing changed.” |
 | Active with and without an observed address | Attachment distinguished from DHCP address availability; no DHCP/Internet-driven role change. |
@@ -614,3 +614,30 @@ cleared, the web GUI restarted and HTTPS responds 200. Installation left the
 then-current configuration byte-identical and the controller running. The
 private 0.2.14 rollback package, configuration backup and deployment evidence
 are in `/root/dhcpha-unified-save-0.2_15.ofViOK` on HA-2. HA-1 was not changed.
+
+## 17. Verified native teardown — HA-2 0.2.16, 2026-09-28
+
+Saving Disabled now treats removal as the reverse of setup. It disables and
+fences the controller, stages the saved carrier through OPNsense's native
+assignment model, rechecks the exact intent and pending queue, applies it, and
+verifies the committed mapping and empty queue before clearing the plugin's
+managed interface and carrier. The shared MAC remains saved as requested.
+
+Failed, conflicting or unknown native restoration leaves the plugin disabled
+with its managed interface and carrier retained, so the same operation can be
+retried without guessing. Regression coverage reproduces the previous stranded
+`dhcpha0lagg` assignment and verifies both successful restoration and retained
+identity on native failure or unrelated pending edits.
+
+The candidate passed 111 Python tests, both Node UI suites, PHP lint, XML
+parsing and diff checks. Installed `os-dhcp-interface-ha-devel-0.2_16` on HA-2,
+package SHA-256
+`386db39fa49c1cc88c6a4e6da726efb095e23f9ec87b4cb0878364f05f463cc3`.
+All 25 installed source hashes and package checksums pass. Installation left the
+configuration byte-identical. The stranded assignment was then restored from
+the pre-disable evidence using the same native assignment model: `opt7 → hn1`,
+with an empty pending queue and cleared plugin-local identity. `hn1` obtained
+DHCP address `10.250.100.109`. The web GUI cache was cleared, the service
+restarted, native routes resolve and HTTPS responds 200. The 0.2.15 rollback
+package, configuration backup and deployment evidence are in
+`/root/dhcpha-native-teardown-0.2_16.iXEJS8` on HA-2. HA-1 was not changed.
