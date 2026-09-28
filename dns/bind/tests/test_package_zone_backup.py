@@ -8,6 +8,7 @@ import tempfile
 
 import pytest
 
+from .bounded_shutdown_contract import current_release_requires_bounded_shutdown
 from .package_lifecycle_contract import current_release_requires_lifecycle
 
 
@@ -16,6 +17,7 @@ PACKAGE_HELPER = (
     BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindPackageZones.py"
 )
 MAKEFILE = BIND_ROOT / "Makefile"
+BOUNDED_SHUTDOWN = current_release_requires_bounded_shutdown(BIND_ROOT)
 
 if MAKEFILE.is_file():
     version_line = next(
@@ -96,6 +98,7 @@ exit 0
         named,
         """#!/bin/sh
 printf 'named %s\n' "$1" >> "$TEST_EVENTS"
+[ "$1" = status ] && exit 1
 exit 0
 """,
     )
@@ -156,11 +159,16 @@ def test_package_backup_preserves_non_watcher_dynamic_record(executable_tmp_path
     )
     assert discard.returncode == 0, discard.stderr
     assert not backup.exists()
+    stop_event = (
+        "named status"
+        if BOUNDED_SHUTDOWN
+        else "named stop"
+    )
     assert events.read_text().splitlines() == [
         "rndc freeze 1.168.192.in-addr.arpa",
         "rndc freeze dynamic.example",
         "rndc freeze watcher.example",
-        "named stop",
+        stop_event,
     ]
 
 

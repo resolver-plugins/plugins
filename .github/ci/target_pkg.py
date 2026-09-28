@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -65,6 +67,82 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def package_content_sha256(archive: Path) -> str:
+    """Hash the installation-relevant state extracted from a package archive."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory)
+        run(["tar", "-xf", str(archive), "-C", str(root)])
+        digest = hashlib.sha256()
+        hardlinks: dict[tuple[int, int], int] = {}
+        for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+            relative = path.relative_to(root).as_posix().encode()
+            attributes = path.lstat()
+            hardlink = 0
+            if path.is_symlink():
+                kind = b"link"
+                content = os.readlink(path).encode()
+            elif path.is_file():
+                kind = b"file"
+                content = path.read_bytes()
+                if attributes.st_nlink > 1:
+                    inode = (attributes.st_dev, attributes.st_ino)
+                    hardlink = hardlinks.setdefault(inode, len(hardlinks) + 1)
+            elif path.is_dir():
+                kind = b"directory"
+                content = b""
+            else:
+                raise TargetPackageError(f"target pkg contains unsupported entry {relative.decode()}")
+            metadata = (
+                f"{stat.S_IMODE(attributes.st_mode):o}|{attributes.st_uid}|"
+                f"{attributes.st_gid}|{getattr(attributes, 'st_flags', 0)}|{hardlink}"
+            ).encode()
+            for value in (kind, relative, metadata, content):
+                digest.update(len(value).to_bytes(8, "big"))
+                digest.update(value)
+        return digest.hexdigest()
+
+
+def load_content_sha256(metadata: Path, series: str) -> str:
+    """Load the canonical extracted-content digest used for safe archive repacks."""
+    try:
+        document = json.loads(metadata.read_text(encoding="utf-8"))
+        records = document["series"]
+        record = records[series]
+        digest = record["content_sha256"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise TargetPackageError(f"target pkg content metadata does not define {series}") from error
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema", "series"}
+        or document["schema"] != 2
+        or not isinstance(records, dict)
+        or set(records) != {"26.1", "26.7"}
+        or not isinstance(record, dict)
+        or set(record) != {"baseline_archive_sha256", "content_sha256"}
+        or not isinstance(record["baseline_archive_sha256"], str)
+        or SHA256_PATTERN.fullmatch(record["baseline_archive_sha256"]) is None
+        or not isinstance(digest, str)
+        or SHA256_PATTERN.fullmatch(digest) is None
+    ):
+        raise TargetPackageError(f"target pkg content metadata is invalid for {series}")
+    return digest
+
+
+def changed_archive_series(before: Path, after: Path) -> str | None:
+    """Return the sole series whose outer hash changed without other target changes."""
+    changed: list[str] = []
+    for series in ("26.1", "26.7"):
+        previous = load_target(before, series).record()
+        current = load_target(after, series).record()
+        previous_sha256 = previous.pop("sha256")
+        current_sha256 = current.pop("sha256")
+        if previous != current:
+            return None
+        if previous_sha256 != current_sha256:
+            changed.append(series)
+    return changed[0] if len(changed) == 1 else None
 
 
 def load_target(metadata: Path, series: str) -> TargetPackage:
@@ -126,6 +204,22 @@ def downloaded_archive(directory: Path, filename: str) -> Path:
     return matches[0]
 
 
+def fetch_target_pkg(target: TargetPackage, pkg_command: str, repository: str, output: Path) -> Path:
+    run(
+        [
+            pkg_command,
+            "fetch",
+            "-y",
+            "-r",
+            repository,
+            "-o",
+            str(output),
+            target.filename.removesuffix(".pkg"),
+        ]
+    )
+    return downloaded_archive(output, target.filename)
+
+
 def verify_target_pkg(
     target: TargetPackage,
     pkg_command: str,
@@ -160,19 +254,7 @@ def select_target_pkg(
     target = load_target(metadata, series)
     with tempfile.TemporaryDirectory() as temporary_directory:
         downloads = Path(temporary_directory)
-        run(
-            [
-                pkg_command,
-                "fetch",
-                "-y",
-                "-r",
-                repository,
-                "-o",
-                str(downloads),
-                target.filename.removesuffix(".pkg"),
-            ]
-        )
-        archive = downloaded_archive(downloads, target.filename)
+        archive = fetch_target_pkg(target, pkg_command, repository, downloads)
         if sha256(archive) != target.sha256:
             raise TargetPackageError("target pkg archive SHA-256 does not match metadata")
         archive_identity = query_identity(pkg_command, ["query", "-F", str(archive)])
@@ -182,6 +264,31 @@ def select_target_pkg(
     run([pkg_command, "lock", "-y", "pkg"])
     verify_target_pkg(target, pkg_command, pkg_static_path=pkg_static_path)
     return target
+
+
+def refresh_archive_sha256(
+    metadata: Path,
+    content_metadata: Path,
+    series: str,
+    pkg_command: str,
+    repository: str,
+    output: Path,
+) -> str:
+    """Refresh only an archive digest whose identity and extracted contents are unchanged."""
+    target = load_target(metadata, series)
+    expected_content = load_content_sha256(content_metadata, series)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        downloads = Path(temporary_directory)
+        archive = fetch_target_pkg(target, pkg_command, repository, downloads)
+        if query_identity(pkg_command, ["query", "-F", str(archive)]) != target.identity:
+            raise TargetPackageError("target pkg archive identity does not match metadata")
+        if package_content_sha256(archive) != expected_content:
+            raise TargetPackageError("target pkg extracted contents differ from the pinned package")
+        archive_sha256 = sha256(archive)
+    document = json.loads(metadata.read_text(encoding="utf-8"))
+    document["series"][series]["sha256"] = archive_sha256
+    output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    return archive_sha256
 
 
 def main() -> int:
@@ -198,10 +305,30 @@ def main() -> int:
     field.add_argument("metadata", type=Path)
     field.add_argument("series")
     field.add_argument("field", choices=sorted(TARGET_FIELDS))
+    refresh = commands.add_parser("refresh")
+    refresh.add_argument("metadata", type=Path)
+    refresh.add_argument("content_metadata", type=Path)
+    refresh.add_argument("series")
+    refresh.add_argument("--pkg-command", default="pkg")
+    refresh.add_argument("--repository", default="OPNsense")
+    refresh.add_argument("--output", type=Path, required=True)
+    changed = commands.add_parser("changed-series")
+    changed.add_argument("before", type=Path)
+    changed.add_argument("after", type=Path)
     arguments = parser.parse_args()
     try:
-        target = load_target(arguments.metadata, arguments.series)
-        if arguments.command == "install":
+        if arguments.command == "refresh":
+            print(
+                refresh_archive_sha256(
+                    arguments.metadata,
+                    arguments.content_metadata,
+                    arguments.series,
+                    arguments.pkg_command,
+                    arguments.repository,
+                    arguments.output,
+                )
+            )
+        elif arguments.command == "install":
             target = select_target_pkg(
                 arguments.metadata,
                 arguments.series,
@@ -211,11 +338,17 @@ def main() -> int:
             )
             print(json.dumps(target.record(), sort_keys=True, separators=(",", ":")))
         elif arguments.command == "verify":
+            target = load_target(arguments.metadata, arguments.series)
             verify_target_pkg(
                 target, arguments.pkg_command, pkg_static_path=arguments.pkg_static
             )
-        else:
+        elif arguments.command == "field":
+            target = load_target(arguments.metadata, arguments.series)
             print(target.record()[arguments.field])
+        elif arguments.command == "changed-series":
+            series = changed_archive_series(arguments.before, arguments.after)
+            if series is not None:
+                print(series)
     except (TargetPackageError, OSError, subprocess.CalledProcessError) as error:
         print(f"target pkg selection failed: {error}", file=sys.stderr)
         return 1

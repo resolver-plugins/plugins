@@ -19,7 +19,6 @@ def action_references(workflow: str) -> list[str]:
 def test_workflow_selects_an_immutable_release_source():
     workflow = workflow_text()
     assert 'workflow_dispatch:' in workflow
-    assert 'pull_request_target:' not in workflow
     assert 'refs/heads/release/bind-rp/$series' in workflow
     assert 'refs/pull/$INPUT_PULL_NUMBER/head' in workflow
     assert 'gh api "repos/$GITHUB_REPOSITORY/pulls/$INPUT_PULL_NUMBER" --jq .base.ref' in workflow
@@ -28,6 +27,22 @@ def test_workflow_selects_an_immutable_release_source():
     assert 'git fetch --no-tags origin "$SOURCE_REF:refs/remotes/origin/package-source"' in workflow
     assert 'source_commit=$(git rev-parse refs/remotes/origin/package-source)' in workflow
     assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in workflow
+
+
+def test_merged_release_source_pr_publishes_its_exact_merge_commit():
+    workflow = workflow_text()
+    trigger = workflow.split('  pull_request_target:', 1)[1].split('  workflow_dispatch:', 1)[0]
+    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
+
+    assert "pull_request_target:\n    types: [closed]\n    branches:\n      - 'release/bind-rp/**'" in workflow
+    for path in ("'.resolver-plugins/**'", "'dns/bind/**'", "'Mk/**'"):
+        assert path in trigger
+    assert "if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true" in select
+    assert '[[ "$PR_MERGED" == true ]]' in select
+    assert '[[ "$PR_BASE_REF" =~ ^release/bind-rp/([0-9]+\\.[0-9]+)$ ]]' in select
+    assert 'source_ref="$PR_MERGE_COMMIT"' in select
+    assert 'control_ref="$GITHUB_WORKFLOW_SHA"' in select
+    assert 'github.event.pull_request.head.sha' not in workflow
 
 
 def test_package_affecting_master_pushes_publish_the_newest_release_series():
@@ -51,6 +66,20 @@ def test_package_affecting_master_pushes_publish_the_newest_release_series():
     assert 'sort -V' in select
     assert 'mode=production' in select
     assert "'26.7'" not in select
+
+
+def test_merging_a_repack_recovery_rebuilds_its_exact_series():
+    select = workflow_text().split('  select:', 1)[1].split('  profile:', 1)[0]
+
+    assert 'ref: ${{ github.workflow_sha }}' in select
+    assert 'fetch-depth: 0' in select
+    assert 'persist-credentials: false' in select
+    assert 'BEFORE_SHA: ${{ github.event.before }}' in select
+    assert 'changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")' in select
+    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in select
+    assert 'git show "$BEFORE_SHA:.resolver-plugins/target-pkg.json"' in select
+    assert 'target_pkg.py changed-series "$before" "$after"' in select
+    assert 'series=$recovered_series' in select
 
 
 def test_production_runs_only_from_the_master_control_plane():
@@ -97,12 +126,32 @@ def test_workflow_materializes_the_distribution_bind_pair_before_building_the_pl
     )
 
 
+def test_failed_production_bind_job_can_only_propose_a_content_identical_pkg_repack():
+    workflow = workflow_text()
+    recovery = workflow.split('  recover-target-pkg:', 1)[1].split('  build:', 1)[0]
+    validator = recovery.split('  propose-target-pkg:', 1)[0]
+    proposer = recovery.split('  propose-target-pkg:', 1)[1]
+
+    assert "needs.bind.result == 'failure'" in validator
+    assert "needs.select.outputs.mode == 'production'" in validator
+    assert 'contents: read' in validator
+    assert 'contents: write' not in validator
+    assert 'persist-credentials: false' in validator
+    assert '.resolver-plugins/target-pkg-content.json' in validator
+    assert 'target_pkg.py refresh' in validator
+    assert "needs.recover-target-pkg.result == 'success'" in proposer
+    assert 'contents: write\n      pull-requests: write' in proposer
+    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in proposer
+    assert 'gh pr create' in proposer
+    assert 'gh pr merge' not in recovery
+
+
 def test_workflow_uses_sha_pinned_actions_and_nonpersistent_checkout_credentials():
     workflow = workflow_text()
     references = action_references(workflow)
     assert references
     assert all(PINNED_ACTION.fullmatch(reference) for reference in references)
-    assert workflow.count('persist-credentials: false') == 10
+    assert workflow.count('persist-credentials: false') == 12
     assert 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803' in references
     assert 'vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d' in references
 

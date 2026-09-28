@@ -41,9 +41,12 @@ scripts. In particular, the release `Mk` files prevent a development-branch
 marker from adding an unintended `-devel` package suffix.
 
 Package-affecting pushes to `master` automatically run production for the
-newest numeric `release/bind-rp/<series>` branch. Manual dispatch remains
-available for an explicit series or development build. Release-source branches
-provide immutable inputs and do not execute publication helpers themselves.
+newest numeric `release/bind-rp/<series>` branch. Merging a package-affecting
+pull request into a release-source branch automatically runs production for
+that series, pinned to the merge commit. The workflow and publication helpers
+still come from the trusted `master` control plane. Closing a pull request
+without merging does not build a release. Manual dispatch remains available
+for an explicit series or development build.
 
 Reproduce that split in a disposable worktree when building locally. Start
 from `master`, fetch the selected release branch, and overlay only its release
@@ -104,6 +107,24 @@ and lock that target package manager before creating either BIND or plugin
 archives. This forced selection is builder-only; it is not an instruction to
 upgrade an OPNsense host package manager.
 
+`.resolver-plugins/target-pkg-content.json` separately pins a canonical digest
+of the archive's extracted paths, types, modes, ownership, file flags,
+hardlink relationships, file bytes, and symlink targets. Each digest records
+the exact signed archive from which its reviewed baseline was calculated. If a
+production build fails because OPNsense repacked an otherwise identical
+archive, the workflow opens a review PR containing only the new outer archive
+hash. It never merges that PR automatically. Merging the PR rebuilds the
+affected release series.
+An identity or extracted-content change remains a hard failure and requires an
+intentional package-creator update.
+
+The initial 26.7 content pin is an intentional baseline of the currently
+signed archive. The previously pinned archive was no longer available when
+this guard was introduced, so that baseline must be reviewed as a full package
+content trust decision; it is not cryptographic proof that the unavailable
+archive had identical contents. Subsequent automatic proposals compare against
+this fixed baseline and cannot update it.
+
 BIND provenance records the immutable creator as `package_creator`; plugin
 `build-metadata.txt` records the flat `pkg_creator` and
 `pkg_creator_sha256` fields. Reuse is a cache miss unless those values match
@@ -155,6 +176,10 @@ runs the canonical `dns/bind/tests` suite from the pull request. It also runs
 the CI helper tests for BIND profile changes, including generated
 `.resolver-plugins/bind920.json` candidate PRs. Do not add a static release
 matrix: a newly created release branch is included automatically.
+
+The workflow also requires `dns/bind/pkg-descr` to change with publishable
+BIND runtime, package-hook, or package-metadata changes. Test-only changes and
+`PLUGIN_REVISION`-only rebuilds do not require a changelog entry.
 
 ## BIND candidate updates
 

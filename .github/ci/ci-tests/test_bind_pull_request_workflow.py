@@ -25,6 +25,7 @@ def test_workflow_runs_only_for_relevant_pull_request_changes():
     assert "- 'dns/bind/**'" in workflow
     assert "- '.github/ci/**'" in workflow
     assert "- '.resolver-plugins/target-pkg.json'" in workflow
+    assert "- '.resolver-plugins/target-pkg-content.json'" in workflow
     assert "- '.github/workflows/bind-tests.yml'" in workflow
 
 
@@ -60,6 +61,31 @@ def test_release_source_pull_requests_test_their_proposed_source():
     assert 'if [[ "$PR_BASE" != "release/bind-rp/$SERIES" ]]' in workflow
 
 
+def test_release_source_pull_requests_materialize_master_ci_helpers():
+    workflow = workflow_text()
+    helper_job = workflow.split('  ci-helpers:', 1)[1].split('  discover:', 1)[0]
+
+    assert 'PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}' in helper_job
+    assert 'if [[ "$PR_BASE" == release/bind-rp/* ]]' in helper_job
+    assert 'refs/heads/master:refs/remotes/origin/control-plane' in helper_job
+    assert '.github/ci \\' in helper_job
+    assert '.github/workflows/bind-tests.yml' in helper_job
+    assert '.github/workflows/bind920-candidate.yml' in helper_job
+    assert '.resolver-plugins/bind920.json' in helper_job
+
+
+def test_workflow_requires_pkg_descr_for_publishable_bind_changes():
+    workflow = workflow_text()
+    changes_job = workflow.split('  changes:', 1)[1].split('  ci-helpers:', 1)[0]
+
+    assert 'Check BIND package description freshness' in changes_job
+    assert 'CALLER_SHA: ${{ inputs.pull_request_sha }}' in changes_job
+    assert 'if [ -n "$CALLER_SHA" ]; then' in changes_job
+    assert 'refs/heads/$PR_BASE:refs/remotes/origin/pr-base' in changes_job
+    assert 'refs/heads/master:refs/remotes/origin/control-plane' in changes_job
+    assert 'check-bind-pkg-descr.sh' in changes_job
+
+
 def test_reusable_workflow_accepts_the_callers_pull_request_context():
     workflow = workflow_text()
 
@@ -67,6 +93,14 @@ def test_reusable_workflow_accepts_the_callers_pull_request_context():
     assert 'pull_request_sha:' in workflow
     assert 'ref: ${{ inputs.pull_request_sha || github.sha }}' in workflow
     assert 'PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}' in workflow
+
+
+def test_release_source_pull_requests_always_use_master_canonical_tests():
+    workflow = workflow_text()
+    test_job = workflow.split('  test:', 1)[1]
+
+    assert 'if [[ "$PR_BASE" == release/bind-rp/* ]]' in test_job
+    assert 'refs/heads/master:refs/remotes/origin/canonical-tests' in test_job
 
 
 def test_workflow_has_read_only_permissions_and_pinned_actions():

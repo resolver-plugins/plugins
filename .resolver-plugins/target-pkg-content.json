@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "series": {
+    "26.1": {
+      "baseline_archive_sha256": "74dbb941de91fda8b470eeab78926170e35737346fbe55e8a2e4c3968f79e1e3",
+      "content_sha256": "0143413a0286fc117fe389a7271a68800ab3bc4b9aafc67cc3ea0c42e2af2515"
+    },
+    "26.7": {
+      "baseline_archive_sha256": "20148990850075a716feb0b4c5fc9a603ebc7f93d30b238bac428c856c4f5fad",
+      "content_sha256": "d9681ded8fa449e45f20162f38c1924b5c0dd896f054bdcfee6ddcbf0e5d86e2"
+    }
+  }
+}
