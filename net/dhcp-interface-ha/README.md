@@ -73,7 +73,7 @@ independent local assignments. The controller follows native CARP without peer
 API credentials, a coordination switch or acknowledged release holds. HA-2 now
 runs 0.2_16 with verified native assignment teardown recorded in the
 [streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#17-verified-native-teardown--ha-2-02_16-2026-09-28).
-HA-1 runs 0.2_30 and reset HA-2 has a fresh, disabled/unconfigured 0.2_32 installation; HA-1’s upgrade preserved configuration and verified ACTIVE/MASTER with its DHCP address. See the
+HA-1 runs 0.2_32 and reset HA-2 has a fresh, disabled/unconfigured 0.2_32 installation; HA-1’s upgrade preserved configuration and verified ACTIVE/MASTER with its DHCP address. See the
 [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 
 Ping-based handover checks and passive conflict observations were discussed but

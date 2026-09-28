@@ -915,3 +915,12 @@ was moved out of the installed tree into the deployment evidence directory.
 No legacy-file cleanup or migration logic was added to the new package. Installed
 source hashes, package integrity and fresh-state checks pass; configuration is
 unchanged and the web UI was restarted. HA-1 remains on 0.2_30.
+
+HA-1 package replacement: backed up configuration and the previous package,
+archived the obsolete M1_1_0.php, then installed the same verified 0.2_32 archive
+used on HA-2 through pkg. No unowned plugin source files remain in the MVC or
+runtime trees. Source hashes/package integrity and native menu/tab routes pass.
+Configuration and controller PID remained unchanged; UI caches were cleared and
+the web UI restarted. HA-1 remains ACTIVE/MASTER on opt7 at 10.250.100.100; three
+source-address pings to 10.250.100.1 succeeded without loss. Evidence:
+`/root/dhcpha-package-0.2_32.cyXOi7`. Both nodes now have 0.2_32 installed.
