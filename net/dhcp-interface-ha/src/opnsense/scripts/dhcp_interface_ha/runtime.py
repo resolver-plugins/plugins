@@ -610,6 +610,9 @@ class Controller:
                  dhcpha.mtu == snapshot.settings.managed_mtu == snapshot.observed.carrier.mtu)
         )
         attached = actual == "ATTACHED"
+        # A detached standby carrier is deliberately down, so its link report
+        # cannot distinguish a cable fault from our own fencing.
+        carrier_link_failed = snapshot.observed.carrier.up and not snapshot.observed.carrier.link_up
         attachment_unsafe = attached and (
             not valid_attachment or not managed or not snapshot.settings.enabled
             or not snapshot.observed.carp_allowed or snapshot.observed.carp_maintenance
@@ -643,17 +646,17 @@ class Controller:
             reason = "Configured and live CARP instances do not match."
         elif snapshot.settings.enabled and (
             snapshot.local_error or snapshot.stopped or not controller_running
-            or not snapshot.observed.carrier.link_up
+            or carrier_link_failed
         ):
             state = "FAULT"
             reason_code = (
                 "service_stopped" if snapshot.stopped
-                else "carrier_link_down" if not snapshot.observed.carrier.link_up
+                else "carrier_link_down" if carrier_link_failed
                 else "local_readiness_failed"
             )
             reason = "The enabled node is not locally ready: " + (
                 "service stopped" if snapshot.stopped
-                else "selected carrier has no link" if not snapshot.observed.carrier.link_up
+                else "selected carrier has no link" if carrier_link_failed
                 else snapshot.local_error or "controller is not running"
             )
         elif not snapshot.settings.enabled:
@@ -967,7 +970,9 @@ class Controller:
             incapable = (snapshot.local_error or snapshot.stopped
                          or not snapshot.observed.dhcpha_owned
                          or snapshot.observed.dhcpha.lagg_protocol != "failover"
-                         or not snapshot.observed.carrier.link_up)
+                         or not snapshot.observed.carrier.exists)
+            # Link is readiness telemetry, not attachment authority. Fencing on
+            # no-link would stop negotiation and make a down BACKUP ineligible.
             if incapable:
                 self.fence_locked(snapshot)
                 return False

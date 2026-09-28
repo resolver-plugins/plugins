@@ -1015,3 +1015,25 @@ configuration, WAN address/link/flags/MAC and controller PID remained unchanged.
 No setup action was invoked. Evidence:
 `/root/dhcpha-save-progress-0.2_35.0gbu1a_x`. Package SHA-256:
 `473350bf8723320917fe406b10873ea1d284ffab2c51328a0cdd7f43eece5894`.
+
+### 0.2_36 — activate before judging physical link readiness
+
+HA-1's new observations establish the circular dependency: ix0 was UP/active at
+11:33:58, disabled setup fenced it, and at 11:34:03 it was down/no-carrier.
+Enabling at 11:34:07 then refused activation because that same down carrier had
+no link. Ownership and setup had already been verified. The node was later
+restored to direct ix0 WAN by the administrator.
+
+Remove link presence from MASTER attachment authorization and service-health
+eligibility. Link negotiation follows the existing safe shared-MAC, receive-mode,
+membership and LAGG-UP sequence. A real active link loss remains visible as FAULT
+but does not initiate detach/reattach loops or plugin-requested CARP demotion.
+Standby's intentionally down carrier reports STANDBY rather than a link fault.
+Native CARP and all ownership/configuration guards remain authoritative. No
+driver-specific flags or pre-ownership carrier activation are introduced.
+
+The regression models a physical carrier reporting no link while down and while
+negotiating after activation. It verifies ordered activation, no repeated commands
+while waiting for link, automatic status recovery, BACKUP fencing and subsequent
+MASTER attachment. All 122 Python tests pass. A live WAN retry still requires
+coordination with the administrator; no link-success claim is made from fixtures.

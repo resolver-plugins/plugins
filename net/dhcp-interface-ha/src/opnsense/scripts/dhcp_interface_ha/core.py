@@ -202,10 +202,9 @@ def desired_state(settings: Settings, observed: ObservedState) -> DesiredState:
     carrier = observed.carrier
     if carrier is None or not carrier.exists:
         return DesiredState(role, DesiredAttachment.FENCED, "configured local carrier is missing")
-    if not carrier.link_up:
-        return DesiredState(role, DesiredAttachment.FENCED, "configured local carrier has no link")
-
-    return DesiredState(role, DesiredAttachment.ATTACHED, "global CARP MASTER and local carrier healthy")
+    # Physical drivers can report no link while administratively down. Link
+    # negotiation follows activation; it cannot authorize that activation.
+    return DesiredState(role, DesiredAttachment.ATTACHED, "global CARP MASTER and local carrier present")
 
 
 def plan_reconcile(settings: Settings, observed: ObservedState) -> Plan:

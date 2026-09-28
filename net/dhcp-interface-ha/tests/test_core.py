@@ -135,9 +135,9 @@ class DesiredStateTests(unittest.TestCase):
         desired = core.desired_state(self.settings(), self.observed())
         self.assertEqual(desired.attachment, core.DesiredAttachment.ATTACHED)
 
-    def test_local_link_failure_fences_even_when_master(self):
+    def test_master_can_activate_before_link_negotiation(self):
         desired = core.desired_state(self.settings(), self.observed(link=False))
-        self.assertEqual(desired.attachment, core.DesiredAttachment.FENCED)
+        self.assertEqual(desired.attachment, core.DesiredAttachment.ATTACHED)
 
 
 class FailbackTests(unittest.TestCase):

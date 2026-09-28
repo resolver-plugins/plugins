@@ -157,6 +157,13 @@ check reports controller faults separately. A timeout is UNKNOWN, because the
 firewall may still be applying configuration. Use the existing outcome check
 before retrying setup. Unchanged saves report that no actions were needed.
 
+Physical link status is checked after activation. A driver may report no link
+while its carrier is intentionally down; this does not prevent MASTER attachment
+or make a detached BACKUP ineligible. An activated interface with no link reports
+a readiness fault while staying up for native link recovery. Link loss alone
+does not trigger plugin-requested CARP demotion. CARP role, maintenance, ownership
+and configuration safety checks still control attachment and fencing.
+
 Read current status without changing interfaces:
 
 ```sh

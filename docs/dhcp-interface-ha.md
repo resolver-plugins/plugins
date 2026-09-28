@@ -227,7 +227,8 @@ The plugin SHOULD discover and display, but not duplicate as configuration:
 Validation MUST clearly distinguish between:
 
 - **Configuration error**: cannot safely enable.
-- **Node not currently eligible**: valid configuration but this node is BACKUP or lacks local carrier link.
+- **Node not currently eligible**: valid configuration but native CARP does not authorize MASTER attachment.
+- **Link not ready**: an activated carrier has no link; report the fault without blocking activation or forcing detachment.
 - **Common upstream outage**: DHCP/gateway/Internet unavailable, but node-local HA eligibility is unchanged.
 
 ## 7. HA membership and role discovery
@@ -426,10 +427,20 @@ The plugin MUST distinguish node-local eligibility from common-path Internet hea
 Examples:
 
 - Configured local carrier no longer exists.
-- Local physical/virtual carrier link is down.
+- Local carrier is missing or its ownership/configuration is unsafe. A no-link report alone does not make the node ineligible (see below).
 - Required `dhcpha0lagg` abstraction is missing or cannot be reconciled.
 - Unsafe fencing state is detected.
 - Controller cannot establish required local invariants.
+
+Since 0.2_36, physical link reports are readiness telemetry, not attachment or
+service-health eligibility. HA-1 ix0 testing demonstrated that an intentionally
+down carrier reports no link. Requiring link before activation creates a startup
+deadlock, and fencing on link loss prevents negotiation and standby recovery.
+An eligible MASTER therefore establishes the verified shared-MAC attachment and
+raises the LAGG before judging link readiness. A still-missing link remains a
+visible fault; the carrier stays up so native link negotiation can recover.
+BACKUP/maintenance still detach and down the carrier. The plugin does not itself
+request CARP demotion for link loss alone; native CARP remains authoritative.
 
 ### 14.2 Conditions that MUST NOT by themselves trigger HA movement
 
@@ -1208,13 +1219,13 @@ Prove on OPNsense 26.7:
 - Member re-add works repeatedly.
 - The shared MAC can be applied deterministically without the member/LAGG MAC rules overwriting it unexpectedly.
 - Removing the final LAGG member restores the address saved at attachment; with carrier pre-spoofing this must be the shared MAC, while the carrier remains down.
-- An administratively fenced BACKUP carrier still exposes a reliable physical/media-link health signal suitable for local eligibility checks.
+- A carrier reporting no link while administratively down can still activate after native CARP authorizes MASTER; shared-MAC and ownership checks precede activation.
 - Reboot recreates the abstraction detached by default.
 - OPNsense can assign the selected logical interface to the abstraction normally.
 - OPNsense classifies `dhcpha0lagg` as virtual rather than physical, and it does not collide with the core-managed `^lagg` device family.
 - Normal `interfaces_configure()` boot ordering invokes the plugin device-preparation callback before configuring a logical interface assigned to `dhcpha0lagg`.
 - An unset managed-interface MTU does not force the carrier to the empty LAGG's default MTU; an explicitly configured interface MTU can be applied safely to the carrier before attachment.
-- While the BACKUP carrier is administratively fenced/down, its physical/media link state remains observable well enough to distinguish local carrier failure from intentional standby fencing.
+- An intentionally down BACKUP remains eligible even if its driver cannot report physical link while down. The down-state link observation is not interpreted as a cable fault.
 - No unexpected frames using either the shared MAC or the carrier's hardware MAC escape during attach/detach transitions beyond behavior explicitly accepted by the gate.
 
 If LAGG cannot meet these requirements cleanly without brittle hooks, select another FreeBSD-native abstraction before proceeding. Do not paper over a failed gate with driver-specific code.
@@ -1494,7 +1505,7 @@ Only these implementation questions remain intentionally unresolved:
 3. Does native DHCP automatically reconverge on member/carrier reattachment, or is one documented `configctl` reconfigure action required?
 4. Which failback-hold mechanism prevents normal preemption while preserving immediate takeover after loss of the current MASTER?
 5. Is explicit lease-state replication necessary for any supported use case after same-MAC/native-DHCP testing? The default answer remains no unless evidence says otherwise.
-6. Does an administratively down/detached carrier on supported physical and virtual NICs retain a reliable media-link signal for standby health checks?
+6. Resolved by ix0 evidence on 2026-09-28: down-state media-link reports are not reliable eligibility inputs. Version 0.2_36 uses link only as readiness telemetry after activation.
 7. What overlap and recovery timing does native CARP-driven handover produce on the supported boot/reconfigure paths? Can non-authoritative ping or passive conflict observations improve diagnostics without introducing another ownership protocol?
 
 The API-coordinated handoff increment was withdrawn on 2026-09-27. Additional

@@ -171,6 +171,38 @@ class RuntimeTests(unittest.TestCase):
         # Role-independent health lets a recovered BACKUP remain eligible.
         self.assertTrue(self.controller.health())
 
+    def test_physical_carrier_can_start_and_recover_when_down_reports_no_link(self):
+        self.edit('<carrier>hn1</carrier>', '<carrier>ix0</carrier>')
+        carrier = self.host.items['ix0'] = self.host.items.pop('hn1')
+        carrier['status'] = 'no carrier'
+        # Model the observed ix behavior, including negotiation after UP.
+        def physical_link(argv):
+            if argv[2] == 'down':
+                carrier['status'] = 'no carrier'
+        self.host.after = physical_link
+        self.assertTrue(self.controller.health(), 'an intentionally down carrier is not incapable')
+        result = self.controller.reconcile()
+        self.assertEqual(result['actual_attachment'], 'ATTACHED')
+        self.assertEqual(result['reason_code'], 'carrier_link_down')
+        self.assertIn('up', carrier['flags'])
+        self.assertEqual(carrier['macaddr'], MAC)
+        self.assertIn('promisc', carrier['flags'])
+        self.host.commands.clear()
+        self.assertTrue(self.controller.health())
+        self.controller.reconcile()
+        self.assertEqual(self.host.commands, [], 'negotiation must not be interrupted by down/up retries')
+        carrier['status'] = 'active'
+        self.assertEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        self.assertEqual(self.host.commands, [])
+        self.host.items['hn0']['carp']['10']['status'] = 'BACKUP'
+        self.controller.reconcile()
+        self.assertEqual(self.host.items[DHCPHA_DEVICE]['laggport'], {})
+        self.assertNotIn('up', carrier['flags'])
+        self.assertTrue(self.controller.health(), 'standby remains eligible with its carrier intentionally down')
+        self.assertEqual(self.controller.status()['state'], 'STANDBY')
+        self.host.items['hn0']['carp']['10']['status'] = 'MASTER'
+        self.assertEqual(self.controller.reconcile()['actual_attachment'], 'ATTACHED')
+
     def test_shared_mac_receive_filter_is_set_before_activation_and_repaired(self):
         def verify_before_up(argv):
             if argv[1:3] == [DHCPHA_DEVICE, 'up']:
@@ -379,13 +411,17 @@ class RuntimeTests(unittest.TestCase):
                 other.status()
             snapshot.assert_not_called()
 
-    def test_local_link_health_fences_before_reporting_incapable(self):
+    def test_local_link_loss_reports_fault_without_interrupting_native_recovery(self):
         self.controller.reconcile()
         self.host.items['hn1']['status'] = 'no carrier'
-        self.assertFalse(self.controller.health())
-        self.assert_fenced()
+        self.host.commands.clear()
+        self.assertTrue(self.controller.health())
+        self.assertEqual(self.controller.reconcile()['reason_code'], 'carrier_link_down')
+        self.assertEqual(self.host.commands, [])
         self.host.items['hn1']['status'] = 'active'
         self.assertTrue(self.controller.health())
+        self.assertEqual(self.controller.reconcile()['state'], 'ACTIVE')
+        self.assertEqual(self.host.commands, [])
 
     def test_status_keeps_observed_carp_role_when_disabled_and_reports_operational_state(self):
         self.edit('<enabled>1</enabled>', '<enabled>0</enabled>')
@@ -514,6 +550,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.events, [])
 
     def test_interface_observations_explain_blocked_physical_carrier_without_poll_spam(self):
+        self.edit('<enabled>1</enabled>', '<enabled>0</enabled>')
         self.edit('<carrier>hn1</carrier>', '<carrier>ix0</carrier>')
         carrier = self.host.items['ix0'] = self.host.items.pop('hn1')
         carrier.update(status='no carrier', ipv4=[], ipv6=[], carp={})
