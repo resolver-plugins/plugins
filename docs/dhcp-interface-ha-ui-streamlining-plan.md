@@ -1007,3 +1007,11 @@ state. Failed lookups release the loading state and explain how to retry without
 claiming configuration was attempted. Existing server-side assignment checks
 and runtime eligibility are unchanged. UI regressions reproduce a delayed
 lookup, a failed lookup and responses arriving for a superseded selection.
+
+Both UI suites pass. Installed the native 0.2_35 package from `0edc36ec2` on
+HA-1; source/package hashes and native page compilation match. Read-only native
+WAN lookup returns ix0. UI cache was cleared and the web UI restarted;
+configuration, WAN address/link/flags/MAC and controller PID remained unchanged.
+No setup action was invoked. Evidence:
+`/root/dhcpha-save-progress-0.2_35.0gbu1a_x`. Package SHA-256:
+`473350bf8723320917fe406b10873ea1d284ffab2c51328a0cdd7f43eece5894`.
