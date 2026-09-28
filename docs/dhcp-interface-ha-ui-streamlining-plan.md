@@ -982,3 +982,14 @@ Regression checks cover live intermediate progress, request/account isolation,
 expiry, rejected IDs, saved-but-faulted readiness, timeouts, unchanged saves,
 preservation of failed steps, literal error rendering and stale polling replies.
 Live WAN setup is excluded from deployment validation until a coordinated retry.
+
+Validation: 121 Python tests and both UI suites pass. Built from `cb8c3c727`
+and installed 0.2_34 on HA-1. Installed source hashes and package integrity match.
+A native reporting-only callback verified intermediate progress, per-account
+isolation, 0600 cache permissions and completion; the native Volt compiler
+accepted the updated page. No settings/configure action was invoked. UI caches
+were cleared and the web UI restarted. Configuration, WAN assignment/address/
+flags/link/MAC and the running plugin controller PID remained unchanged.
+Evidence: `/root/dhcpha-save-progress-0.2_34.8bokuxcs`. Native test package SHA-256:
+`b50a999e178e87c2c2fd7c2ae32d316832a86d4488349712159207b966432579`.
+This is not a signed CI release; HA-2 was not updated.
