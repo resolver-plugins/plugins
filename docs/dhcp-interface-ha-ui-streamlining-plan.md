@@ -1037,3 +1037,11 @@ negotiating after activation. It verifies ordered activation, no repeated comman
 while waiting for link, automatic status recovery, BACKUP fencing and subsequent
 MASTER attachment. All 122 Python tests pass. A live WAN retry still requires
 coordination with the administrator; no link-success claim is made from fixtures.
+
+Installed the 0.2_36 native test package from `c9532b128` on HA-1 while the plugin
+was disabled/unconfigured. Installed source hashes and package integrity match;
+the controller was restarted to load the runtime fix. Configuration and direct
+ix0 WAN address/MAC/flags/link remained unchanged. The new process records native
+observations. No WAN enable or link-recovery test was performed on the appliance.
+Evidence: `/root/dhcpha-link-readiness-0.2_36.pmouo3yr`. Package SHA-256:
+`36a495a789fb365de6f9a680b1b3d208e59a82b0ba2d757ab20d45d4b4e8ed55`.
