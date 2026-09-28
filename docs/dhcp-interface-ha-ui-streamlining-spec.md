@@ -33,9 +33,9 @@ English error message alone.
 
 Use three tabs: **Settings**, **Diagnostics**, and **Log**. Settings combines a
 compact live summary with the three normal controls: Enable, Interface and
-Shared MAC. One adjacent **Configure interface** action completes supported local
-setup while disabled. The carrier is discovered and displayed, never requested
-as a second normal interface choice.
+Shared MAC. **Save & Apply** completes supported local setup while disabled and
+remains the single settings action afterward. The carrier is discovered and
+displayed, never requested as a second normal interface choice.
 
 The plugin maintains its own invariants. Diagnostics describe observations,
 automatic recovery and any remaining reason the operation cannot proceed. They
@@ -193,27 +193,22 @@ saved carrier afterward. If that observation is unavailable/invalid, leave the
 field unchanged and explain why; never replace it with zeros or stale data from
 a previously selected interface. Generate remains an explicit user choice.
 
-**Configure interface** is adjacent to Interface and is the primary action
-while migration is required. It saves the submitted plugin form, including the
-shared MAC, with enablement off and completes the native assignment. Once
-configured, show **Interface configured** and use Save & Apply for subsequent
-edits. Do not show two indistinguishable primary save actions during setup.
-Incomplete disabled drafts remain saveable through a secondary Save action;
-label them as incomplete and do not imply that draft saving migrated anything.
-Label that action **Save draft**. It uses the existing Settings save with Enable
-forced off, including its normal controller apply/fencing behavior; it never
-invokes native assignment apply. Do not introduce a second draft configuration
-store or imply that Save draft is a runtime-free operation.
+**Save & Apply** is the only settings action. While migration is required, it
+saves the submitted plugin form with enablement off, captures the current native
+device as the carrier and completes the native assignment. An empty Shared MAC
+defaults to the freshly observed usable MAC of that carrier. Once configured,
+the same button performs ordinary settings saves. Do not expose separate
+Configure or Save draft actions.
 
 | Saved state / selected form value | Available action and meaning |
 |---|---|
-| Disabled; Disabled | Save & Apply clears the local mapping, enablement and failback value, preserving MAC; no Configure action. |
-| Disabled; eligible original native device | Configure interface is primary; Save draft is secondary. Setup forces Enable off even if checked in the submitted form. |
-| Disabled; selected assignment already maps to the owned LAGG with a known carrier | Interface configured; Save & Apply is primary. Remaining prerequisites appear separately. |
-| Enabled; identity unchanged | Save & Apply for ordinary edits or disabling; Configure is unavailable. |
+| Disabled; Disabled | Save & Apply clears the local mapping, enablement and failback value, preserving MAC. |
+| Disabled; eligible original native device | Save & Apply captures the carrier and completes guarded native setup. Setup forces Enable off even if checked in the submitted form. |
+| Disabled; selected assignment already maps to the owned LAGG with a known carrier | Save & Apply performs an ordinary settings save. Remaining prerequisites appear separately. |
+| Enabled; identity unchanged | Save & Apply performs ordinary edits or disables the service. |
 | Enabled; interface/MAC changed | Require saving Disable with the old identity first, then fresh detached evidence before identity changes. |
 | Enabled; Disabled selected | Save & Apply first disables and fences the saved identity, then clears the local mapping only after fresh detached evidence. A failed or unknown fence retains the mapping. |
-| Foreign device, ambiguous carrier, stale observation or missing permission | Explain the specific blocker; no Configure/Retry action that bypasses it. |
+| Foreign device, ambiguous carrier, stale observation or missing permission | Explain the specific blocker; Save & Apply never bypasses it. |
 
 “Interface configured” proves committed native mapping, recorded carrier and
 owned device identity, not all readiness checks or a DHCP address. “Ready to
@@ -264,8 +259,8 @@ Readback success requires `clear`; a confirmed retry may use `clear` or
 Unknown or conflicting pending state keeps Retry unavailable. The mutation
 endpoint independently repeats its fresh queue checks.
 
-An uncertain Configure result keeps mutation controls blocked until full readback
-establishes completion or a safe retry. **Recheck Configure outcome** performs
+An uncertain setup result keeps mutation controls blocked until full readback
+establishes completion or a safe retry. **Recheck save outcome** performs
 only reads; a normal status poll cannot clear this guard. After a page reload,
 an observed matching pending relink also exposes Recheck so the saved intent can
 be verified without lost browser request history or manual native apply.

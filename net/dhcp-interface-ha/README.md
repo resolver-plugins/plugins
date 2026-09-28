@@ -22,7 +22,8 @@ OPNsense retains ownership of DHCP, addressing, routing, NAT and PF.
 
 The UI streamlining increment provides **Settings**, **Diagnostics** and **Log**.
 Settings keeps the current state and normal setup controls together. Configure
-interface captures the carrier and performs guarded native assignment setup;
+is folded into Save & Apply, which captures the carrier and performs guarded
+native assignment setup when needed;
 Diagnostics keeps observed details, guarded recovery, native configuration links
 and the downloadable snapshot. The Log tab uses OPNsense's native local log
 viewer for operational events and problems.
@@ -65,8 +66,8 @@ The API-coordinated handoff increment was withdrawn on 2026-09-27. Source and
 HA-2 were restored to the pre-handoff 0.2_1 baseline, preserving the UI repair, boot fix and
 independent local assignments. The controller follows native CARP without peer
 API credentials, a coordination switch or acknowledged release holds. HA-2 now
-runs 0.2_14 with the guarded Disabled removal flow recorded in the
-[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#15-guarded-disabled-removal--ha-2-02_14-2026-09-28).
+runs 0.2_15 with the unified Save & Apply setup flow recorded in the
+[streamlining plan](../../docs/dhcp-interface-ha-ui-streamlining-plan.md#16-unified-save-and-setup--ha-2-02_15-2026-09-28).
 HA-1’s last verified package deployment remains 0.2_8. See the
 [deployment records](../../docs/dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
 
@@ -107,12 +108,12 @@ valid. Do not dynamically choose whichever node obtains DHCP first.
    HA** off during local setup. Choose each node's own logical DHCP interface and
    one shared unicast MAC for both nodes. The carrier is captured from the
    selected native assignment; it has no separate selector.
-2. Click **Configure interface** beside the selection and confirm the possible
-   interruption to connectivity. The action saves the submitted settings while
+2. Click **Save & Apply** and confirm the possible interruption to connectivity.
+   If Shared interface MAC is empty, the action uses the selected carrier's
+   freshly observed usable MAC. It saves the submitted settings while
    disabled, prepares the owned detached device, captures the original carrier
    before migration and moves the assignment using native OPNsense machinery.
-   It verifies the resulting mapping; another Save & Apply is not needed for
-   this setup action. Finish any pending native assignment edits first and avoid
+   It verifies the resulting mapping. Finish any pending native assignment edits first and avoid
    concurrent interface editing: native apply consumes a shared pending queue.
    Observed unrelated edits block setup, but the native API does not provide
    atomic isolation from another writer after the final check.

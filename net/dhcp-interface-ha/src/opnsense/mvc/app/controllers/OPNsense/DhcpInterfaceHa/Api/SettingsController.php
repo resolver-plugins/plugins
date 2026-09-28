@@ -365,6 +365,9 @@ class SettingsController extends ApiControllerBase
         }
 
         $carrier = $initial['carrier'];
+        if (trim((string)$sharedInput['shared_mac']) === '') {
+            $sharedInput['shared_mac'] = $initial['default_mac'];
+        }
         $localInput['carrier'] = $carrier;
         $stage = 'none';
         $preflight = $this->saveSettings(
@@ -969,6 +972,7 @@ class SettingsController extends ApiControllerBase
         return [
             'result' => 'ok',
             'carrier' => $carrier,
+            'default_mac' => strtolower(trim((string)($ifconfig[$carrier]['macaddr'] ?? ''))),
             'committed_device' => $committedDevice,
             'assignment_map' => $assignmentMap,
             'already_mapped' => $alreadyMapped,

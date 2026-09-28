@@ -52,6 +52,13 @@ class SettingsStreamliningTests(unittest.TestCase):
         self.assertTrue(all(item["identity"] == "dhcp-interface-ha" for item in outcome["logs"]))
         self.assertTrue(any("setup_completed" in item["message"] for item in outcome["logs"]))
 
+    def test_configure_defaults_empty_shared_mac_to_selected_interface(self):
+        outcome = run_controller("configure_default_mac")
+
+        self.assertEqual(outcome["response"]["result"], "saved")
+        self.assertTrue(outcome["response"]["assignment_verified"])
+        self.assertEqual(outcome["shared"]["shared_mac"], "02:11:22:33:44:01")
+
     def test_revision_validation_and_unrelated_pending_edits_block_before_mutation(self):
         stale = run_controller("configure_stale_revision")
         self.assertEqual(stale["response"]["result"], "conflict")

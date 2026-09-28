@@ -213,7 +213,7 @@ $(document).ready(function() {
                     managedDescription + " (" + interfaceId + ") on " + (previewDevice || "unknown assignment")
                 );
                 $("#carrierLoadError").toggle(!!(data.errors && Object.keys(data.errors).length))
-                    .text("Carrier inventory has incomplete observations. Configure only after refreshing status.");
+                    .text("Carrier inventory has incomplete observations. Refresh status before Save & Apply.");
                 updateMacSuggestion(data);
                 updateActions();
             })
@@ -413,14 +413,7 @@ $(document).ready(function() {
         const needsReadback = configureOutcomeBlocked || (!retryReady && statusIsFresh()
             && pending && pending.available === true && pending.state === "selected_relink");
         const queueAllowsConfigure = pendingAssignmentAllowsConfigure(retryReady);
-        const canConfigureNow = managed !== "" && !savedEnabled && detachedEvidenceFresh()
-            && !configureOutcomeBlocked && queueAllowsConfigure
-            && configureAllowed && (retryReady || mappedDeviceNeedsRecovery(managed)
-                || (previewDevice !== "" && previewDevice !== "dhcpha0lagg"));
         $("#configureBlock").toggle((managed !== "" && !configured) || needsReadback);
-        $("#configureLagg").toggle(!configured && !needsReadback)
-            .prop("disabled", configureBusy || settingsBusy || !canConfigureNow)
-            .text(retryReady ? "Retry Configure interface" : "Configure interface");
         $("#recheckConfigure").toggle(needsReadback)
             .prop("disabled", configureBusy || settingsBusy);
         $("#configureOutcomeNote").toggle(needsReadback);
@@ -429,23 +422,20 @@ $(document).ready(function() {
                 ? "Your account needs native assignment write access for this interface."
                 : "Your account needs native interface assignment and apply permissions to configure this interface.");
         $("#configureSavedStateNote").toggle(managed !== "" && !configured && savedEnabled)
-            .text("The saved plugin is still enabled. Save Disable and verify detachment before configuring the assignment.");
+            .text("The saved plugin is still enabled. Save Disable and verify detachment before changing the assignment.");
         $("#configureEvidenceNote").toggle(managed !== "" && !configured && !savedEnabled && !detachedEvidenceFresh())
-            .text("Fresh status must verify the saved disabled state and detached adapter before Configure is available.");
+            .text("Save & Apply requires fresh status confirming the disabled, detached adapter before changing the assignment.");
         $("#configureCarrierNote").toggle(managed !== "" && previewDevice === "dhcpha0lagg" && !savedMapping.carrier)
-            .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Configure is blocked; do not guess.");
+            .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Save is blocked; do not guess.");
         $("#configureQueueNote").toggle(managed !== "" && !configured && !configureOutcomeBlocked
             && statusIsFresh() && !queueAllowsConfigure)
             .text(!pending || pending.available !== true || pending.state === "unknown"
-                ? "The native assignment queue could not be verified; refresh status before Configure."
+                ? "The native assignment queue could not be verified; refresh status before Save & Apply."
                 : (pending.state === "conflict"
-                    ? "Resolve the other pending native assignment change before Configure."
-                    : "A pending relink requires a verified Configure outcome before retry."));
-        $("#saveDraft").toggle(managed !== "" && !configured && !savedEnabled)
-            .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || (savedEnabled && managed !== savedMapping.managed));
-        $("#draftExplanation").toggle(managed !== "" && !configured);
+                    ? "Resolve the other pending native assignment change before Save & Apply."
+                    : "A pending relink requires verified save readback before retry."));
         const identityChangeBlocked = savedEnabled && !disabledSelection && managed !== savedMapping.managed;
-        $("#saveSettings").toggle(disabledSelection || configured || savedEnabled)
+        $("#saveSettings").show()
             .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || identityChangeBlocked);
         $("#saveIdentityNote").toggle(identityChangeBlocked)
             .text("Save Disable with the current interface first, then wait for fresh detached status before changing identity.");
@@ -559,7 +549,7 @@ $(document).ready(function() {
             });
     }
 
-    function saveSettings(draft) {
+    function saveSettings() {
         if (!canWriteSettings || settingsBusy || configureBusy || configureOutcomeBlocked) {
             return;
         }
@@ -568,23 +558,18 @@ $(document).ready(function() {
             $("#settingsResult").text("Save Disable with the current interface before changing the local identity.");
             return;
         }
-        const button = draft ? $("#saveDraft") : $("#saveSettings");
+        const button = $("#saveSettings");
         settingsBusy = true;
         button.prop("disabled", true);
         const payload = getFormData("frm_Settings");
         payload.dhcphalocal.carrier = managed === savedMapping.managed ? localCarrier : "";
         payload.revision = $("#revision").val();
         payload.dhcphashared.failback_delay = $("#failbackDelay").val();
-        if (draft) {
-            payload.dhcphashared.enabled = "0";
-        }
         if (managed === "") {
             payload.dhcphashared.enabled = "0";
             payload.dhcphalocal.carrier = "";
         }
-        $("#settingsResult").text(draft
-            ? "Saving the disabled draft and applying the controller's safe state; native assignment will not be changed."
-            : "Saving both settings sections and applying the controller...");
+        $("#settingsResult").text("Saving settings and applying the controller...");
         $("#retryApply").hide();
         invalidateStatus();
         post(api + "/settings/set", payload, managed === "" ? 70000 : 35000)
@@ -648,7 +633,7 @@ $(document).ready(function() {
     }
 
     async function readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, backendVerified) {
-        $("#setupResult").text("Configure result is unknown. Refreshing saved settings and assignment status before offering a retry...");
+        $("#setupResult").text("Save result is unknown. Refreshing saved settings and assignment status before offering a retry...");
         configureRetryReady = false;
         configureRetryGeneration = -1;
         try {
@@ -661,13 +646,15 @@ $(document).ready(function() {
             const savedCarrier = valueOf(settings.dhcphalocal && settings.dhcphalocal.carrier);
             const savedEnabledValue = valueOf(settings.dhcphashared && settings.dhcphashared.enabled);
             if (expectedFormGeneration !== formGeneration) {
-                $("#setupResult").text("Readback completed after the form changed, so the saved revision was not advanced. Recheck after reviewing the saved settings, or reload this page to discard the draft and load current settings.");
+                $("#setupResult").text("Readback completed after the form changed, so the saved revision was not advanced. Recheck after reviewing the saved settings, or reload this page to discard the unsaved values and load current settings.");
                 return;
             }
             const settingsMatch = !!settings.revision && savedManaged === managed
                 && savedCarrier === expectedCarrier
                 && savedEnabledValue === "0"
-                && sameMac(settings.dhcphashared && settings.dhcphashared.shared_mac, payload.dhcphashared.shared_mac)
+                && (valueOf(payload.dhcphashared.shared_mac) === ""
+                    ? usableMac(valueOf(settings.dhcphashared && settings.dhcphashared.shared_mac))
+                    : sameMac(settings.dhcphashared && settings.dhcphashared.shared_mac, payload.dhcphashared.shared_mac))
                 && valueOf(settings.dhcphashared && settings.dhcphashared.failback_delay) === valueOf(payload.dhcphashared.failback_delay);
             if (settingsMatch) {
                 $("#revision").val(settings.revision);
@@ -676,6 +663,7 @@ $(document).ready(function() {
                 if ((field("dhcphalocal.managed_interface").val() || "") === managed) {
                     localCarrier = savedMapping.carrier;
                     field("dhcphashared.enabled").prop("checked", false);
+                    field("dhcphashared.shared_mac").val(valueOf(settings.dhcphashared.shared_mac));
                 }
             }
             const attachment = status.attachment || {};
@@ -714,19 +702,19 @@ $(document).ready(function() {
                     pendingConfigureOutcome = null;
                 }
                 $("#setupResult").text(backendVerified
-                    ? "Configure reported verified setup, but current readback does not confirm the full mapping. Current status needs attention; refresh Diagnostics before enabling."
+                    ? "Save & Apply reported verified setup, but current readback does not confirm the full mapping. Current status needs attention; refresh Diagnostics before enabling."
                     : (configureRetryReady
-                        ? "Fresh readback confirms a safe disabled setup state. Review the result, then retry Configure interface to resume guarded setup."
-                        : "Fresh readback found a conflicting or unverified device state. Configure retry is blocked; inspect Diagnostics before continuing."));
+                        ? "Fresh readback confirms a safe disabled setup state. Review the result, then retry Save & Apply to resume guarded setup."
+                        : "Fresh readback found a conflicting or unverified device state. Save retry is blocked; inspect Diagnostics before continuing."));
             } else {
                 $("#setupResult").text(backendVerified
-                    ? "Configure reported success, but readback differs or is unavailable. Refresh Diagnostics before relying on the current state."
+                    ? "Save & Apply reported success, but readback differs or is unavailable. Refresh Diagnostics before relying on the current state."
                     : "Readback could not confirm a safe retry. Saved settings, assignment or runtime state differs or is unavailable; inspect Diagnostics before continuing.");
             }
         } catch (error) {
             $("#setupResult").text(backendVerified
-                ? "Configure verified setup, but current saved settings and assignment could not be read. Use Recheck outcome or reload this page after copying any draft values."
-                : "Configure result remains unknown because saved settings and assignment status could not both be read. Use Recheck outcome; if it remains blocked, reload this page after copying any draft values.");
+                ? "Save & Apply verified setup, but current saved settings and assignment could not be read. Use Recheck outcome or reload this page after copying any unsaved values."
+                : "Save result remains unknown because saved settings and assignment status could not both be read. Use Recheck outcome; if it remains blocked, reload this page after copying any unsaved values.");
         }
         updateActions();
         refreshStatus();
@@ -773,7 +761,7 @@ $(document).ready(function() {
             return;
         }
         if (configureOutcomeBlocked) {
-            $("#setupResult").text("Configure remains blocked until Recheck outcome confirms the saved settings and current assignment. Reload this page if you need to discard a changed draft.");
+            $("#setupResult").text("Save remains blocked until Recheck outcome confirms the saved settings and current assignment. Reload this page if you need to discard changed form values.");
             return;
         }
         const managed = field("dhcphalocal.managed_interface").val() || "";
@@ -794,10 +782,10 @@ $(document).ready(function() {
         if (!pendingAssignmentAllowsConfigure(retryReady)) {
             const pending = statusData && statusData.setup && statusData.setup.pending_assignment;
             $("#setupResult").text(!pending || pending.available !== true || pending.state === "unknown"
-                ? "The native assignment queue could not be verified. Refresh status and inspect Diagnostics before Configure."
+                ? "The native assignment queue could not be verified. Refresh status and inspect Diagnostics before Save & Apply."
                 : (pending.state === "conflict"
-                    ? "The native assignment queue contains another pending change. Resolve it in Interface Assignments before Configure."
-                    : "A pending relink is present. Recheck the Configure outcome before resuming setup."));
+                    ? "The native assignment queue contains another pending change. Resolve it in Interface Assignments before Save & Apply."
+                    : "A pending relink is present. Recheck the save outcome before resuming setup."));
             return;
         }
         if (!retryReady && !mappedDeviceNeedsRecovery(managed)
@@ -805,7 +793,7 @@ $(document).ready(function() {
             $("#setupResult").text("The original native device is unavailable or ambiguous. Refresh the assignment before continuing.");
             return;
         }
-        if (!window.confirm("Move " + managed + " to dhcpha0lagg now? This interrupts its current connection. Use a separate management connection. Native Apply also applies other pending interface assignment changes, so do not edit native interface assignments concurrently. Configure saves Enable off even if the form checkbox is selected.")) {
+        if (!window.confirm("Save & Apply will move " + managed + " to dhcpha0lagg now. This interrupts its current connection. Use a separate management connection. Native Apply also applies other pending interface assignment changes, so do not edit native interface assignments concurrently. Initial setup saves Enable off even if the form checkbox is selected.")) {
             return;
         }
 
@@ -815,7 +803,7 @@ $(document).ready(function() {
         const expectedFormGeneration = formGeneration;
         const expectedCarrier = managed === savedMapping.managed && localCarrier
             ? localCarrier : (previewDevice === "dhcpha0lagg" ? savedMapping.carrier : previewDevice);
-        const buttons = $("#configureLagg, #recheckConfigure, #saveDraft, #saveSettings, #prepareDevice, #reconcileDiagnostics, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
+        const buttons = $("#recheckConfigure, #saveSettings, #prepareDevice, #reconcileDiagnostics, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
         const inputs = $("#frm_Settings :input");
         const disabledStates = inputs.map(function() { return $(this).prop("disabled"); }).get();
         inputs.prop("disabled", true);
@@ -825,7 +813,7 @@ $(document).ready(function() {
         payload.dhcphashared.enabled = "0";
         payload.revision = $("#revision").val();
         handleFormValidation("frm_Settings", []);
-        $("#setupResult").text("Configuring the saved disabled settings and native assignment...");
+        $("#setupResult").text("Saving disabled settings and configuring the native assignment...");
         invalidateStatus();
         try {
             const result = await post(api + "/settings/configure", payload, 120000);
@@ -843,7 +831,7 @@ $(document).ready(function() {
                 refreshStatus();
             } else {
                 const stage = result.setup_stage ? " Last verified stage: " + result.setup_stage + "." : "";
-                $("#setupResult").text((result.error || "Configure interface did not complete and verify every boundary.") + stage);
+                $("#setupResult").text((result.error || "Save & Apply did not complete and verify every setup boundary.") + stage);
                 if (result.saved === true || result.saved === null || result.applied === null || result.assignment_verified === null) {
                     blockConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, false);
                     await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier);
@@ -893,9 +881,21 @@ $(document).ready(function() {
         $("#maintabs a[href='" + hash + "']").tab("show");
     }
 
-    $("#saveSettings").on("click", function() { saveSettings(false); });
-    $("#saveDraft").on("click", function() { saveSettings(true); });
-    $("#configureLagg").on("click", configureSelectedLagg);
+    function saveFromForm() {
+        const managed = field("dhcphalocal.managed_interface").val() || "";
+        const setupRequired = managed !== "" && !savedEnabled && (
+            managed !== savedMapping.managed || !savedMapping.carrier
+            || (previewDevice && previewDevice !== "dhcpha0lagg")
+            || mappedDeviceNeedsRecovery(managed)
+        );
+        if (setupRequired) {
+            configureSelectedLagg();
+        } else {
+            saveSettings();
+        }
+    }
+
+    $("#saveSettings").on("click", saveFromForm);
     $("#recheckConfigure").on("click", recheckConfigureOutcome);
     $("#prepareDevice").on("click", function() {
         runRecovery($(this), "/service/prepare", "Device ownership and detached state verified.");
@@ -1030,11 +1030,8 @@ $(document).ready(function() {
                 <p id="configureQueueNote" class="text-warning" style="display:none"></p>
                 <p id="saveIdentityNote" class="text-warning" style="display:none"></p>
                 <div id="configureBlock" style="display:none">
-                    {% if canConfigureInterface %}
-                    <button class="btn btn-primary" id="configureLagg" type="button">{{ lang._('Configure interface') }}</button>
-                    {% endif %}
-                    <button class="btn btn-default" id="recheckConfigure" type="button" style="display:none">{{ lang._('Recheck Configure outcome') }}</button>
-                    <p id="configureOutcomeNote" class="help-block" style="display:none">{{ lang._('Configure remains blocked until a read-only check confirms the saved settings and current assignment. Recheck outcome reads both again. If your form changed or readback remains unavailable, copy any unsaved values and reload this page to load current saved settings.') }}</p>
+                    <button class="btn btn-default" id="recheckConfigure" type="button" style="display:none">{{ lang._('Recheck save outcome') }}</button>
+                    <p id="configureOutcomeNote" class="help-block" style="display:none">{{ lang._('Save remains blocked until a read-only check confirms the saved settings and current assignment. Recheck outcome reads both again. If your form changed or readback remains unavailable, copy any unsaved values and reload this page to load current saved settings.') }}</p>
                     <p class="help-block">{{ lang._('This saves the submitted settings disabled and uses native assignment apply. It may interrupt this interface. Use a separate management path and do not edit native assignments concurrently.') }}</p>
                 </div>
                 <div class="form-group" id="macHelpers">
@@ -1048,9 +1045,7 @@ $(document).ready(function() {
                     <a href="#diagnostics" data-toggle="tab">{{ lang._('Review the corrective check in Diagnostics.') }}</a>
                 </p>
                 <button class="btn btn-primary" id="saveSettings" type="button">{{ lang._('Save & Apply') }}</button>
-                <button class="btn btn-default" id="saveDraft" type="button" style="display:none">{{ lang._('Save draft') }}</button>
                 <button class="btn btn-default" id="retryApply" type="button" style="display:none">{{ lang._('Retry Apply') }}</button>
-                <p class="help-block" id="draftExplanation" style="display:none">{{ lang._('Save draft keeps Enable off and applies the controller state. It does not change native interface assignments.') }}</p>
                 <p id="settingsResult" role="status"></p>
                 <p id="setupResult" role="status"></p>
                 <p id="serviceResult" role="status"></p>

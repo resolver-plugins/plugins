@@ -1,9 +1,9 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_14**, 2026-09-28, following
+Status: source implementation for experimental **0.2_15**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
-recorded in sections 10–15;
+recorded in sections 10–16;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -586,3 +586,31 @@ the removal operation: configuration remains byte-identical and the controller
 remains running. The private 0.2.13 rollback package, configuration backup and
 deployment evidence are in `/root/dhcpha-disabled-0.2_14.9sAykh` on HA-2. HA-1
 was not changed.
+
+## 16. Unified Save and setup — HA-2 0.2.15, 2026-09-28
+
+Removed the separate Configure interface and Save draft controls. Save & Apply
+is always the single Settings action. For an unconfigured selection it invokes
+the existing guarded setup endpoint, captures the committed native device as the
+carrier, saves Enable off and completes native assignment migration. Once setup
+is committed, the same button uses the ordinary settings endpoint. Uncertain
+setup outcomes retain read-only Recheck and the existing mutation latch.
+
+When Shared interface MAC is empty during initial setup, the server defaults it
+to the freshly inventoried MAC of the selected eligible carrier before model and
+cross-field validation. This behavior is server-side for browser and direct API
+callers; explicit valid MAC values remain unchanged. Setup still confirms the
+possible connectivity interruption, rejects stale/conflicting native assignment
+state and never enables the service in the migration request.
+
+The candidate passed 109 Python tests, both Node UI suites, PHP lint, XML parsing,
+diff checks and native Volt compilation. Focused regressions verify that Save
+dispatches setup only while migration is needed, that no Configure or draft
+button remains, and that an empty MAC is saved as the selected carrier's observed
+MAC. Installed `os-dhcp-interface-ha-devel-0.2_15` on HA-2, package SHA-256
+`3a328e7d48534de94f535073710be839cd273abc69e6a52a2e83d31f2e1bdb8e`.
+All 25 installed source hashes and package checksums pass. The Volt cache was
+cleared, the web GUI restarted and HTTPS responds 200. Installation left the
+then-current configuration byte-identical and the controller running. The
+private 0.2.14 rollback package, configuration backup and deployment evidence
+are in `/root/dhcpha-unified-save-0.2_15.ofViOK` on HA-2. HA-1 was not changed.

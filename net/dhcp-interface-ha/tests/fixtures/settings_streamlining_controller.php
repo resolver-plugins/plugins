@@ -589,6 +589,9 @@ namespace {
     if ($case === 'configure_invalid') {
         \FixtureRequest::$invalidSettings = true;
     }
+    if ($case === 'configure_default_mac') {
+        \FixtureRequest::$post['dhcphashared']['shared_mac'] = '';
+    }
     if ($case === 'configure_stale_revision') {
         \OPNsense\Core\Config::$local['carrier'] = 'changed-after-read';
     }

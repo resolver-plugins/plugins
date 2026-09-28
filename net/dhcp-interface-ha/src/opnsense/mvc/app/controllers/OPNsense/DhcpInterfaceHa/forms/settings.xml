@@ -9,7 +9,7 @@
         <id>dhcphalocal.managed_interface</id>
         <label>Managed logical interface</label>
         <type>dropdown</type>
-        <help>Select the local OPNsense assignment to manage. Configure interface captures its current device and moves the assignment to the plugin-owned adapter. Choose Disabled to turn off the service and clear this node's plugin mapping while retaining the shared MAC; native assignments are not deleted.</help>
+        <help>Select the local OPNsense assignment to manage. Save &amp; Apply captures its current device and moves the assignment to the plugin-owned adapter when setup is required. Choose Disabled to turn off the service and clear this node's plugin mapping while retaining the shared MAC; native assignments are not deleted.</help>
     </field>
     <field>
         <id>dhcphashared.shared_mac</id>

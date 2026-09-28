@@ -355,8 +355,8 @@ async function testConfigureHandler() {
     unknownOutcome.context.configureOutcomeBlocked = true;
     unknownOutcome.context.pendingConfigureOutcome = {managed: 'opt7'};
     vm.runInContext('updateActions()', unknownOutcome.context);
-    assert.equal(unknownOutcome.dom.nodes['#configureLagg'].props.disabled, true,
-        'an uncertain prior Configure disables the primary action despite fresh original-device evidence');
+    assert.equal(unknownOutcome.dom.nodes['#saveSettings'].props.disabled, true,
+        'an uncertain prior setup disables Save despite fresh original-device evidence');
     assert.equal(unknownOutcome.dom.nodes['#recheckConfigure'].visible, true,
         'uncertain Configure exposes a read-only Recheck action');
     await vm.runInContext('configureSelectedLagg()', unknownOutcome.context);
@@ -369,7 +369,6 @@ async function testConfigureHandler() {
             available: pendingState !== 'unknown', state: pendingState
         };
         vm.runInContext('updateActions()', queueBlocked.context);
-        assert.equal(queueBlocked.dom.nodes['#configureLagg'].props.disabled, true);
         assert.equal(queueBlocked.dom.nodes['#recheckConfigure'].visible, pendingState === 'selected_relink',
             'a pending saved relink exposes readback even after request history is lost');
         await vm.runInContext('configureSelectedLagg()', queueBlocked.context);
@@ -423,6 +422,30 @@ async function testConfigureHandler() {
     await vm.runInContext('configureSelectedLagg()', timedOut.context);
     assert.equal(timedOut.calls.length, 1, 'timeout does not blindly replay Configure');
     assert.equal(timedOut.readbacks.length, 1, 'timeout performs read-only settings and status readback');
+}
+
+function testSaveDispatchesSetup() {
+    assert.equal(view.includes('id="configureLagg"'), false, 'setup has no separate Configure button');
+    assert.equal(view.includes('id="saveDraft"'), false, 'setup has no draft button');
+    const dom = domFixture();
+    dom.setField('dhcphalocal.managed_interface', 'opt7');
+    const calls = [];
+    const context = vm.createContext(Object.assign({}, dom, {
+        savedEnabled: false,
+        savedMapping: {managed: '', carrier: ''},
+        previewDevice: 'hn1',
+        mappedDeviceNeedsRecovery: () => false,
+        configureSelectedLagg: () => calls.push('setup'),
+        saveSettings: () => calls.push('save')
+    }));
+    vm.runInContext(between('    function saveFromForm()', '    $("#saveSettings").on'), context);
+    vm.runInContext('saveFromForm()', context);
+    assert.deepEqual(calls, ['setup'], 'Save runs guarded setup for an unconfigured selection');
+
+    context.savedMapping = {managed: 'opt7', carrier: 'hn1'};
+    context.previewDevice = 'dhcpha0lagg';
+    vm.runInContext('saveFromForm()', context);
+    assert.deepEqual(calls, ['setup', 'save'], 'Save uses the ordinary settings path after setup');
 }
 
 async function testConfigureReadbackGuards() {
@@ -823,6 +846,7 @@ function testSummaryAndAddressMeaning() {
     await testConfigureReadbackGuards();
     await testSharedStatusReadbackAndFreshness();
     await testOldCarrierAndMacSuggestions();
+    testSaveDispatchesSetup();
     testConfiguredStateRequiresVerifiedOwnership();
     testDisabledSelectionCanBeSaved();
     testSummaryAndAddressMeaning();
