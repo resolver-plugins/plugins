@@ -497,7 +497,7 @@ class StatusController extends ApiControllerBase
                     ? gettext('Only the selected logical interface uses dhcpha0lagg.')
                     : ($initialAssignment || $capturedOriginalAssignment
                         ? gettext('Configure interface to move the selected logical interface through native assignment machinery.')
-                        : gettext('The native assignment does not match the saved DHCP Interface HA mapping; inspect the assignment before continuing.')),
+                        : gettext('The native assignment does not match the saved HA DHCP Interface mapping; inspect the assignment before continuing.')),
                 action: $initialAssignment || $capturedOriginalAssignment ? 'configure' : ($assignmentConflict ? 'interface_assignments' : null),
                 responsibility: 'plugin',
                 resolution: $initialAssignment || $capturedOriginalAssignment ? 'user_action' : ($assignmentConflict ? 'investigate' : 'none'),
@@ -525,7 +525,7 @@ class StatusController extends ApiControllerBase
                 'carrier_exclusive', 'local', 'blocker', $capturedOriginalAssignment ? true : ($carrierSelected && is_array($runtime) ? $carrierSafe : null), 'adapter',
                 $capturedOriginalAssignment
                     ? gettext('The original carrier remains on its logical interface until Configure interface completes the confirmed migration.')
-                    : gettext('The carrier is reserved exclusively for DHCP Interface HA.'),
+                    : gettext('The carrier is reserved exclusively for HA DHCP Interface.'),
                 action: $capturedOriginalAssignment ? 'configure' : 'interface_assignments',
                 responsibility: 'native', resolution: 'user_action', relevant: $hasManagedSelection && $carrierSelected
             ),
@@ -579,7 +579,7 @@ class StatusController extends ApiControllerBase
                     ? gettext('No native XMLRPC sender is configured; plugin synchronization selection is optional.')
                     : ($pluginSyncEnabled
                         ? gettext('Shared plugin settings are selected for this configured XMLRPC sender.')
-                        : gettext('Include DHCP Interface HA in the configured native XMLRPC sender selection.')),
+                        : gettext('Include HA DHCP Interface in the configured native XMLRPC sender selection.')),
                 action: $senderConfigured && !$pluginSyncEnabled ? 'enable_sync' : null,
                 responsibility: 'user', resolution: $senderConfigured && !$pluginSyncEnabled ? 'user_action' : 'none',
                 relevant: $senderConfigured && !$pluginSyncEnabled

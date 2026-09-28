@@ -15,7 +15,7 @@ class LogIntegrationTests(unittest.TestCase):
     def test_log_acl_is_limited_to_wrapper_and_native_read_routes(self):
         root = ET.parse(ACL_XML).getroot()
         permission = next(
-            item for item in root if item.findtext("name") == "Services: DHCP Interface HA: Log File"
+            item for item in root if item.findtext("name") == "Services: HA DHCP Interface: Log File"
         )
         patterns = [item.text for item in permission.findall("./patterns/pattern")]
 

@@ -562,7 +562,7 @@ $(document).ready(function() {
                 handleFormValidation("frm_Settings", data.validations);
                 if (data.result === "staged" && data.saved === true) {
                     $("#revision").val(data.revision || $("#revision").val());
-                    $("#settingsResult").text(data.error || "DHCP Interface HA was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
+                    $("#settingsResult").text(data.error || "HA DHCP Interface was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
                     loadSettings();
                 } else if (data.result === "saved" && data.saved === true) {
                     savedMapping = {managed: payload.dhcphalocal.managed_interface || "", carrier: payload.dhcphalocal.carrier || ""};

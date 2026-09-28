@@ -8,7 +8,7 @@ older manual-setup and UI presentation requirements below, particularly sections
 in the new documents are tracked with implementation and verification evidence
 in the linked plan; source changes are not evidence of deployed behavior.
 
-- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_21; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
+- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_22; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
 - **Plugin path:** `net/dhcp-interface-ha/`
 - **Last verified deployment (before this increment):** HA-1 and HA-2 have 0.2_8 with automatic carrier capture and no separate carrier selector. At that earlier verification both were configured and enabled, HA-1 was in operator-selected CARP maintenance and HA-2 was MASTER. HA-2 acquired 10.250.100.100 with automatic promiscuous reception verified. See the [deployment records](dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
@@ -126,7 +126,7 @@ The normal configuration surface is intentionally small.
 
 These settings are cluster-wide and SHOULD be eligible for OPNsense XMLRPC synchronization:
 
-1. **Enable DHCP Interface HA**
+1. **Enable HA DHCP Interface**
 2. **Shared interface MAC**
    - User-entered, imported from an existing WAN spoof MAC, or generated.
    - Generated addresses MUST be locally administered unicast addresses, e.g. `02:xx:xx:xx:xx:xx`, with cryptographically secure random remaining bits.
@@ -601,7 +601,7 @@ pass that check.
 
 ### 21.1 Navigation and page ownership
 
-Keep the existing **Services → DHCP Interface HA** entry and
+Keep the existing **Services → HA DHCP Interface** entry and
 `/ui/dhcpinterfaceha` route. Use three native OPNsense tabs in this order:
 **Settings**, **Status**, **Diagnostics**, with matching `#settings`, `#status`,
 `#diagnostics` anchors. The default is Settings; preserve an explicitly selected
@@ -620,7 +620,7 @@ Render one form and one **Save & Apply** action. The visible order is:
 
 | Control or display | Scope and required behavior |
 |---|---|
-| Enable DHCP Interface HA | Shared checkbox. Explain that enabling permits CARP-controlled attachment and disabling disconnects an already-migrated interface. |
+| Enable HA DHCP Interface | Shared checkbox. Explain that enabling permits CARP-controlled attachment and disabling disconnects an already-migrated interface. |
 | Managed interface | This node only; never XMLRPC-synchronized. Selector of existing logical assignments, showing description and identifier; IDs may differ on the peer. Ineligible choices remain understandable through their reason; do not silently substitute WAN. |
 | Local carrier | This node only. Label with local hostname, device, available description and observed media status. State beside the field that it is never XMLRPC-synchronized. |
 | Shared MAC | Shared field with adjacent **Generate** and **Use current interface MAC** actions. Display the identity source and scope. |
@@ -984,7 +984,7 @@ Migration MUST use an ordered, computed setup checklist in Settings. Each step s
 
 ### 22.2 Safe deployment outline
 
-1. Install the plugin on both nodes with **Enable DHCP Interface HA off**.
+1. Install the plugin on both nodes with **Enable HA DHCP Interface off**.
 2. Configure each node's local carrier independently.
 3. Select the managed logical interface and carrier independently on each node. Configure the shared MAC and failback settings on the preferred configuration source while the plugin remains disabled.
 4. Synchronize the **disabled** shared plugin configuration only after both nodes have valid node-local interface and carrier configuration. A peer that has not yet migrated its logical WAN remains safe because the controller treats "managed interface is not assigned to `dhcpha0lagg`" as `UNMANAGED` and performs no carrier mutation.
@@ -993,7 +993,7 @@ Migration MUST use an ordered, computed setup checklist in Settings. Each step s
 7. Migrate the BACKUP logical WAN assignment to `dhcpha0lagg`; verify it remains fenced. This should not affect active Internet service.
 8. Perform a controlled migration of the MASTER logical WAN assignment to `dhcpha0lagg`. Because the plugin is still disabled and the virtual WAN is intentionally detached, expect a bounded deployment interruption at this point.
    If the selected shared MAC differs from the identity the ISP previously saw, the provider/ONT may retain a CPE/DHCP session and require its normal customer-side reset procedure before the first lease is issued. This is deployment-specific and MUST NOT be automated by the plugin. Subsequent HA failovers keep the same shared MAC and should not look like a client-MAC change upstream.
-9. Enable DHCP Interface HA on the MASTER only after its logical WAN is assigned to `dhcpha0lagg` and all local validation passes. The controller may then prepare the shared MAC on the down carrier, attach it, and allow native DHCP to converge.
+9. Enable HA DHCP Interface on the MASTER only after its logical WAN is assigned to `dhcpha0lagg` and all local validation passes. The controller may then prepare the shared MAC on the down carrier, attach it, and allow native DHCP to converge.
 10. Synchronize/confirm the enabled shared setting to the already-migrated BACKUP and verify that it remains physically fenced.
 11. Verify only MASTER emits ISP-facing frames/shared MAC.
 12. Perform controlled failover tests before declaring deployment complete.
@@ -1362,7 +1362,7 @@ Separate PR:
 - Generalize Resolver Plugins metadata/workflows from BIND-only assumptions to per-plugin profiles.
 - Preserve `os-bind-rp` behavior exactly.
 - Add focused regression coverage for existing BIND packaging/publication contracts.
-- Do not mix DHCP Interface HA implementation into this infrastructure PR.
+- Do not mix HA DHCP Interface implementation into this infrastructure PR.
 
 ### Phase 1 — prototypes and architecture decision record
 
@@ -1519,7 +1519,7 @@ source of repository policy; this specification must not invent review skills
 or claim that earlier agent-process requirements are still present.
 
 - Do not use worktrees or open PRs against official OPNsense repositories.
-- Keep the DHCP Interface HA repair within its plugin, focused workflow/tests
+- Keep the HA DHCP Interface repair within its plugin, focused workflow/tests
   and relevant documentation; preserve unrelated work and BIND package policy.
 - Preserve package provenance, pin/fingerprint checks and approved signing and
   publication boundaries. Infrastructure/publication changes need their own

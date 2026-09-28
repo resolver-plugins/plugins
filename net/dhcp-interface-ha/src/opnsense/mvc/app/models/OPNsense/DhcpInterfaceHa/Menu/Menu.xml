@@ -1,6 +1,6 @@
 <menu>
     <Services>
-        <DhcpInterfaceHa VisibleName="DHCP Interface HA" cssClass="fa fa-random fa-fw">
+        <DhcpInterfaceHa VisibleName="HA DHCP Interface" cssClass="fa fa-random fa-fw">
             <Settings VisibleName="Settings" url="/ui/dhcpinterfaceha" order="1"/>
         </DhcpInterfaceHa>
     </Services>

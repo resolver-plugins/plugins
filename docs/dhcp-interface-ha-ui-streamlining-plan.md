@@ -1,6 +1,6 @@
-# DHCP Interface HA UI and logging implementation plan
+# HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_21**, 2026-09-28, following
+Status: source implementation for experimental **0.2_22**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -502,7 +502,7 @@ byte-identical and the controller is running. HA-1 was not changed.
 ## 12. Log navigation cleanup — HA-2 0.2_11, 2026-09-27
 
 Removed the separate Log child from the Services sidebar. The sidebar now has
-one DHCP Interface HA entry, which opens Settings. Log remains available through
+one HA DHCP Interface entry, which opens Settings. Log remains available through
 the Settings/Diagnostics/Log tabs within the plugin and keeps its dedicated ACL.
 
 The candidate passed both Node UI suites and the native route check. Installed
@@ -712,3 +712,15 @@ apply failure; its feedback appears in Settings. Backend guards remain intact.
 Both UI suites and diff checks pass. Deployed 0.2_21 to HA-2; installed source
 hashes and package integrity verified. Cleared the UI cache and restarted the
 web UI. Evidence: `/root/dhcpha-fix-0.2_21.FwyGrE`.
+
+
+### 0.2_22 — HA DHCP Interface display name
+
+Rename the product throughout UI labels, menu, ACL descriptions, native sync
+label, controller messages, package description and documentation. Preserve
+package/config/API/service identifiers to avoid a configuration migration.
+
+All 114 Python tests, both UI suites, PHP lint, XML parsing and diff checks pass.
+Deployed 0.2_22 to HA-2; verified package integrity and all installed source
+hashes. Cleared the UI cache and restarted the web UI. Evidence:
+`/root/dhcpha-fix-0.2_22.TVf2KE`.

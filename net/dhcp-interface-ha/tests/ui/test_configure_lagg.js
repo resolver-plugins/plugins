@@ -863,7 +863,7 @@ function testSummaryAndAddressMeaning() {
     testConfiguredStateRequiresVerifiedOwnership();
     testDisabledSelectionCanBeSaved();
     testSummaryAndAddressMeaning();
-    console.log('DHCP Interface HA UI behavior checks passed');
+    console.log('HA DHCP Interface UI behavior checks passed');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

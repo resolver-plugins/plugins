@@ -1,6 +1,6 @@
 #!/usr/local/bin/python3
 
-"""Experimental DHCP Interface HA controller and read-only planning CLI."""
+"""Experimental HA DHCP Interface controller and read-only planning CLI."""
 
 from __future__ import annotations
 
@@ -259,7 +259,7 @@ def cmd_runtime(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Experimental DHCP Interface HA controller")
+    parser = argparse.ArgumentParser(description="Experimental HA DHCP Interface controller")
     sub = parser.add_subparsers(dest="command", required=True)
 
     gen = sub.add_parser("generate-mac", help="generate a locally administered unicast MAC")

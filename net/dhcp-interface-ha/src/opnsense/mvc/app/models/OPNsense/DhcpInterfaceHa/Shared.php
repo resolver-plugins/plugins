@@ -29,7 +29,7 @@ class Shared extends BaseModel
         $mac = strtolower(trim((string)$this->shared_mac));
         if ($mac === '') {
             $messages->appendMessage(new Message(
-                gettext('A shared interface MAC is required when DHCP Interface HA is enabled.'),
+                gettext('A shared interface MAC is required when HA DHCP Interface is enabled.'),
                 $this->shared_mac->getInternalXMLTagName()
             ));
         } elseif (!preg_match('/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/', $mac)) {

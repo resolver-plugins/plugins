@@ -1,4 +1,6 @@
-# os-dhcp-interface-ha experimental controller
+# HA DHCP Interface
+
+Experimental `os-dhcp-interface-ha` plugin.
 
 This plugin implements the experimental carrier controller described in
 [the design specification](../../docs/dhcp-interface-ha.md). It follows native CARP

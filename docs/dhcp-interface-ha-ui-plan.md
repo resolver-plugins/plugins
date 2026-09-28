@@ -1,4 +1,4 @@
-# DHCP Interface HA UI repair implementation plan
+# HA DHCP Interface UI repair implementation plan
 
 This is the historical 0.2 repair and deployment record. For upcoming work,
 start with the [UI streamlining specification](dhcp-interface-ha-ui-streamlining-spec.md)
@@ -567,7 +567,7 @@ Installed `os-dhcp-interface-ha-devel-0.2_2` on
 `opnsense-ha-1.home.internal.bkwfamily.net` (appliance hostname
 `opnsense-ha-1.mgmt.internal.bkwfamily.net`), running OPNsense 26.7.1_1 amd64,
 FreeBSD 15.1-RELEASE-p1 and PHP 8.5.8. This was a fresh installation: no earlier
-DHCP Interface HA or WAN HA DHCP package, plugin configuration, device or
+HA DHCP Interface or WAN HA DHCP package, plugin configuration, device or
 assignment existed. HA-1 was MASTER before installation and remains MASTER.
 
 - Source archive SHA-256:

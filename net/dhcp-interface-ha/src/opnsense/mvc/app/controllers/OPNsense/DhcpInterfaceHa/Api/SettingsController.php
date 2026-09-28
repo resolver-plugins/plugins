@@ -169,7 +169,7 @@ class SettingsController extends ApiControllerBase
                     'applied' => $apply['applied'],
                     'cleared' => false,
                     'revision' => $disabled['revision'],
-                    'error' => gettext('DHCP Interface HA was disabled, but its interface selection was retained because detachment could not be verified. Refresh status, then save Disabled again.'),
+                    'error' => gettext('HA DHCP Interface was disabled, but its interface selection was retained because detachment could not be verified. Refresh status, then save Disabled again.'),
                 ];
                 if (!empty($apply['status'])) {
                     $response['status'] = $apply['status'];
@@ -206,7 +206,7 @@ class SettingsController extends ApiControllerBase
                 $cleared['saved'] = true;
                 $cleared['cleared'] = false;
                 $cleared['revision'] = $revision;
-                $cleared['error'] = gettext('DHCP Interface HA was disabled, but its interface selection was retained because detached state could not be verified. Refresh status, then save Disabled again.');
+                $cleared['error'] = gettext('HA DHCP Interface was disabled, but its interface selection was retained because detached state could not be verified. Refresh status, then save Disabled again.');
             }
             return $cleared;
         }
@@ -427,7 +427,7 @@ class SettingsController extends ApiControllerBase
             $candidateShared->serializeToConfig(false, true);
             $candidateLocal->serializeToConfig(false, true);
             $saveAttempted = true;
-            $config->save(['description' => gettext('DHCP Interface HA settings')]);
+            $config->save(['description' => gettext('HA DHCP Interface settings')]);
             $result = [
                 'result' => 'saved',
                 'saved' => true,
@@ -754,7 +754,7 @@ class SettingsController extends ApiControllerBase
                 } else {
                     $hasync->serializeToConfig(false, true);
                     $saveAttempted = true;
-                    $config->save(['description' => gettext('Include DHCP Interface HA in configuration sync')]);
+                    $config->save(['description' => gettext('Include HA DHCP Interface in configuration sync')]);
                     $saved = true;
                     $changed = true;
                     $result = 'saved';
@@ -906,7 +906,7 @@ class SettingsController extends ApiControllerBase
                 return [
                     'result' => 'failed',
                     'assignment_verified' => false,
-                    'error' => gettext('Disable and apply DHCP Interface HA before configuring the native assignment.'),
+                    'error' => gettext('Disable and apply HA DHCP Interface before configuring the native assignment.'),
                     'validations' => ['dhcphashared.enabled' => gettext('Save the disabled state and verify fencing before setup.')],
                 ];
             }
@@ -1766,7 +1766,7 @@ class SettingsController extends ApiControllerBase
             }
         }
         if ($carpCount === 0) {
-            $errors['dhcphashared.enabled'] = gettext('Configure native OPNsense CARP before enabling DHCP Interface HA.');
+            $errors['dhcphashared.enabled'] = gettext('Configure native OPNsense CARP before enabling HA DHCP Interface.');
         }
 
         if ($carrier === '' || $carrier === 'dhcpha0lagg') {

@@ -1,4 +1,4 @@
-"""Root operations for the experimental DHCP Interface HA controller."""
+"""Root operations for the experimental HA DHCP Interface controller."""
 
 from __future__ import annotations
 
@@ -606,7 +606,7 @@ class Controller:
             reason = "dhcpha0lagg exists but its current-boot ownership cannot be verified."
         elif not snapshot.expected_carp_instances:
             state, reason_code = "SETUP_INCOMPLETE", "carp_configuration_missing"
-            reason = "Configure native OPNsense CARP instances before enabling DHCP Interface HA."
+            reason = "Configure native OPNsense CARP instances before enabling HA DHCP Interface."
         elif not snapshot.carp_aligned:
             state, reason_code = "UNKNOWN", "carp_inventory_mismatch"
             reason = "Configured and live CARP instances do not match."
@@ -813,7 +813,7 @@ class Controller:
             with self.locked():
                 snapshot = self.snapshot()
                 if snapshot.settings.enabled:
-                    raise RuntimeError("disable DHCP Interface HA before preparing the device")
+                    raise RuntimeError("disable HA DHCP Interface before preparing the device")
                 device = snapshot.inventory.get(DHCPHA_DEVICE)
                 if device is not None and (
                     not snapshot.observed.dhcpha_owned

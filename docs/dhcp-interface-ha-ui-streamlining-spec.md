@@ -1,4 +1,4 @@
-# DHCP Interface HA: streamlined setup, diagnostics and logging
+# HA DHCP Interface: streamlined setup, diagnostics and logging
 
 Status: implementation contract for experimental 0.2_9, 2026-09-27. The companion
 [implementation plan](dhcp-interface-ha-ui-streamlining-plan.md) records actual

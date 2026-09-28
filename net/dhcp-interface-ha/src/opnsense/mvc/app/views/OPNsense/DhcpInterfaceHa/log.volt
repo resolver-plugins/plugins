@@ -50,7 +50,7 @@ $(document).ajaxError(function(event, xhr, settings) {
         </div>
         {% if localLoggingEnabled === false %}
         <div class="alert alert-warning" role="status">
-            {{ lang._('Local logging is disabled, so no new local DHCP Interface HA events are being stored.') }}
+            {{ lang._('Local logging is disabled, so no new local HA DHCP Interface events are being stored.') }}
             <a href="/ui/diagnostics/log_settings">{{ lang._('Review native logging settings') }}</a>.
         </div>
         {% elseif localLoggingEnabled === null %}

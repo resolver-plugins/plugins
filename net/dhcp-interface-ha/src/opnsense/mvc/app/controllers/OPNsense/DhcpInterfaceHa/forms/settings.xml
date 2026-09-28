@@ -1,7 +1,7 @@
 <form>
     <field>
         <id>dhcphashared.enabled</id>
-        <label>Enable DHCP Interface HA</label>
+        <label>Enable HA DHCP Interface</label>
         <type>checkbox</type>
         <help>Enable only after the local interface is configured and all required checks pass. This setting is shared by native XMLRPC configuration sync.</help>
     </field>

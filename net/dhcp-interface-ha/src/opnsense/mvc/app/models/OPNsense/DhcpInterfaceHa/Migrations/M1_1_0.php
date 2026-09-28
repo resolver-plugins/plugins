@@ -16,7 +16,7 @@ class M1_1_0 extends BaseModelMigration
             // before serializing Shared, which no longer includes it.
             $local = new Local(true);
             if (version_compare($local->getVersion(), '1.1.0', '<') && !$local->runMigrations()) {
-                throw new \RuntimeException('Unable to migrate the local DHCP Interface HA assignment.');
+                throw new \RuntimeException('Unable to migrate the local HA DHCP Interface assignment.');
             }
         } elseif ($model instanceof Local) {
             $config = Config::getInstance()->object()->OPNsense;

@@ -50,8 +50,8 @@ function dhcp_interface_ha_devices()
         'type' => 'dhcpha',
         'names' => [
             'dhcpha0lagg' => [
-                'descr' => gettext('dhcpha0lagg (DHCP Interface HA)'),
-                'ifdescr' => gettext('DHCP Interface HA'),
+                'descr' => gettext('dhcpha0lagg (HA DHCP Interface)'),
+                'ifdescr' => gettext('HA DHCP Interface'),
                 'name' => 'dhcpha0lagg',
                 'exclude' => $exclude,
             ],
@@ -71,7 +71,7 @@ function dhcp_interface_ha_prepare_device($device)
         // The controller logs its own failed attempt. Shell execution failures
         // cannot reach that event boundary and still need a native boot error.
         if (in_array($result, [126, 127], true)) {
-            log_msg('DHCP Interface HA controller could not be executed', LOG_ERR);
+            log_msg('HA DHCP Interface controller could not be executed', LOG_ERR);
         }
         return null;
     }
@@ -82,7 +82,7 @@ function dhcp_interface_ha_prepare_device($device)
 function dhcp_interface_ha_xmlrpc_sync()
 {
     return [[
-        'description' => gettext('DHCP Interface HA'),
+        'description' => gettext('HA DHCP Interface'),
         'section' => 'OPNsense.DhcpInterfaceHaShared',
         'id' => 'dhcp-interface-ha',
     ]];
