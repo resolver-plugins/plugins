@@ -1045,3 +1045,12 @@ ix0 WAN address/MAC/flags/link remained unchanged. The new process records nativ
 observations. No WAN enable or link-recovery test was performed on the appliance.
 Evidence: `/root/dhcpha-link-readiness-0.2_36.pmouo3yr`. Package SHA-256:
 `36a495a789fb365de6f9a680b1b3d208e59a82b0ba2d757ab20d45d4b4e8ed55`.
+
+HA-2 deployment: replaced 0.2_32 with the same verified 0.2_36 package. Installed
+source hashes and package integrity pass; no stale source files remain in plugin
+MVC/runtime trees. Old Python bytecode was cleared and the controller reloaded.
+Native progress/Volt and menu/tab route checks pass. UI caches were cleared and
+the web UI restarted. Configuration is unchanged: CARP remains BACKUP in
+maintenance, shared Enable is on, and the local interface is unconfigured with
+an empty detached LAGG (`SETUP_INCOMPLETE`). No interface setup or failover was
+performed. Evidence: `/root/dhcpha-package-0.2_36.M9vk1z`.
