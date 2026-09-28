@@ -39,7 +39,8 @@ The release must pass:
 
 - The plugin controller, PHP, UI, hook and release-helper tests.
 - A native package build, target-parser checksum validation, installation and
-  menu/tab route resolution in a disposable FreeBSD VM.
+  menu/tab route resolution in a disposable FreeBSD VM. Fresh status must also
+  show a running controller with no interface configured or attached.
 - Validation of build identity against trusted source/profile and package-manager
   pins, and a signing-key/public-key match before creating the signed catalogue.
 - Installation through the staged signed catalogue in a fresh VM.

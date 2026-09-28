@@ -1,0 +1,10 @@
+#!/bin/sh
+# Status and guarded setup need the controller's transition lock before first use.
+# Start on installation as well as boot; preserve a running controller on upgrade.
+if [ -n "${PKG_ROOTDIR:-}" ] && [ "${PKG_ROOTDIR}" != / ]; then
+    exit 0
+fi
+service=/usr/local/etc/rc.d/dhcp_interface_ha
+if ! "$service" onestatus >/dev/null 2>&1; then
+    "$service" onestart || exit 1
+fi

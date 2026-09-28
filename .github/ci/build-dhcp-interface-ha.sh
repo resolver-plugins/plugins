@@ -47,6 +47,7 @@ fi
 "$pkg_static" add "$package"
 "$pkg_static" check -s os-dhcp-interface-ha-devel
 /usr/local/bin/php "$plugin/tests/native/test_ui_routes.php"
+python3 "$plugin/tests/native/test_fresh_install.py"
 python3 "$ci/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 
 mkdir -p "$output"

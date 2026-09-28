@@ -871,3 +871,16 @@ Deployed 0.2_30 to both nodes, verified installed source hashes and package inte
 cleared compiled plugin templates/compressed caches and restarted both web UIs.
 Evidence: HA-1 `/root/dhcpha-upgrade-0.2_30.aOC78J`;
 HA-2 `/root/dhcpha-fix-0.2_30.pRjAC7`.
+
+### 0.2_31 — initialize controller on fresh package installation
+
+Testing on reset HA-2 found that package installation registered the UI/models but
+never started the controller: status failed with “interface transition state is
+not initialized”, preventing initial setup. The boot hook alone did not cover
+installation without reboot. A post-install hook now starts a missing controller,
+skips offline package roots and preserves a running controller on upgrade.
+
+A lifecycle regression check covers first install, running-service preservation,
+offline roots and start failure. Both native build and signed-install workflow
+gates now require readable initial status, a running controller and no configured
+or attached interface. The runtime status reader remains read-only.

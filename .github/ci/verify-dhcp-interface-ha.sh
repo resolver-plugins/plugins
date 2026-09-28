@@ -47,4 +47,5 @@ sort /tmp/dhcpha-installed-files > /tmp/dhcpha-installed-sorted
 cmp /tmp/dhcpha-expected-sorted /tmp/dhcpha-installed-sorted
 pkg check -s os-dhcp-interface-ha-devel
 /usr/local/bin/php "$root/net/dhcp-interface-ha/tests/native/test_ui_routes.php"
+python3 "$root/net/dhcp-interface-ha/tests/native/test_fresh_install.py"
 python3 "$ci/target_pkg.py" verify "$root/.resolver-plugins/target-pkg.json" "$series"

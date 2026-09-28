@@ -12,6 +12,31 @@ PLUGIN = Path(__file__).resolve().parents[1]
 
 
 class HookTests(unittest.TestCase):
+    def test_install_starts_missing_controller_but_preserves_running_or_offline_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = root / 'service'
+            calls = root / 'calls'
+            service.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$CALLS"\n'
+                               'case "$1" in\n'
+                               'onestatus) exit "$RUNNING_RESULT" ;;\n'
+                               'onestart) exit "$START_RESULT" ;;\nesac\n')
+            service.chmod(0o755)
+            script = (PLUGIN / '+POST_INSTALL.post').read_text().replace(
+                '/usr/local/etc/rc.d/dhcp_interface_ha', shlex.quote(str(service))).replace('"$service" ', 'sh "$service" ')
+            for offline, running, start, expected in (
+                ('', '1', '0', ['onestatus', 'onestart']),
+                ('/', '0', '0', ['onestatus']),
+                (directory, '1', '0', []),
+                ('', '1', '1', ['onestatus', 'onestart']),
+            ):
+                calls.unlink(missing_ok=True)
+                result = subprocess.run(['sh'], input=script, text=True, capture_output=True,
+                                        env={**os.environ, 'PKG_ROOTDIR': offline, 'CALLS': str(calls),
+                                             'RUNNING_RESULT': running, 'START_RESULT': start})
+                self.assertEqual(result.returncode, int(start), result.stderr)
+                self.assertEqual(calls.read_text().splitlines() if calls.exists() else [], expected)
+
     def test_disabled_plugin_releases_carrier_for_native_assignment_restoration(self):
         fixture = r'''
             namespace OPNsense\Core {

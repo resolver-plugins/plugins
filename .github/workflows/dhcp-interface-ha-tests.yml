@@ -67,10 +67,11 @@ jobs:
             xargs -0 -n1 php -l
       - name: Package and service shell lint
         run: |
+          sh -n net/dhcp-interface-ha/+POST_INSTALL.post
           sh -n net/dhcp-interface-ha/+PRE_DEINSTALL.pre
           sh -n net/dhcp-interface-ha/+POST_DEINSTALL.post
           find net/dhcp-interface-ha/src/etc/rc.d net/dhcp-interface-ha/src/etc/rc.syshook.d net/dhcp-interface-ha/src/etc/rc.carp_service_status.d -type f -print0 | xargs -0 -n1 sh -n
-          shellcheck -s sh -e SC1091 net/dhcp-interface-ha/+PRE_DEINSTALL.pre net/dhcp-interface-ha/+POST_DEINSTALL.post
+          shellcheck -s sh -e SC1091 net/dhcp-interface-ha/+POST_INSTALL.post net/dhcp-interface-ha/+PRE_DEINSTALL.pre net/dhcp-interface-ha/+POST_DEINSTALL.post
           find net/dhcp-interface-ha/src/etc/rc.d net/dhcp-interface-ha/src/etc/rc.syshook.d net/dhcp-interface-ha/src/etc/rc.carp_service_status.d -type f -exec shellcheck -s sh -e SC1091 {} +
       - name: Release helper regression tests
         run: |
