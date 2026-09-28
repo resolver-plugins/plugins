@@ -27,7 +27,7 @@ python3 "$ci/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$
 # Explicitly select the development package, regardless of the checkout's Mk marker.
 # Do not use make clean: the upstream target resets tracked plugin source.
 rm -rf "$plugin/work"
-"$make_command" -C "$plugin" _PLUGIN_DEVEL=yes PLUGIN_ABI="$series" PLUGIN_HASH="$SOURCE_COMMIT" package
+"$make_command" -C "$plugin" PLUGIN_DEVEL=yes PLUGIN_ABI="$series" PLUGIN_HASH="$SOURCE_COMMIT" package
 python3 "$ci/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 set -- "$plugin"/work/pkg/os-dhcp-interface-ha-devel-*.pkg
 if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then

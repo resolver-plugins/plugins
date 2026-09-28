@@ -114,7 +114,7 @@ def test_builder_retains_target_parser_and_native_installation_gates():
     assert builder.index('package_checksums.py"') < builder.index('"$pkg_static" add "$package"')
     assert builder.index('"$pkg_static" check -s') < builder.index('cp "$package" "$output/"')
     assert builder.index('test_ui_routes.php') < builder.index('cp "$package" "$output/"')
-    assert '_PLUGIN_DEVEL=yes PLUGIN_ABI="$series"' in builder
+    assert 'PLUGIN_DEVEL=yes PLUGIN_ABI="$series"' in builder
     assert 'rm -rf "$plugin/work"' in builder
 
 import json
