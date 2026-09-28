@@ -737,3 +737,20 @@ PHP lint, XML parsing, focused metadata/log integration tests and diff checks
 pass. Deployed 0.2_23 to HA-2; package integrity and all 26 installed source
 hashes verified. Native router resolves General, Settings and Log. UI cache
 cleared and web UI restarted. Evidence: `/root/dhcpha-fix-0.2_23.ECC4PQ`.
+
+
+### HA-1 upgrade to 0.2_23
+
+Upgraded HA-1 from 0.2_8 using the same verified package as HA-2. Retained the
+old package and configuration under `/root/dhcpha-upgrade-0.2_23.cFUaKp`.
+Configuration was byte-identical after installation and final verification.
+Verified all 26 installed source hashes, package integrity, absence of obsolete
+package files and unexpected files in plugin directories, and absence of legacy
+WAN HA plugin files or obsolete plugin configuration fields. Cleared plugin
+Python bytecode, compiled PHP/Volt templates and lighttpd compressed cache.
+Restarted the controller and web UI; the replacement controller PID was 70958.
+Native General, Settings and Log routes resolve; HTTPS responds successfully.
+Final runtime was ACTIVE, CARP MASTER, hn0 attached to owned dhcpha0lagg,
+shared MAC 00:15:5d:05:74:26, IPv4 10.250.100.100. Native assignment controller
+matches HA-2; its older interface model differs only in new-interface identifier
+handling, outside this plugin's existing-assignment relink path.
