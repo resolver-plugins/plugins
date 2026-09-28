@@ -993,3 +993,17 @@ flags/link/MAC and the running plugin controller PID remained unchanged.
 Evidence: `/root/dhcpha-save-progress-0.2_34.8bokuxcs`. Native test package SHA-256:
 `b50a999e178e87c2c2fd7c2ae32d316832a86d4488349712159207b966432579`.
 This is not a signed CI release; HA-2 was not updated.
+
+### 0.2_35 — wait for selected-interface lookup before Save
+
+The first Save could reject the interface as unavailable or ambiguous while the
+asynchronous carrier preview was still loading. The next click could then pass
+after that same lookup completed. This is a UI race before configuration is
+submitted, separate from the physical ix0 link-readiness investigation.
+
+Keep Save disabled with a Loading interface label until the current selection's
+lookup finishes. Older responses cannot release the current selection's pending
+state. Failed lookups release the loading state and explain how to retry without
+claiming configuration was attempted. Existing server-side assignment checks
+and runtime eligibility are unchanged. UI regressions reproduce a delayed
+lookup, a failed lookup and responses arriving for a superseded selection.

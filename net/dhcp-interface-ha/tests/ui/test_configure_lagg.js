@@ -19,7 +19,7 @@ function between(start, end) {
 
 function progressContext(values) {
     const context = vm.createContext(Object.assign({
-        saveProgress: null, saveProgressTimer: null, settingsBusy: false, configureBusy: false,
+        saveProgress: null, saveProgressTimer: null, settingsBusy: false, configureBusy: false, carrierPreviewPending: false,
         crypto: {getRandomValues: bytes => bytes.fill(1)}, Uint8Array,
         setTimeout: () => 1, clearTimeout: () => {}
     }, values));
@@ -350,6 +350,35 @@ function deferredAjax(onChange) {
             always();
         }
     };
+}
+
+async function testSaveWaitsForInterfaceLookup() {
+    const fixture = configureFixture();
+    const request = deferredAjax(() => {});
+    fixture.context.getJson = () => request;
+    vm.runInContext(between('    function loadCarrierPreview(', '    function updateAddressDetail('), fixture.context);
+    vm.runInContext('loadCarrierPreview("opt7", ""); updateActions()', fixture.context);
+    assert.equal(fixture.dom.nodes['#saveSettings'].props.disabled, true,
+        'Save must wait for the selected interface lookup instead of reporting an ambiguous device');
+    await vm.runInContext('configureSelectedLagg()', fixture.context);
+    assert.equal(fixture.calls.length, 0);
+    assert.equal(fixture.dom.getText('#setupResult'), '', 'a pending lookup is not an error');
+    request.resolve({interface: 'opt7', managed: {current_device: 'ix0', description: 'WAN'}, errors: {}});
+    assert.equal(fixture.dom.nodes['#saveSettings'].props.disabled, false);
+    assert.equal(fixture.context.previewDevice, 'ix0');
+    await vm.runInContext('configureSelectedLagg()', fixture.context);
+    assert.equal(fixture.calls.length, 1, 'the first available Save submits configuration');
+
+    const failed = configureFixture();
+    const failedRequest = deferredAjax(() => {});
+    failed.context.getJson = () => failedRequest;
+    vm.runInContext(between('    function loadCarrierPreview(', '    function updateAddressDetail('), failed.context);
+    vm.runInContext('loadCarrierPreview("opt7", "")', failed.context);
+    failedRequest.reject(new Error('timeout'));
+    assert.equal(failed.context.carrierPreviewPending, false, 'a failed lookup does not leave the page loading forever');
+    await vm.runInContext('configureSelectedLagg()', failed.context);
+    assert.equal(failed.calls.length, 0);
+    assert.match(failed.dom.getText('#setupResult'), /no configuration was submitted/);
 }
 
 async function testConfigureHandler() {
@@ -785,8 +814,11 @@ async function testOldCarrierPreview() {
     requests[0].resolve({interface: 'opt7', managed: {current_device: 'em0', description: 'LAN'}, errors: {}});
     assert.equal(context.managedDescription, 'WAN');
     assert.equal(context.previewDevice, 'em1');
-
-
+    vm.runInContext('loadCarrierPreview("opt7", ""); loadCarrierPreview("opt8", "");', context);
+    requests[2].resolve({interface: 'opt7', managed: {current_device: 'em0'}, errors: {}});
+    assert.equal(context.carrierPreviewPending, true, 'a stale lookup cannot unlock Save for the current selection');
+    requests[3].resolve({interface: 'opt8', managed: {current_device: 'em1'}, errors: {}});
+    assert.equal(context.carrierPreviewPending, false);
 }
 
 function testSummaryAndAddressMeaning() {
@@ -934,6 +966,7 @@ async function testSaveProgress() {
 
 (async () => {
     await testSaveProgress();
+    await testSaveWaitsForInterfaceLookup();
     await testConfigureHandler();
     await testConfigureReadbackGuards();
     await testSharedStatusReadbackAndFreshness();

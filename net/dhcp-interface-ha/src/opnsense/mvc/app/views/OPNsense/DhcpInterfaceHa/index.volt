@@ -21,6 +21,7 @@ $(document).ready(function() {
     let managedDescription = "";
     let localCarrier = "";
     let previewDevice = "";
+    let carrierPreviewPending = false;
     let savedEnabled = false;
     let savedMapping = {managed: "", carrier: ""};
     let configureBusy = false;
@@ -254,6 +255,9 @@ $(document).ready(function() {
         invalidateStatus();
         localCarrier = savedCarrier || "";
         previewDevice = "";
+        carrierPreviewPending = !!interfaceId;
+        $("#carrierLoadError").hide();
+        updateActions();
         if (!interfaceId) {
             managedDescription = "";
             updateActions();
@@ -278,6 +282,11 @@ $(document).ready(function() {
                 previewDevice = "";
                 $("#carrierLoadError").text("Interface assignment inventory is unavailable. The saved selection and MAC field are unchanged.").show();
                 updateActions();
+            }).always(function() {
+                if (request === selectionGeneration) {
+                    carrierPreviewPending = false;
+                    updateActions();
+                }
             });
     }
 
@@ -456,7 +465,8 @@ $(document).ready(function() {
             .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Save is blocked; do not guess.");
         const identityChangeBlocked = savedEnabled && !disabledSelection && managed !== savedMapping.managed;
         $("#saveSettings").show()
-            .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || identityChangeBlocked);
+            .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || carrierPreviewPending || configureOutcomeBlocked || identityChangeBlocked)
+            .text(carrierPreviewPending ? "Loading interface…" : "Save & Apply");
         $("#saveIdentityNote").toggle(identityChangeBlocked)
             .text("Save Disable with the current interface first, then wait for fresh detached status before changing identity.");
         $("#retryApply").prop("disabled", !canRunRecovery || configureBusy || settingsBusy || configureOutcomeBlocked);
@@ -786,7 +796,7 @@ $(document).ready(function() {
     }
 
     async function configureSelectedLagg() {
-        if (configureBusy || settingsBusy) {
+        if (configureBusy || settingsBusy || carrierPreviewPending) {
             return;
         }
         if (configureOutcomeBlocked) {
@@ -819,7 +829,9 @@ $(document).ready(function() {
         }
         if (!retryReady && !mappedDeviceNeedsRecovery(managed)
             && (!previewDevice || previewDevice === "dhcpha0lagg")) {
-            saveMessage("#setupResult", "The original native device is unavailable or ambiguous. Refresh the assignment before continuing.");
+            saveMessage("#setupResult", !previewDevice
+                ? "The selected interface assignment could not be loaded. Reselect the interface to retry the lookup; no configuration was submitted."
+                : "The selected interface already uses dhcpha0lagg, but its original carrier could not be verified. Check the plugin Log and recheck the saved setup before continuing.");
             return;
         }
 
@@ -909,7 +921,7 @@ $(document).ready(function() {
     }
 
     function saveFromForm() {
-        if (settingsBusy || configureBusy) {
+        if (settingsBusy || configureBusy || carrierPreviewPending) {
             return;
         }
         clearTimeout(saveProgressTimer);
