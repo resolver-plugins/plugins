@@ -307,7 +307,7 @@ $(document).ready(function() {
         clearTimeout(staleTimer);
         setSummary("Status unavailable", "label-default");
         $("#detailRole, #detailAttachment, #detailAddress, #detailController, "
-            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA, #detailRemoval")
+            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA")
             .text("Unavailable");
         updateActions();
     }
@@ -328,10 +328,6 @@ $(document).ready(function() {
         const ha = data.ha || {};
         const pfsync = ha.pfsync || {};
         const xmlrpc = ha.xmlrpc || {};
-        const removal = data.removal || {};
-        const assignments = (removal.assignments || []).map(function(item) {
-            return (item.description || item.identifier) + " (" + item.identifier + ")";
-        });
         $("#detailRole").text((carp.role || "Unknown") + " · maintenance " + String(carp.maintenance));
         $("#detailAttachment").text((attachment.actual || "Unknown") + " · desired " + (attachment.desired || "Unknown")
             + " · ownership " + String(attachment.owned));
@@ -356,11 +352,6 @@ $(document).ready(function() {
             + " · XMLRPC destination " + (xmlrpc.sender_configured ? "configured" : "not configured")
             + " · this plugin " + (xmlrpc.plugin_settings_sync === true ? "included" : (xmlrpc.plugin_settings_sync === false ? "not included" : "unknown"))
             + " · peer readiness unverified");
-        $("#pfsyncRuntime").text(JSON.stringify(pfsync.runtime || "Unavailable", null, 2));
-        $("#removalStatus").text(removal.allowed
-            ? "Ready for native package removal: no logical assignments use dhcpha0lagg and the plugin path is verified detached."
-            : ((removal.reason || "Removal safety could not be verified.") + (assignments.length ? " Current assignments: " + assignments.join(", ") + "." : "")));
-        $("#detailRemoval").text($("#removalStatus").text());
         updateMacSuggestion({interface: (data.managed || {}).identifier, managed: {
             current_device: (data.managed || {}).device,
             effective_mac_suggestion: (carrier || {}).mac,
@@ -433,7 +424,7 @@ $(document).ready(function() {
             .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || identityChangeBlocked);
         $("#saveIdentityNote").toggle(identityChangeBlocked)
             .text("Save Disable with the current interface first, then wait for fresh detached status before changing identity.");
-        $("#prepareDevice, #reconcileDiagnostics, #retryApply").prop("disabled", !canRunRecovery || configureBusy || settingsBusy || configureOutcomeBlocked);
+        $("#retryApply").prop("disabled", !canRunRecovery || configureBusy || settingsBusy || configureOutcomeBlocked);
         $("#generateMac").prop("disabled", !canGenerateMac || configureBusy || settingsBusy || configureOutcomeBlocked);
         if (!canWriteSettings) {
             $("#frm_Settings :input").prop("disabled", true);
@@ -793,7 +784,7 @@ $(document).ready(function() {
         const expectedFormGeneration = formGeneration;
         const expectedCarrier = managed === savedMapping.managed && localCarrier
             ? localCarrier : (previewDevice === "dhcpha0lagg" ? savedMapping.carrier : previewDevice);
-        const buttons = $("#recheckConfigure, #saveSettings, #prepareDevice, #reconcileDiagnostics, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
+        const buttons = $("#recheckConfigure, #saveSettings, #retryApply, #generateMac, #useCurrentMac, #resetFailback").prop("disabled", true);
         const inputs = $("#frm_Settings :input");
         const disabledStates = inputs.map(function() { return $(this).prop("disabled"); }).get();
         inputs.prop("disabled", true);
@@ -851,7 +842,7 @@ $(document).ready(function() {
             }
             refreshStatus();
         }).fail(function() {
-            $("#diagnosticResult").text("Recovery result is unknown. Refresh status before retrying.");
+            $("#settingsResult").text("Recovery result is unknown. Refresh status before retrying.");
             renderStatusUnavailable("Recovery result is unknown. Refresh status before relying on the previous state.");
         }).always(function() {
             button.prop("disabled", false);
@@ -882,10 +873,7 @@ $(document).ready(function() {
 
     $("#saveSettings").on("click", saveFromForm);
     $("#recheckConfigure").on("click", recheckConfigureOutcome);
-    $("#prepareDevice").on("click", function() {
-        runRecovery($(this), "/service/prepare", "Device ownership and detached state verified.");
-    });
-    $("#reconcileDiagnostics, #retryApply").on("click", function() {
+    $("#retryApply").on("click", function() {
         runRecovery($(this), "/service/apply", "Guarded reconciliation completed.");
     });
     $("#refreshDiagnostics").on("click", function() {
@@ -914,7 +902,7 @@ $(document).ready(function() {
     $("#resetFailback").on("click", function() {
         $("#failbackDelay").val("0");
         $("#failbackWarning").hide();
-        $("#diagnosticResult").text("Reset selected in the unsaved form. Return to Settings and choose Save & Apply to store it.");
+        $("#settingsResult").text("Reset selected in the unsaved form. Return to Settings and choose Save & Apply to store it.");
         showTab("#settings");
         updateActions();
     });
@@ -931,18 +919,6 @@ $(document).ready(function() {
         formGeneration++;
         configureRetryReady = false;
         updateActions();
-    });
-    $("#downloadSnapshot").on("click", function() {
-        getJson(api + "/status/snapshot", 20000).done(function(data) {
-            const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = "dhcp-interface-ha-diagnostics.json";
-            link.click();
-            URL.revokeObjectURL(link.href);
-        }).fail(function() {
-            $("#diagnosticResult").text("Diagnostic snapshot unavailable; no file was downloaded.");
-        });
     });
     $("#maintabs a[data-toggle='tab']").on("shown.bs.tab", function(event) {
         const hash = $(event.target).attr("href");
@@ -1042,19 +1018,7 @@ $(document).ready(function() {
                 <dt>{{ lang._('Native DHCP observation') }}</dt><dd id="detailDhcp">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('IPv4 gateway') }}</dt><dd id="detailGateway">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('HA configuration') }}</dt><dd id="detailHA">{{ lang._('Unknown') }}</dd>
-                <dt>{{ lang._('Removal readiness') }}</dt><dd id="detailRemoval">{{ lang._('Unknown') }}</dd>
             </dl>
-            <details>
-                <summary>{{ lang._('pfsync runtime observations') }}</summary>
-                <pre id="pfsyncRuntime">{{ lang._('Unavailable') }}</pre>
-            </details>
-            <h4>{{ lang._('Guarded recovery') }}</h4>
-            <p>{{ lang._('Recovery is explicit and uses the current saved settings. Only verified plugin-owned state can be changed.') }}</p>
-            {% if canRunRecovery %}
-            <button class="btn btn-default" id="prepareDevice" type="button">{{ lang._('Prepare detached device') }}</button>
-            <button class="btn btn-primary" id="reconcileDiagnostics" type="button">{{ lang._('Reconcile now') }}</button>
-            {% else %}<p>{{ lang._('This account cannot run guarded plugin recovery actions.') }}</p>{% endif %}
-            <p id="diagnosticResult" role="status"></p>
             <h4>{{ lang._('Native configuration') }}</h4>
             <ul>
                 <li><a href="/ui/interfaces/assign">{{ lang._('Interfaces: Assignments') }}</a></li>
@@ -1064,10 +1028,7 @@ $(document).ready(function() {
                 <li><a href="/ui/syslog">{{ lang._('System: Settings: Logging / Targets') }}</a></li>
                 <li><a href="/ui/firmware/plugins">{{ lang._('Firmware: Plugins') }}</a></li>
             </ul>
-            <p id="removalStatus">{{ lang._('Removal readiness is unavailable until status is refreshed.') }}</p>
-            <button class="btn btn-default" id="downloadSnapshot" type="button">{{ lang._('Download diagnostic snapshot') }}</button>
             <button class="btn btn-default" id="refreshDiagnostics" type="button">{{ lang._('Refresh') }}</button>
-            <p>{{ lang._('The snapshot contains local interface, MAC and HA peer observations. It excludes credentials and unrelated configuration.') }}</p>
         </div>
     </div>
 </section>

@@ -404,11 +404,11 @@ user-action blockers should be visually distinguishable. **Show all checks**
 retains the complete evidence, including successful checks. Do not show an
 unknown peer-readiness note as a local failure.
 
-Move detailed CARP instances, desired/actual attachment, controller process,
-carrier/LAGG flags including receive mode, DHCP/gateway observations, pfsync,
-native HA context, removal readiness and snapshot download here. Expose the
-existing guarded prepare/reconcile operations as recovery tools rather than
-normal setup requirements.
+Show desired/actual attachment, controller process, carrier/LAGG receive mode,
+DHCP/gateway observations and native HA context. Do not show guarded recovery
+buttons, the pfsync runtime dump, package-removal readiness/instructions or
+snapshot download controls. Save & Apply owns setup and reconciliation; keep
+its failure-specific Retry Apply action and all backend safety checks.
 
 Automatic repair is limited to verified plugin ownership and existing operator
 intent. It must recheck role, ownership and configuration at transition

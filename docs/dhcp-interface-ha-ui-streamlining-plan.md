@@ -1,6 +1,6 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_20**, 2026-09-28, following
+Status: source implementation for experimental **0.2_21**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -699,3 +699,16 @@ automatic status updates and the Diagnostics refresh action remain.
 UI behavior suite and diff checks pass. Deployed 0.2_20 to HA-2; package integrity
 and all installed source hashes verified, UI cache cleared and web UI restarted.
 Evidence: `/root/dhcpha-fix-0.2_20.8N2vzv`.
+
+
+### 0.2_21 — remove redundant Diagnostics controls
+
+Remove the Guarded recovery section, expandable pfsync runtime dump, package
+removal instructions/readiness row, snapshot download button and disclosure.
+Remove their unused rendering/event handlers. Keep observed details, native
+configuration links and Refresh. Settings still supports Retry Apply after an
+apply failure; its feedback appears in Settings. Backend guards remain intact.
+
+Both UI suites and diff checks pass. Deployed 0.2_21 to HA-2; installed source
+hashes and package integrity verified. Cleared the UI cache and restarted the
+web UI. Evidence: `/root/dhcpha-fix-0.2_21.FwyGrE`.
