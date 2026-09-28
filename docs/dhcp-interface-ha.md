@@ -171,29 +171,18 @@ for the native sections that are synchronized. Matching this plugin's device and
 MAC does not establish whole-firewall configuration equivalence or pfsync session
 continuity; those remain pair qualification requirements.
 
-### 5.2.1 Upgrade from schema 1.0.0
+### 5.2.1 Fresh-install model baseline
 
-Package 0.2 uses model version 1.1.0. Move `managed_interface` from
-`OPNsense/DhcpInterfaceHaShared` to `OPNsense/DhcpInterfaceHaLocal`; the other
-fields and XML mounts retain their meanings. XMLRPC still registers only Shared.
-
-- Copy the legacy selection once on each node before serializing Shared without
-  that field. Migration MUST work regardless of which model migrates first.
-- Preserve an existing local field, including an explicitly empty selection.
-  Preserve an unavailable legacy identifier visibly for the administrator to fix.
-- A fresh installation has an empty local selection. Runtime and API MUST NOT
-  fall back to a legacy shared selection or to WAN.
-- Once Local is version 1.1.0, later shared sync, including from an older sender,
-  MUST NOT copy a managed-interface value into Local.
-- The Settings API uses `dhcphalocal.managed_interface`. A legacy
-  `dhcphashared.managed_interface` POST is rejected; refresh open pages after
-  upgrade. No stale browser payload may overwrite the node's mapping.
-- Upgrade both nodes while the plugin is disabled and verify each local mapping
-  before enabling or resuming shared synchronization. Mixed controller versions
-  are not a supported pair; there is no reverse schema migration on downgrade.
+This release has no custom schema migrations or legacy configuration import.
+Both models retain their native version metadata for OPNsense initialization.
+New installations start disabled with no local interface selected. Runtime and
+API code use only `dhcphalocal.managed_interface`; they never fall back to a
+shared interface selection or an implicit WAN. Shared XMLRPC synchronization
+must not change the local mapping, and extra shared-interface POST fields remain
+invalid. Older experimental configurations are not an upgrade source.
 
 The local model stores the selection as optional text so removed assignments can
-survive migration and remain visible. The API supplies native assignment choices
+remain visible after the native assignment is removed. The API supplies native assignment choices
 and validates existence and eligibility before enablement; the root controller
 rechecks the local assignment on every transition.
 

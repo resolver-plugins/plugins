@@ -80,22 +80,12 @@ Ping-based handover checks and passive conflict observations were discussed but
 are not implemented in this restored baseline. Native paired handover and boot
 qualification remain open.
 
-## Renaming an experimental installation
+## Initial configuration
 
-The older `os-wan-ha-dhcp` package uses a different virtual device and
-configuration namespace. Reassign any logical interface away from
-`wanha0lagg`, stop the old service, and remove that package before installing
-`os-dhcp-interface-ha`. The two packages conflict. The old package's disabled
-test settings are not migrated automatically; set the new shared and local
-settings explicitly.
-
-## Upgrading to 0.2
-
-Both the managed logical interface and carrier are node-local. Model migration
-copies the old shared interface selection into Local once, preserving any existing
-local selection. Later XMLRPC sync cannot replace it. New installations have no
-implicit WAN selection. Upgrade both nodes while disabled, refresh the UI and
-verify each local mapping before enabling. Do not run a mixed-version pair.
+This is a fresh-install release. It has no custom schema migrations or import
+path from older experimental configurations. The managed logical interface and
+carrier are node-local from the outset; new installations select no interface.
+Shared XMLRPC synchronization cannot replace the local mapping.
 
 Native XMLRPC rules, NAT and gateways may refer to logical IDs. With differing
 IDs, arrange equivalent references independently or align the IDs for synchronized

@@ -898,3 +898,12 @@ maintenance state remained unchanged. HA-1 remained ACTIVE/MASTER at
 117 plugin tests, 16 focused release-helper tests, shell lint and workflow lint
 pass. The local test package is built from commit `2d5533de4`; SHA-256:
 `892a4e2349f75ab5c6336aa8ad27b3fdc9c9ffc20e695142c0835c51fa3d6384`.
+
+### 0.2_32 — fresh-install release without legacy model migration
+
+Remove the custom M1_1_0 migration and its migration-only native fixture. The
+plugin no longer copies a managed interface from the former Shared field into
+Local. Native model version metadata and initialization remain, as do current
+scope validation, setup/teardown and package lifecycle safety checks. Historical
+migration evidence above describes development builds, not a supported upgrade
+path for this release.

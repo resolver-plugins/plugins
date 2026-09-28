@@ -432,6 +432,8 @@ field. NIC drivers, device numbers and OPNsense `optN` IDs may differ. Both side
 retain `dhcpha0lagg`, the shared MAC and connection to the intended segment.
 See design section 5.2 for synchronization boundaries and upgrade requirements.
 
+Historical implementation (removed in 0.2_32 for the fresh-install release):
+
 Schema 1.1.0 migration preserves the legacy selection before Shared serialization,
 works in either model order and does not overwrite an existing Local field.
 It records Local's version so later legacy Shared XMLRPC cannot re-import the
@@ -447,9 +449,8 @@ Verification added for A17/A18:
 - Native migration fixture: ten cases passed on HA-2 using the actual OPNsense
   framework and synthetic in-memory configuration, with no save or interface
   commands. Covers both model orders and later legacy Shared sync in every case.
-- Run the native fixture on an OPNsense test host with:
-  `php net/dhcp-interface-ha/tests/native/test_model_migration.php /absolute/path/to/net/dhcp-interface-ha/src/opnsense/mvc/app/models/OPNsense/DhcpInterfaceHa`.
-  It requires the native framework and is separate from the Linux unittest suite.
+- The historical native migration fixture was removed with the migration code.
+
 
 Two-node DHCP handoff and pfsync continuity with differing assignments remain
 unqualified. Native XMLRPC rules, NAT and gateways still require correct logical
