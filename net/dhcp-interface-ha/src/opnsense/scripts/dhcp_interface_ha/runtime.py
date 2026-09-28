@@ -224,7 +224,7 @@ class Controller:
         """
         fields = self._event_context(snapshot)
         desired = desired_state(snapshot.settings, snapshot.observed)
-        fields.update(enabled=snapshot.settings.enabled, role=desired.role.value)
+        fields.update(enabled=snapshot.settings.enabled, role=reduce_carp_role(snapshot.observed.carp_states).value)
         for label, device in (("carrier", snapshot.observed.carrier), ("lagg", snapshot.observed.dhcpha)):
             item = snapshot.inventory.get(device.name, {})
             fields.update({

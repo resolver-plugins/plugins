@@ -543,6 +543,11 @@ class RuntimeTests(unittest.TestCase):
         self.controller.reconcile()
         self.assertIn('carrier_ipv4=1', self.event_messages('interface_observed')[0])
 
+        # Unmanaged desired state must not hide the actually observed CARP role.
+        self.edit('<if>dhcpha0lagg</if>', '<if>ix0</if>')
+        self.controller.reconcile()
+        self.assertIn('role=MASTER', self.event_messages('interface_observed')[-1])
+
     def test_status_distinguishes_known_empty_ipv4_from_unknown_inventory(self):
         self.host.items[DHCPHA_DEVICE]['ipv4'] = []
         self.assertEqual(self.controller.status()['ipv4_addresses'], [])
