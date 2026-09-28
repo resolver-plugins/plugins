@@ -944,3 +944,14 @@ read-only status/health remain silent. The new regression covers an ix-named
 carrier with no link, changing administrative state, residual addressing and
 steady-state suppression. All 118 Python tests pass. Live reproduction requires
 a coordinated WAN interruption with the administrator.
+
+Native verification: installed the 0.2_33 test package from `9edf1506a` on HA-1
+while disabled/unconfigured, then restarted only the plugin controller to load
+the logger. Installed source hashes and package integrity match. Configuration,
+native WAN assignment, ix0 flags/link/MAC/IPv4 remain unchanged. The new process
+writes the additional event to the native log with observed MASTER role, even
+while the plugin is unmanaged. Evidence:
+`/root/dhcpha-logging-0.2_33.hwz8602h`. Package SHA-256:
+`f11e3c224057e02c2fe91508583c073af09ef23d5810613fbc7e82b07be1ab9a`.
+HA-2 was unavailable over SSH; it was not updated. No live WAN setup retry was
+performed, and the ix0 failure is not yet resolved.
