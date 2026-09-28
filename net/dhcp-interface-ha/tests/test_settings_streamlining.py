@@ -69,6 +69,15 @@ class SettingsStreamliningTests(unittest.TestCase):
         failed = run_controller("configure_apply_failed", flags={"enabled": "1"})
         self.assertEqual(failed["shared"]["enabled"], "0")
 
+    def test_unchanged_enabled_save_does_not_relink(self):
+        outcome = run_controller("save_unchanged_enabled", action="settings")
+        self.assertEqual(outcome["response"]["result"], "saved")
+        self.assertEqual(outcome["assignments"]["wan"], "dhcpha0lagg")
+        self.assertEqual(outcome["pending"], [])
+        self.assertNotIn("interface apply", outcome["events"])
+        self.assertNotIn("dhcp_interface_ha prepare_setup", outcome["events"])
+        self.assertEqual(outcome["shared"]["enabled"], "1")
+
     def test_configure_defaults_empty_shared_mac_to_selected_interface(self):
         outcome = run_controller("configure_default_mac")
 

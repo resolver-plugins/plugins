@@ -264,7 +264,7 @@ endpoint independently repeats its fresh queue checks.
 An uncertain setup result keeps mutation controls blocked until full readback
 establishes completion or a safe retry. **Recheck save outcome** performs
 only reads; a normal status poll cannot clear this guard. After a page reload,
-an observed matching pending relink also exposes Recheck so the saved intent can
+a disabled setup with an observed matching pending relink also exposes Recheck so the saved intent can
 be verified without lost browser request history or manual native apply.
 
 #### Setup request and result contract
@@ -630,3 +630,9 @@ unconfirmed outcome with its reason. Internal setup-stage names are not UI copy.
 Before native restoration validation, refresh cached assignment options after
 releasing the disabled carrier reservation; a normal save must not require a
 second attempt merely to wait for configd's 30-second cache to expire.
+
+
+An ordinary save for an enabled, unchanged interface uses settings/set, never
+settings/configure or native assignment apply. Preserve its assignment preview.
+Do not display automatic pending-relink advice; explain a real queue blocker
+only when an attempted setup/save fails its checks.

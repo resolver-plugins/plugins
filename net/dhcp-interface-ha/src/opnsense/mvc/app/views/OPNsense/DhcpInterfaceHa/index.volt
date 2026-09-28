@@ -359,9 +359,8 @@ $(document).ready(function() {
         const configureAllowed = canConfigureInterface && configureAllowedInterfaces.includes(managed);
         const retryReady = configureRetryReady && configureRetryGeneration === formGeneration && managed !== "";
         const pending = statusData && statusData.setup && statusData.setup.pending_assignment;
-        const needsReadback = configureOutcomeBlocked || (!retryReady && statusIsFresh()
+        const needsReadback = configureOutcomeBlocked || (!savedEnabled && !retryReady && statusIsFresh()
             && pending && pending.available === true && pending.state === "selected_relink");
-        const queueAllowsConfigure = pendingAssignmentAllowsConfigure(retryReady);
         $("#configureBlock").toggle(idle && ((managed !== "" && !configured) || needsReadback));
         $("#recheckConfigure").toggle(idle && needsReadback)
             .prop("disabled", configureBusy || settingsBusy);
@@ -376,13 +375,6 @@ $(document).ready(function() {
             .text("Save & Apply requires fresh status confirming the disabled, detached adapter before changing the assignment.");
         $("#configureCarrierNote").toggle(idle && managed !== "" && previewDevice === "dhcpha0lagg" && !savedMapping.carrier)
             .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Save is blocked; do not guess.");
-        $("#configureQueueNote").toggle(idle && managed !== "" && !configured && !configureOutcomeBlocked
-            && statusIsFresh() && !queueAllowsConfigure)
-            .text(!pending || pending.available !== true || pending.state === "unknown"
-                ? "The native assignment queue could not be verified; refresh status before Save & Apply."
-                : (pending.state === "conflict"
-                    ? "Resolve the other pending native assignment change before Save & Apply."
-                    : "A pending relink requires verified save readback before retry."));
         const identityChangeBlocked = savedEnabled && !disabledSelection && managed !== savedMapping.managed;
         $("#saveSettings").show()
             .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || identityChangeBlocked);
@@ -546,7 +538,9 @@ $(document).ready(function() {
                         : (data.error || "Settings saved; controller apply needs attention."));
                     $("#retryApply").toggle(data.applied !== true);
                     configureRetryReady = false;
-                    loadCarrierPreview(savedMapping.managed, savedMapping.carrier);
+                    if (savedMapping.managed === "") {
+                        loadCarrierPreview("", "");
+                    }
                     refreshStatus();
                 } else {
                     $("#settingsResult").text(data.error || (data.result === "conflict"
@@ -947,7 +941,6 @@ $(document).ready(function() {
                 <p id="configureSavedStateNote" class="text-warning" style="display:none"></p>
                 <p id="configureEvidenceNote" class="text-warning" style="display:none"></p>
                 <p id="configureCarrierNote" class="text-warning" style="display:none"></p>
-                <p id="configureQueueNote" class="text-warning" style="display:none"></p>
                 <p id="saveIdentityNote" class="text-warning" style="display:none"></p>
                 <div id="configureBlock" style="display:none">
                     <button class="btn btn-default" id="recheckConfigure" type="button" style="display:none">{{ lang._('Recheck save outcome') }}</button>

@@ -380,11 +380,17 @@ async function testConfigureHandler() {
             pendingState + ' pending assignment state blocks ordinary Configure without verified retry readback');
     }
 
+    const unchanged = configureFixture({savedEnabled: true});
+    unchanged.context.statusData.setup.pending_assignment.state = 'selected_relink';
+    vm.runInContext('updateActions()', unchanged.context);
+    assert.equal(unchanged.dom.nodes['#configureQueueNote']?.visible ?? false, false,
+        'a cached pending observation must not produce unsolicited relink advice for an enabled mapping');
+
     const saving = configureFixture();
     saving.context.configureBusy = true;
     saving.context.statusData.setup.pending_assignment.state = 'selected_relink';
     vm.runInContext('updateActions()', saving.context);
-    assert.equal(saving.dom.nodes['#configureQueueNote'].visible, false,
+    assert.equal(saving.dom.nodes['#configureQueueNote']?.visible ?? false, false,
         'our own in-flight native relink is not an error or retry request');
     assert.equal(saving.dom.nodes['#recheckConfigure'].visible, false,
         'do not offer readback until the current save has finished');
@@ -459,6 +465,11 @@ function testSaveDispatchesSetup() {
     context.previewDevice = 'dhcpha0lagg';
     vm.runInContext('saveFromForm()', context);
     assert.deepEqual(calls, ['setup', 'save'], 'Save uses the ordinary settings path after setup');
+    context.savedEnabled = true;
+    context.previewDevice = 'hn1'; // stale preview must not re-run setup
+    vm.runInContext('saveFromForm()', context);
+    assert.deepEqual(calls, ['setup', 'save', 'save'], 'an enabled saved mapping never dispatches setup');
+
 }
 
 async function testConfigureReadbackGuards() {

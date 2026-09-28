@@ -568,7 +568,7 @@ namespace {
         'lan' => 'hn2',
     ];
     \OPNsense\Core\Config::$pending = [];
-    if (str_starts_with($case, 'teardown_')) {
+    if (str_starts_with($case, 'teardown_') || $case === 'save_unchanged_enabled') {
         \OPNsense\Core\Config::$shared['enabled'] = $case === 'teardown_disabled' ? '0' : '1';
         \OPNsense\Core\Config::$local = ['managed_interface' => 'wan', 'carrier' => 'hn1'];
         \OPNsense\Core\Config::$assignments['wan'] = 'dhcpha0lagg';
@@ -666,13 +666,18 @@ namespace {
         \FixtureRequest::$invalidSync = true;
     }
 
-    if ($action === 'settings') {
+    if ($action === 'settings' && $case !== 'save_unchanged_enabled') {
         \FixtureRequest::$post['dhcphashared'] = [
             'enabled' => '0',
             'shared_mac' => '02:11:22:33:44:55',
             'failback_delay' => '0',
         ];
         \FixtureRequest::$post['dhcphalocal'] = ['managed_interface' => '', 'carrier' => ''];
+    }
+
+    if ($case === 'save_unchanged_enabled') {
+        \FixtureRequest::$post['dhcphashared'] = \OPNsense\Core\Config::$shared;
+        \FixtureRequest::$post['dhcphalocal'] = \OPNsense\Core\Config::$local;
     }
 
     try {

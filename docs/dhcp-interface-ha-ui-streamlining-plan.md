@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_27**, 2026-09-28, following
+Status: source implementation for experimental **0.2_28**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -820,3 +820,22 @@ UI caches and restarted web UIs. Native Backend forced assignment-option refresh
 succeeded on both nodes. No live configuration transition was needed for this
 verification. Evidence: HA-1 `/root/dhcpha-upgrade-0.2_27.p36u8l`;
 HA-2 `/root/dhcpha-fix-0.2_27.HRnn8R`.
+
+
+### 0.2_28 — no relink advisory on normal saves
+
+Remove the automatic pending-relink text entirely; actual setup/save preflight
+failures still explain a real unresolved queue. Normal settings saves retain the
+existing interface preview rather than resetting it while another read starts.
+Do not infer setup-readback controls from old pending observations for an enabled
+saved interface. Explicit unresolved-operation guards still apply.
+
+Regression checks verify that an enabled saved mapping routes to settings/set
+even with a stale preview; the settings controller performs no native assignment
+apply and retains an empty pending queue. UI coverage reproduces an old pending
+observation after a normal save and verifies no unsolicited relink advisory.
+
+Focused controller and UI suites pass. Deployed 0.2_28 to both nodes, verified
+installed source hashes/package integrity, cleared UI caches and restarted web
+UIs. Evidence: HA-1 `/root/dhcpha-upgrade-0.2_28.CAVIXz`;
+HA-2 `/root/dhcpha-fix-0.2_28.Jru4Ik`.
