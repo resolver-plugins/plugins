@@ -15,6 +15,6 @@
         <id>dhcphashared.shared_mac</id>
         <label>Shared interface MAC</label>
         <type>text</type>
-        <help>This unicast identity is used by the active node and should match on both peers. This setting is shared through XMLRPC configuration sync.</help>
+        <help>This unicast identity is used by the active node and should match on both peers. This setting is sync from MASTER to BACKUP through XMLRPC configuration sync.</help>
     </field>
 </form>

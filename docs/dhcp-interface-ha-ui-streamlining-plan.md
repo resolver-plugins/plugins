@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_24**, 2026-09-28, following
+Status: source implementation for experimental **0.2_25**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -768,3 +768,15 @@ integrity and all installed source hashes verified. Cleared plugin compiled
 UI templates and compressed caches, then restarted both web UIs. HA-1 evidence:
 `/root/dhcpha-upgrade-0.2_24.CypXry`; HA-2:
 `/root/dhcpha-fix-0.2_24.JNAeMN`.
+
+
+### 0.2_25 — shared MAC help wording
+
+Use the requested text: “This setting is sync from MASTER to BACKUP through
+XMLRPC configuration sync.” This is a wording change only. XML parsing and
+diff checks pass; packaged source hashes verified.
+
+Deployed 0.2_25 to both nodes, verified installed source hashes/package integrity,
+cleared UI caches and restarted web UIs. Evidence:
+HA-1 `/root/dhcpha-upgrade-0.2_25.BMvW71`;
+HA-2 `/root/dhcpha-fix-0.2_25.YwZVHg`.
