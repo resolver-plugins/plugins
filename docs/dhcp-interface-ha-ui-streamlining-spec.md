@@ -141,6 +141,9 @@ foreign-device conflict by weakening ownership checks or altering that device.
 
 ### 1. Page layout and status meaning
 
+The sidebar lists General, then Settings. General is a short, read-only overview
+of the purpose, handoff, initial setup and expected states, with a link to Settings.
+
 - **Settings** is the default tab and includes the operational summary; the
   separate Status tab is removed. Existing status links/bookmarks should land on
   the summary rather than a dead tab.

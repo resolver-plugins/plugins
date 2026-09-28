@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_22**, 2026-09-28, following
+Status: source implementation for experimental **0.2_23**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -724,3 +724,16 @@ All 114 Python tests, both UI suites, PHP lint, XML parsing and diff checks pass
 Deployed 0.2_22 to HA-2; verified package integrity and all installed source
 hashes. Cleared the UI cache and restarted the web UI. Evidence:
 `/root/dhcpha-fix-0.2_22.TVf2KE`.
+
+
+### 0.2_23 — General overview page
+
+Add General above Settings in the sidebar, with a short explanation of the
+purpose, native CARP handoff, shared MAC, initial setup and expected states.
+Use a native MVC action/view and the existing Settings privilege. This page
+performs no status requests or configuration changes.
+
+PHP lint, XML parsing, focused metadata/log integration tests and diff checks
+pass. Deployed 0.2_23 to HA-2; package integrity and all 26 installed source
+hashes verified. Native router resolves General, Settings and Log. UI cache
+cleared and web UI restarted. Evidence: `/root/dhcpha-fix-0.2_23.ECC4PQ`.

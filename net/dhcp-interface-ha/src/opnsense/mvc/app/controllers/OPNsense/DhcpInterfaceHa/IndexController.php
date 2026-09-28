@@ -24,6 +24,11 @@ class IndexController extends \OPNsense\Base\IndexController
         $this->view->pick('OPNsense/DhcpInterfaceHa/index');
     }
 
+    public function generalAction()
+    {
+        $this->view->pick('OPNsense/DhcpInterfaceHa/general');
+    }
+
     public function logAction()
     {
         $this->view->canViewLogs = $this->canViewLogs();

@@ -3,6 +3,7 @@
         <name>Services: HA DHCP Interface: Settings</name>
         <patterns>
             <pattern>ui/dhcpinterfaceha</pattern>
+            <pattern>ui/dhcpinterfaceha/index/general</pattern>
             <pattern>api/dhcpinterfaceha/*</pattern>
         </patterns>
     </page-services-dhcp-interface-ha>
