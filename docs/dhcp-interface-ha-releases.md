@@ -37,6 +37,9 @@ checkout's development marker. The wrapper clears only the plugin's ignored
 
 The release must pass:
 
+The Linux test job provisions PHP CLI with XML and mbstring extensions, matching
+the model fixtures and the native UI's bounded UTF-8 progress messages.
+
 - The plugin controller, PHP, UI, hook and release-helper tests.
 - A native package build, target-parser checksum validation, installation and
   menu/tab route resolution in a disposable FreeBSD VM. Fresh status must also

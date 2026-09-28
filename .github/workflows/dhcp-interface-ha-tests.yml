@@ -50,9 +50,9 @@ jobs:
       - name: Install PHP test runtime
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y php-cli php-xml
+          sudo apt-get install --no-install-recommends -y php-cli php-xml php-mbstring
           php --version
-          php -r 'exit(extension_loaded("SimpleXML") ? 0 : 1);'
+          php -r 'exit(extension_loaded("SimpleXML") && extension_loaded("mbstring") ? 0 : 1);'
       - name: Python compile and unit tests
         run: |
           python -m compileall -q net/dhcp-interface-ha/src/opnsense/scripts/dhcp_interface_ha
