@@ -380,6 +380,15 @@ async function testConfigureHandler() {
             pendingState + ' pending assignment state blocks ordinary Configure without verified retry readback');
     }
 
+    const saving = configureFixture();
+    saving.context.configureBusy = true;
+    saving.context.statusData.setup.pending_assignment.state = 'selected_relink';
+    vm.runInContext('updateActions()', saving.context);
+    assert.equal(saving.dom.nodes['#configureQueueNote'].visible, false,
+        'our own in-flight native relink is not an error or retry request');
+    assert.equal(saving.dom.nodes['#recheckConfigure'].visible, false,
+        'do not offer readback until the current save has finished');
+
     let finishPost;
     const duplicate = configureFixture({
         post: () => new Promise(resolve => { finishPost = resolve; })

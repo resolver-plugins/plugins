@@ -621,3 +621,12 @@ Carrier reservation applies while the plugin is enabled. When disabled, native
 assignment options must include its original carrier so Disabled + Save can
 restore the logical assignment before clearing local settings. Enabling still
 validates exclusive carrier use; a conflicting native assignment blocks it.
+
+
+While a save is in progress, polling must not present that operation's temporary
+native relink as a warning or offer recovery. Clear old result messages when a
+save starts. Show no routine progress/success prose; report a final failure or
+unconfirmed outcome with its reason. Internal setup-stage names are not UI copy.
+Before native restoration validation, refresh cached assignment options after
+releasing the disabled carrier reservation; a normal save must not require a
+second attempt merely to wait for configd's 30-second cache to expire.

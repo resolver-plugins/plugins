@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_26**, 2026-09-28, following
+Status: source implementation for experimental **0.2_27**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -797,3 +797,26 @@ verified, compiled plugin UI/compressed caches cleared and web UIs restarted.
 HA-1 configuration remained byte-identical. Evidence:
 HA-1 `/root/dhcpha-upgrade-0.2_26.Xaw7lI`;
 HA-2 `/root/dhcpha-fix-0.2_26.xFbfaN`.
+
+
+### 0.2_27 — quiet saves and fresh removal inventory
+
+Native `interface list assign-opts` has a 30-second configd cache. A carrier
+released by disabling could remain excluded from cached options, causing the
+first restoration attempt to fail native validation. Refresh through configd's
+native `!` prefix before creating the restoration model, outside the config lock.
+Retain native validation and all intent/queue checks. The fixture reproduces a
+cached excluded carrier and now verifies one-call enabled/disabled removal.
+
+During Save & Apply, suppress setup advisories and readback controls so polling
+the operation's own pending relink does not warn the user. Remove progress prose,
+clear old result text at save start, omit internal stage labels from failures,
+and retain the specific backend error when recovery readback remains incomplete.
+A UI regression checks that in-flight relinking produces no retry warning.
+
+Validation: 114 Python tests, both UI suites, PHP lint and diff checks pass.
+Installed 0.2_27 on both nodes, verified source hashes/package integrity, cleared
+UI caches and restarted web UIs. Native Backend forced assignment-option refresh
+succeeded on both nodes. No live configuration transition was needed for this
+verification. Evidence: HA-1 `/root/dhcpha-upgrade-0.2_27.p36u8l`;
+HA-2 `/root/dhcpha-fix-0.2_27.HRnn8R`.

@@ -242,6 +242,16 @@ class SettingsController extends ApiControllerBase
             || !$this->nativeRouteAllowed('/api/interfaces/assignment/reconfigure')) {
             return ['restored' => false, 'applied' => false, 'error' => gettext('Native interface assignment write permission is required to remove this configuration.')];
         }
+        // Native assign-opts is cached for 30 seconds. Disabling releases our
+        // carrier reservation; refresh that cache before native validation.
+        try {
+            $options = json_decode((new Backend())->configdRun('!interface list assign-opts', false, 10, 2), true);
+            if (!self::isInterfaceMap($options)) {
+                return ['restored' => false, 'applied' => false, 'error' => gettext('Fresh native assignment options are unavailable; plugin settings were retained.')];
+            }
+        } catch (\Throwable $exception) {
+            return ['restored' => false, 'applied' => false, 'error' => gettext('Native assignment options could not be refreshed; plugin settings were retained.')];
+        }
         $config = Config::getInstance();
         $config->lock(true);
         try {

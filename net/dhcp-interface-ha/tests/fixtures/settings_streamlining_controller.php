@@ -161,6 +161,10 @@ namespace OPNsense\Core {
                 }
                 return self::statusJson();
             }
+            if ($event === '!interface list assign-opts') {
+                \FixtureRequest::$assignmentCacheStale = false;
+                $event = 'interface list assign-opts';
+            }
             if ($event === 'interface list assign-opts') {
                 return json_encode([
                     'hn1' => ['value' => 'hn1', 'optgroup' => 'hardware'],
@@ -385,6 +389,11 @@ namespace OPNsense\Interfaces {
 
         public function performValidation($full = false)
         {
+            foreach ($this->selected as $props) {
+                if ($props['if'] === 'hn1' && \FixtureRequest::$assignmentCacheStale) {
+                    return [new \FixtureMessage('interface.wan.if', 'Option not in list')];
+                }
+            }
             return [];
         }
 
@@ -504,6 +513,7 @@ namespace {
         public static $managedMismatch = false;
         public static $leaseOnOriginal = false;
         public static $devicePresent = true;
+        public static $assignmentCacheStale = false;
         public static $needsReconcile = false;
         public static $inventoryMembers = null;
         public static $controllerApply = 'success';
@@ -531,6 +541,7 @@ namespace {
     require $argv[2];
 
     $case = $argv[3] ?? 'configure_success';
+    \FixtureRequest::$assignmentCacheStale = str_starts_with($case, 'teardown_');
     $action = $argv[4] ?? 'configure';
     $requestFlags = json_decode($argv[5] ?? '{}', true) ?: [];
     \FixtureRequest::$inventoryMembers = $requestFlags['inventory_members'] ?? null;

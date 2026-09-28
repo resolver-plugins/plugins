@@ -110,7 +110,7 @@ namespace OPNsense\Core {
                     '"exists":true,"lagg_protocol":"failover","lagg_members":' . $members .
                     ',"mac":"02:11:22:33:44:55","mtu":1500}}';
             }
-            if ($event === 'interface list assign-opts') {
+            if (ltrim($event, '!') === 'interface list assign-opts') {
                 return '{"hn1":{"value":"hn1","optgroup":"hardware"},"hn2":{"value":"hn2","optgroup":"hardware"}}';
             }
             if ($event === 'interface list ifconfig') {

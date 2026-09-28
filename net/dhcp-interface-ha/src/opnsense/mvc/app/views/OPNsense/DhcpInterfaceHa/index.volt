@@ -348,6 +348,7 @@ $(document).ready(function() {
     }
 
     function updateActions() {
+        const idle = !configureBusy && !settingsBusy;
         const managed = field("dhcphalocal.managed_interface").val() || "";
         const disabledSelection = managed === "";
         if (disabledSelection) {
@@ -361,21 +362,21 @@ $(document).ready(function() {
         const needsReadback = configureOutcomeBlocked || (!retryReady && statusIsFresh()
             && pending && pending.available === true && pending.state === "selected_relink");
         const queueAllowsConfigure = pendingAssignmentAllowsConfigure(retryReady);
-        $("#configureBlock").toggle((managed !== "" && !configured) || needsReadback);
-        $("#recheckConfigure").toggle(needsReadback)
+        $("#configureBlock").toggle(idle && ((managed !== "" && !configured) || needsReadback));
+        $("#recheckConfigure").toggle(idle && needsReadback)
             .prop("disabled", configureBusy || settingsBusy);
-        $("#configureOutcomeNote").toggle(needsReadback);
-        $("#configurePermissionNote").toggle(managed !== "" && !configured && (!canConfigureInterface || !configureAllowed))
+        $("#configureOutcomeNote").toggle(idle && needsReadback);
+        $("#configurePermissionNote").toggle(idle && managed !== "" && !configured && (!canConfigureInterface || !configureAllowed))
             .text(canConfigureInterface
                 ? "Your account needs native assignment write access for this interface."
                 : "Your account needs native interface assignment and apply permissions to configure this interface.");
-        $("#configureSavedStateNote").toggle(managed !== "" && !configured && savedEnabled)
+        $("#configureSavedStateNote").toggle(idle && managed !== "" && !configured && savedEnabled)
             .text("The saved plugin is still enabled. Save Disable and verify detachment before changing the assignment.");
-        $("#configureEvidenceNote").toggle(managed !== "" && !configured && !savedEnabled && !detachedEvidenceFresh())
+        $("#configureEvidenceNote").toggle(idle && managed !== "" && !configured && !savedEnabled && !detachedEvidenceFresh())
             .text("Save & Apply requires fresh status confirming the disabled, detached adapter before changing the assignment.");
-        $("#configureCarrierNote").toggle(managed !== "" && previewDevice === "dhcpha0lagg" && !savedMapping.carrier)
+        $("#configureCarrierNote").toggle(idle && managed !== "" && previewDevice === "dhcpha0lagg" && !savedMapping.carrier)
             .text("This assignment already uses dhcpha0lagg, but its original carrier is unknown. Save is blocked; do not guess.");
-        $("#configureQueueNote").toggle(managed !== "" && !configured && !configureOutcomeBlocked
+        $("#configureQueueNote").toggle(idle && managed !== "" && !configured && !configureOutcomeBlocked
             && statusIsFresh() && !queueAllowsConfigure)
             .text(!pending || pending.available !== true || pending.state === "unknown"
                 ? "The native assignment queue could not be verified; refresh status before Save & Apply."
@@ -524,7 +525,8 @@ $(document).ready(function() {
             payload.dhcphashared.enabled = "0";
             payload.dhcphalocal.carrier = "";
         }
-        $("#settingsResult").text("Saving settings and applying the controller...");
+        $("#settingsResult, #setupResult").text("");
+        updateActions();
         $("#retryApply").hide();
         invalidateStatus();
         post(api + "/settings/set", payload, managed === "" ? 70000 : 35000)
@@ -588,7 +590,7 @@ $(document).ready(function() {
     }
 
     async function readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, backendVerified) {
-        $("#setupResult").text("Save result is unknown. Refreshing saved settings and assignment status before offering a retry...");
+        $("#setupResult").text("");
         configureRetryReady = false;
         configureRetryGeneration = -1;
         try {
@@ -758,7 +760,8 @@ $(document).ready(function() {
         payload.dhcphashared.failback_delay = $("#failbackDelay").val();
         payload.revision = $("#revision").val();
         handleFormValidation("frm_Settings", []);
-        $("#setupResult").text("Configuring and applying settings...");
+        $("#settingsResult, #setupResult").text("");
+        updateActions();
         invalidateStatus();
         try {
             const result = await post(api + "/settings/configure", payload, 120000);
@@ -771,11 +774,13 @@ $(document).ready(function() {
                 await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, true);
                 refreshStatus();
             } else {
-                const stage = result.setup_stage ? " Last verified stage: " + result.setup_stage + "." : "";
-                $("#setupResult").text((result.error || "Save & Apply did not complete and verify every setup boundary.") + stage);
+                $("#setupResult").text(result.error || "Save & Apply could not complete the interface configuration.");
                 if (result.saved === true || result.saved === null || result.applied === null || result.assignment_verified === null) {
                     blockConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier, false);
                     await readConfigureOutcome(managed, payload, expectedFormGeneration, expectedCarrier);
+                    if (result.error && $("#setupResult").text()) {
+                        $("#setupResult").text(result.error);
+                    }
                 } else {
                     refreshStatus();
                 }
