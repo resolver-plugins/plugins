@@ -140,6 +140,14 @@ The **Log** tab displays the native `dhcpinterfaceha/core` stream with normal
 Informational events visible by default. It retains native filters and retention.
 If native local logging is disabled, the tab reports that condition. Log access
 alone does not permit clearing logs, changing settings or controlling interfaces.
+The controller records `interface_observed` before reconciliation when observations
+change: carrier and LAGG administrative state, native link reports, promiscuous
+flags, LAGG members, and carrier IPv4/IPv6/CARP counts. Unreported fields say
+`unknown`. This distinguishes a down interface from a missing link or receive
+filter; it does not assume why a driver reports no link. The next reconcile
+records any resulting state change; unchanged polls and read-only status calls
+do not repeat these events. Observations use the existing inventory without
+additional probes or interface changes.
 
 Read current status without changing interfaces:
 

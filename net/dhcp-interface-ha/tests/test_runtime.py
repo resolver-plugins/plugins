@@ -487,6 +487,8 @@ class RuntimeTests(unittest.TestCase):
                 changes = self.event_messages('attachment_changed')
                 self.assertEqual(len(changes), 1)
                 self.assertIn('reason=' + reason, changes[0])
+                # The next observation records the completed fence once.
+                self.controller.reconcile()
                 self.events.clear()
                 self.controller.reconcile()
                 self.controller.reconcile()
@@ -510,6 +512,36 @@ class RuntimeTests(unittest.TestCase):
         self.controller.status()
         self.assertTrue(self.controller.health())
         self.assertEqual(self.events, [])
+
+    def test_interface_observations_explain_blocked_physical_carrier_without_poll_spam(self):
+        self.edit('<carrier>hn1</carrier>', '<carrier>ix0</carrier>')
+        carrier = self.host.items['ix0'] = self.host.items.pop('hn1')
+        carrier.update(status='no carrier', ipv4=[], ipv6=[], carp={})
+        self.controller.reconcile()
+        messages = self.event_messages('interface_observed')
+        self.assertEqual(len(messages), 1)
+        for fact in ('phase=before_reconcile', 'carrier=ix0', 'carrier_up=False',
+                     'carrier_link=no carrier', 'carrier_promisc=False',
+                     'carrier_ipv4=0', 'carrier_ipv6=0', 'carrier_carp=0',
+                     'lagg_up=False', 'lagg_members=none'):
+            self.assertIn(fact, messages[0])
+        self.assertEqual(self.host.commands, [])
+        self.controller.reconcile()
+        self.assertEqual(len(self.event_messages('interface_observed')), 1)
+
+        # A different administrative state with the same absent link matters.
+        carrier['flags'] = ['up']
+        self.controller.reconcile()
+        self.assertIn('carrier_up=True', self.event_messages('interface_observed')[-1])
+        # The next poll records the result of fencing, then becomes quiet.
+        self.controller.reconcile()
+        self.events.clear()
+        self.controller.reconcile()
+        self.assertEqual(self.events, [])
+
+        carrier['ipv4'] = [{'ipaddr': '192.0.2.1'}]
+        self.controller.reconcile()
+        self.assertIn('carrier_ipv4=1', self.event_messages('interface_observed')[0])
 
     def test_status_distinguishes_known_empty_ipv4_from_unknown_inventory(self):
         self.host.items[DHCPHA_DEVICE]['ipv4'] = []

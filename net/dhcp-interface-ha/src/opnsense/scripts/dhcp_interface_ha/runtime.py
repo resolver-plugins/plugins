@@ -186,6 +186,7 @@ class Controller:
         self.ifindex = ifindex
         self.event_sink = event_sink
         self._daemon_failures = {}
+        self._last_interface_observation = None
         self._last_command = None
         self._failed_command = None
         self.marker = self.runtime_dir / "device.dhcpha0lagg"
@@ -213,6 +214,36 @@ class Controller:
         ):
             return "UNVERIFIED"
         return "ATTACHED" if device.lagg_members else "FENCED"
+
+    def _observe_interfaces(self, snapshot):
+        """Record pre-mutation facts on change, including admin-down/link-down.
+
+        Driver link reports can differ while administratively down. Keep the
+        native report separate from UP and PROMISC; none implies the others.
+        This uses the existing snapshot and never probes or changes a NIC.
+        """
+        fields = self._event_context(snapshot)
+        desired = desired_state(snapshot.settings, snapshot.observed)
+        fields.update(enabled=snapshot.settings.enabled, role=desired.role.value)
+        for label, device in (("carrier", snapshot.observed.carrier), ("lagg", snapshot.observed.dhcpha)):
+            item = snapshot.inventory.get(device.name, {})
+            fields.update({
+                f"{label}_exists": device.exists,
+                f"{label}_up": device.up,
+                f"{label}_link": item.get("status", "unknown"),
+                f"{label}_promisc": device.promiscuous,
+            })
+            if label == "carrier":
+                for family in ("ipv4", "ipv6", "carp"):
+                    entries = item.get(family)
+                    fields[f"carrier_{family}"] = len(entries) if isinstance(entries, (list, dict)) else "unknown"
+        fields["lagg_members"] = ",".join(sorted(snapshot.observed.dhcpha.lagg_members)) or "none"
+        fields["reason"] = snapshot.local_error or (
+            "controller stopped" if snapshot.stopped else desired.reason
+        )
+        if fields != self._last_interface_observation:
+            self._event("interface_observed", phase="before_reconcile", **fields)
+            self._last_interface_observation = fields
 
     def _report_failure(self, operation, error, safety, snapshot=None, daemon=False, context=None):
         context = self._event_context(snapshot) if context is None else context
@@ -725,6 +756,7 @@ class Controller:
             with self.locked():
                 try:
                     snapshot = self.snapshot()
+                    self._observe_interfaces(snapshot)
                     if snapshot.settings.managed_by_dhcpha and not snapshot.observed.dhcpha.exists:
                         if self.prepare_locked():
                             self._event(

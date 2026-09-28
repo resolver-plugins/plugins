@@ -924,3 +924,23 @@ Configuration and controller PID remained unchanged; UI caches were cleared and
 the web UI restarted. HA-1 remains ACTIVE/MASTER on opt7 at 10.250.100.100; three
 source-address pings to 10.250.100.1 succeeded without loss. Evidence:
 `/root/dhcpha-package-0.2_32.cyXOi7`. Both nodes now have 0.2_32 installed.
+
+### 0.2_33 — physical-carrier investigation logging
+
+HA-1 now uses ix0 directly for ISP WAN. The September 28 attempts first failed
+native setup with residual carrier IP/CARP state; subsequent setup completed,
+but enabling ended in `carrier_link_down`. Earlier hn carrier tests attached
+successfully. Existing logs lack administrative UP and promiscuous flags, so
+they do not establish why the physical driver reported no link. A possible
+admin-down/link-down eligibility dependency remains a hypothesis, not a verified
+driver defect or user configuration error.
+
+Add change-only `interface_observed` events from the existing pre-reconcile
+snapshot: names, enabled state, role, carrier/LAGG existence, administrative UP,
+native link report, PROMISC, LAGG members, carrier address/CARP counts and reason.
+Missing inventory fields remain unknown. The next reconcile captures resulting
+changes. No new probes, interface commands or eligibility changes are introduced;
+read-only status/health remain silent. The new regression covers an ix-named
+carrier with no link, changing administrative state, residual addressing and
+steady-state suppression. All 118 Python tests pass. Live reproduction requires
+a coordinated WAN interruption with the administrator.
