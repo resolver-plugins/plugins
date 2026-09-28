@@ -29,6 +29,7 @@ $(document).ready(function() {
     let configureOutcomeBlocked = false;
     let pendingConfigureOutcome = null;
     let settingsBusy = false;
+    let populatingSettings = false;
 
     function field(id) {
         return $('[id="' + id + '"]');
@@ -480,7 +481,14 @@ $(document).ready(function() {
                 managedDescription = (data.managed_choices && data.managed_choices[managed] && data.managed_choices[managed].description) || managed;
                 savedMapping = {managed: managed, carrier: savedCarrier};
                 savedEnabled = valueOf(data.dhcphashared.enabled) === "1";
-                setFormData("frm_Settings", data);
+                // Native setFormData emits change for each field. Wait until
+                // the interface is populated before enforcing Disabled rules.
+                populatingSettings = true;
+                try {
+                    setFormData("frm_Settings", data);
+                } finally {
+                    populatingSettings = false;
+                }
                 $("#revision").val(data.revision || "");
                 $("#failbackDelay").val(valueOf(data.dhcphashared.failback_delay) || "0");
                 $("#storedFailbackValue").text($("#failbackDelay").val());
@@ -858,6 +866,7 @@ $(document).ready(function() {
         updateActions();
     });
     field("dhcphalocal.managed_interface").on("changed.bs.select change", function() {
+        if (populatingSettings) { return; }
         const managed = $(this).val() || "";
         formGeneration++;
         configureRetryReady = false;
@@ -867,6 +876,7 @@ $(document).ready(function() {
         updateActions();
     });
     $("#frm_Settings").on("input change", ":input", function() {
+        if (populatingSettings) { return; }
         formGeneration++;
         configureRetryReady = false;
         updateActions();

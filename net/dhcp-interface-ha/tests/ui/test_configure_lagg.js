@@ -36,6 +36,11 @@ function domFixture() {
         const node = nodeFor(key);
         return {
             node,
+            on(events, selector, handler) {
+                node.handler = handler || selector;
+                return this;
+            },
+            selectpicker() { return this; },
             val(value) {
                 if (arguments.length) {
                     node.value = value;
@@ -823,6 +828,44 @@ function testSummaryAndAddressMeaning() {
     assert.equal(dom.getText('#summaryState'), 'Not configured');
 }
 
+function testSettingsPopulationDoesNotActLikeUserEdits() {
+    const fixture = configureFixture();
+    const {context, dom} = fixture;
+    dom.setField('dhcphalocal.managed_interface', '');
+    dom.setField('dhcphashared.enabled', '', {checked: false});
+    context.populatingSettings = false;
+    context.valueOf = value => String(value);
+    context.selectedOption = options => Object.keys(options).find(key => options[key].selected === 1);
+    let previews = 0;
+    context.loadCarrierPreview = () => { previews++; };
+    context.setFormData = () => {
+        // Native setFormData fills fields in DOM order and emits change after
+        // every field: Enable is populated before the interface dropdown.
+        dom.field('dhcphashared.enabled').prop('checked', true);
+        dom.nodes['#frm_Settings'].handler();
+        dom.field('dhcphalocal.managed_interface').val('opt7');
+        dom.nodes['field:dhcphalocal.managed_interface'].handler.call(dom.nodes['field:dhcphalocal.managed_interface']);
+        dom.nodes['#frm_Settings'].handler();
+    };
+    context.getJson = () => ({done(callback) {
+        callback({dhcphashared: {enabled: '1', shared_mac: '02:00:00:00:00:01', failback_delay: '0'},
+            dhcphalocal: {managed_interface: {opt7: {selected: 1}}, carrier: 'em0'}, revision: 'rev2'});
+        return {fail() {}};
+    }});
+    vm.runInContext(between('    function valueOf(', '    function getJson('), context);
+    vm.runInContext(between('    function loadSettings()', '    function saveSettings()'), context);
+    vm.runInContext(between('    field("dhcphalocal.managed_interface").on(', '    $("#maintabs a'), context);
+    vm.runInContext('loadSettings()', context);
+    assert.equal(dom.field('dhcphashared.enabled').prop('checked'), true,
+        'fresh load must show the saved enabled value after populating the interface');
+    assert.equal(context.formGeneration, 0, 'loading fields is not a user edit');
+    assert.equal(previews, 1, 'only load the final saved interface preview');
+    dom.field('dhcphalocal.managed_interface').val('');
+    dom.nodes['#frm_Settings'].handler();
+    assert.equal(dom.field('dhcphashared.enabled').prop('checked'), false,
+        'a real Disabled selection still clears Enable');
+}
+
 (async () => {
     await testConfigureHandler();
     await testConfigureReadbackGuards();
@@ -832,6 +875,7 @@ function testSummaryAndAddressMeaning() {
     testConfiguredStateRequiresVerifiedOwnership();
     testDisabledSelectionCanBeSaved();
     testSummaryAndAddressMeaning();
+    testSettingsPopulationDoesNotActLikeUserEdits();
     console.log('HA DHCP Interface UI behavior checks passed');
 })().catch(error => {
     console.error(error);

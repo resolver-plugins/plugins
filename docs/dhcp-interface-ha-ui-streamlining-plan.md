@@ -1,6 +1,6 @@
 # HA DHCP Interface UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_25**, 2026-09-28, following
+Status: source implementation for experimental **0.2_26**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -780,3 +780,20 @@ Deployed 0.2_25 to both nodes, verified installed source hashes/package integrit
 cleared UI caches and restarted web UIs. Evidence:
 HA-1 `/root/dhcpha-upgrade-0.2_25.BMvW71`;
 HA-2 `/root/dhcpha-fix-0.2_25.YwZVHg`.
+
+
+### 0.2_26 — preserve Enable while loading Settings
+
+Native setFormData emits change after each field. The Enable field precedes the
+interface dropdown, so its initial change reached updateActions while the
+interface still appeared Disabled and cleared the checkbox. Suppress user-edit
+handlers only during synchronous form population; evaluate actions after the
+full form is loaded. A regression replays native field/change order, verifies
+saved Enable remains checked, and verifies a real Disabled selection still
+clears it. Both UI suites and diff checks pass.
+
+Deployed 0.2_26 to HA-1 and HA-2; package integrity and installed source hashes
+verified, compiled plugin UI/compressed caches cleared and web UIs restarted.
+HA-1 configuration remained byte-identical. Evidence:
+HA-1 `/root/dhcpha-upgrade-0.2_26.Xaw7lI`;
+HA-2 `/root/dhcpha-fix-0.2_26.xFbfaN`.
