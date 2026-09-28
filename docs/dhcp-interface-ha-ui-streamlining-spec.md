@@ -197,13 +197,13 @@ a previously selected interface. Generate remains an explicit user choice.
 saves the submitted plugin form with enablement off, captures the current native
 device as the carrier and completes the native assignment. An empty Shared MAC
 defaults to the freshly observed usable MAC of that carrier. Once configured,
-the same button performs ordinary settings saves. Do not expose separate
+the same button performs ordinary settings saves. After verified setup, the same request validates and applies the submitted Enable choice. A failed migration stays disabled. Successful saves have no popup or persistent success notification. Do not expose separate
 Configure or Save draft actions.
 
 | Saved state / selected form value | Available action and meaning |
 |---|---|
 | Disabled; Disabled | Save & Apply restores the native logical assignment to its saved carrier, verifies it, then clears the local mapping, enablement and failback value while preserving MAC. |
-| Disabled; eligible original native device | Save & Apply captures the carrier and completes guarded native setup. Setup forces Enable off even if checked in the submitted form. |
+| Disabled; eligible original native device | Save & Apply captures the carrier and completes guarded native setup. Setup remains disabled during migration, then validates and applies the submitted Enable choice. |
 | Disabled; selected assignment already maps to the owned LAGG with a known carrier | Save & Apply performs an ordinary settings save. Remaining prerequisites appear separately. |
 | Enabled; identity unchanged | Save & Apply performs ordinary edits or disables the service. |
 | Enabled; interface/MAC changed | Require saving Disable with the old identity first, then fresh detached evidence before identity changes. |
@@ -223,7 +223,7 @@ The action must:
 1. Check write permissions, current saved disabled state, revision, selected
    assignment and eligible carrier. A cleared checkbox alone is not evidence
    that an enabled controller has been disabled and fenced.
-2. Explain the selected connection interruption and obtain confirmation. Read
+2. Explain the selected connection interruption inline; Save & Apply authorizes it without a popup. Read
    canonical native assignment state, not merely a pending form choice.
 3. Refuse observed unrelated pending native assignment edits. Also refuse a
    pending edit on the selected assignment unless it exactly matches a verified
@@ -232,7 +232,7 @@ The action must:
 4. Verify or prepare the owned detached device, capture and persist the carrier
    before relinking, and use the native assignment mechanism. Keep the existing
    shared/local configuration validation and revision checks.
-5. Verify the new mapping and final local setup state. Leave enablement off.
+5. Verify the new mapping and detached local setup state, then validate, save and apply the submitted Enable choice using the ordinary settings path.
    Distinguish “configuration saved,” “native apply completed,” and “result
    unknown”; only verified outcomes may be displayed as success.
 6. On retry, inspect the already-saved mapping and observed state. Resume only
@@ -243,7 +243,7 @@ The action must:
 pending queue; it has no selected-interface-only apply or atomic revision
 precondition. Preflight/rechecks prevent applying *observed* unrelated edits,
 but cannot exclude an edit arriving after the final check. State in the setup
-confirmation that native interface editing must not run concurrently. Do not
+help text that native interface editing must not run concurrently. Do not
 claim atomic isolation, clear other pending edits, hold the configuration lock
 across a blocking configd call, or patch upstream core to simulate it. If an
 unexpected mapping is observed afterward, report a conflict/partial result;
@@ -267,7 +267,7 @@ be verified without lost browser request history or manual native apply.
 
 #### Setup request and result contract
 
-Use one POST `settings/configure` action for the confirmed operation, taking
+Use one POST `settings/configure` action for the save operation, taking
 the same complete `dhcphashared`, `dhcphalocal` and `revision` inputs as
 `settings/set`. Reuse its validation/save implementation. The server derives
 the carrier from committed native assignment evidence (or verifies an existing
@@ -285,7 +285,7 @@ and status conventions, adding `setup_stage` and `assignment_verified`:
   when rejection/failure confirms no save occurred, null when the save outcome
   is unknown.
   `applied`: true/false/null for verified native apply success, known failure
-  or unknown result. In this endpoint it describes **native assignment apply**;
+  or unknown result. When Enable is requested, true also requires the final controller apply to succeed;
   `settings/set` retains its existing controller-apply meaning. An already
   completed setup returns true after fresh verification without rerunning apply;
   preflight rejection returns false with `setup_stage=none`.
@@ -349,7 +349,7 @@ Apply these classifications to **all** current readiness codes:
 | Existing code(s) | Responsibility and non-passing interpretation |
 |---|---|
 | `managed_interface`, `shared_mac` | User intent when missing/invalid. Split MAC syntax from collision evidence: unavailable collision inventory is unknown, not invalid MAC. A confirmed conflict needs investigation before identity changes. |
-| `managed_assignment`, `carrier_selection` | Plugin setup; initial setup awaits confirmed Configure, not manual LAGG/carrier edits. Unexpected post-setup drift requires guarded recovery/investigation. |
+| `managed_assignment`, `carrier_selection` | Plugin setup; initial setup awaits Save & Apply, not manual LAGG/carrier edits. Unexpected post-setup drift requires guarded recovery/investigation. |
 | `carrier_capability`, `carrier_exclusive` | Environment capability or native conflict respectively. Original carrier on the selected assignment is expected before migration; use Configure guidance. An unrelated assignment/VLAN/LAGG conflict requires a user decision. |
 | `device_ownership`, `device_topology` | Plugin; absent device may be prepared/recreated through existing safe paths. Foreign identity/wrong protocol/unexpected topology never grants destructive repair. |
 | `managed_ipv4`, `managed_ipv6`, `native_spoof_mac`, `hardware_media`, `managed_carp_vips` | Native configuration conflict; explain the incompatible value and native link. This increment does not silently rewrite address modes, overrides or VIPs. |

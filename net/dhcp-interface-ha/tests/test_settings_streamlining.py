@@ -34,7 +34,7 @@ def run_controller(case, action="configure", flags=None):
 
 
 class SettingsStreamliningTests(unittest.TestCase):
-    def test_configure_derives_carrier_forces_disabled_and_verifies_native_apply(self):
+    def test_configure_derives_carrier_and_verifies_native_apply(self):
         outcome = run_controller("configure_success")
 
         self.assertEqual(outcome["response"]["result"], "saved")
@@ -51,6 +51,23 @@ class SettingsStreamliningTests(unittest.TestCase):
         self.assertIn("/api/interfaces/assignment/reconfigure", outcome["acl_checks"])
         self.assertTrue(all(item["identity"] == "dhcp-interface-ha" for item in outcome["logs"]))
         self.assertTrue(any("setup_completed" in item["message"] for item in outcome["logs"]))
+
+    def test_setup_rejects_nonempty_or_malformed_native_members(self):
+        for members in (["hn1"], "invalid"):
+            outcome = run_controller("configure_success", flags={"inventory_members": members})
+            self.assertEqual(outcome["response"]["setup_stage"], "none")
+            self.assertEqual(outcome["save_count"], 0)
+
+    def test_configure_honors_enable_only_after_native_assignment_is_verified(self):
+        for case in ("configure_success", "configure_already_mapped", "configure_exact_pending", "configure_missing_device_retry"):
+            with self.subTest(case=case):
+                outcome = run_controller(case, flags={"enabled": "1"})
+                self.assertEqual(outcome["response"]["result"], "saved")
+                self.assertTrue(outcome["response"]["applied"])
+                self.assertEqual(outcome["shared"]["enabled"], "1")
+                self.assertEqual(outcome["events"][-1], "dhcp_interface_ha apply")
+        failed = run_controller("configure_apply_failed", flags={"enabled": "1"})
+        self.assertEqual(failed["shared"]["enabled"], "0")
 
     def test_configure_defaults_empty_shared_mac_to_selected_interface(self):
         outcome = run_controller("configure_default_mac")

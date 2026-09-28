@@ -1,6 +1,6 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_16**, 2026-09-28, following
+Status: source implementation for experimental **0.2_18**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -641,3 +641,32 @@ DHCP address `10.250.100.109`. The web GUI cache was cleared, the service
 restarted, native routes resolve and HTTPS responds 200. The 0.2.15 rollback
 package, configuration backup and deployment evidence are in
 `/root/dhcpha-native-teardown-0.2_16.iXEJS8` on HA-2. HA-1 was not changed.
+
+
+### 0.2_18 — complete setup from Save & Apply
+
+Native `interface list ifconfig` omits `laggport` for an empty LAGG. Setup and
+prepare readback now treat that omission as empty while still requiring the
+controller to verify ownership, disabled state and detachment. The fixture now
+uses this native shape, covering both an existing and newly prepared device.
+Setup records the carrier and applies/verifies the native assignment while
+disabled, then validates and applies the submitted Enable choice. Failed native
+migration cannot enable the plugin. Save has no confirmation popup or persistent
+success message; validation and partial-failure messages remain visible.
+
+Native verification also reproduced the post-assignment timing bug: native apply
+raises the carrier, so immediate status was UNVERIFIED until the daemon fenced
+it. Setup now explicitly reconciles after native apply and before readback.
+Existing mappings and partial retries share the same completion/Enable path.
+
+Validation: 113 Python tests, both Node UI suites, PHP lint and diff checks pass.
+Installed 0.2_18 on HA-2 and verified all 25 installed source hashes plus package
+integrity. Cleared the web UI cache and restarted the UI. Invoked the installed
+settings controller with native Request/ACL/models/backend: a single configure
+request from the cleared opt7→hn1 state returned saved=true, applied=true,
+assignment_verified=true and setup_stage=verified. Final runtime: enabled=true,
+opt7 managed, CARP BACKUP, STANDBY, owned detached device and eligible safe hn1.
+This checks the native controller, not authenticated browser interaction.
+Package SHA-256: `655d63667b52d72fb0b4235612b4dea6a0e28a3fcf61d3fa8d15bf0abbffbd2e`.
+Evidence: `/root/dhcpha-save-0.2_17.41sdAs` (includes initial 0.2_17 investigation
+and final `save-result-18.json`). HA-1 was not changed.

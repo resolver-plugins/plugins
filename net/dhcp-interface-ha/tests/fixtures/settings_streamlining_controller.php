@@ -104,6 +104,7 @@ namespace OPNsense\Core {
             } else {
                 foreach ($this->object()->interfaces->children() as $name => $node) {
                     self::$assignments[(string)$name] = (string)$node->if;
+                    \FixtureRequest::$needsReconcile = true;
                 }
                 if (self::$assignments['wan'] === 'dhcpha0lagg') {
                     if (\FixtureRequest::$statusUnavailableAfterApply) {
@@ -171,7 +172,7 @@ namespace OPNsense\Core {
             }
             if ($event === 'interface list ifconfig') {
                 $wan = ['is_physical' => true, 'macaddr' => '02:11:22:33:44:01'];
-                if (\FixtureRequest::$leaseOnOriginal) {
+                if (\FixtureRequest::$leaseOnOriginal && Config::$assignments['wan'] === 'hn1') {
                     $wan['ipv4'] = ['192.0.2.15/24'];
                 }
                 $devices = [
@@ -179,7 +180,11 @@ namespace OPNsense\Core {
                     'hn2' => ['is_physical' => true, 'macaddr' => '02:11:22:33:44:02'],
                 ];
                 if (\FixtureRequest::$devicePresent) {
-                    $devices['dhcpha0lagg'] = ['laggproto' => 'failover', 'laggport' => []];
+                    // Native inventory omits laggport when the device has no members.
+                    $devices['dhcpha0lagg'] = ['laggproto' => 'failover'];
+                    if (\FixtureRequest::$inventoryMembers !== null) {
+                        $devices['dhcpha0lagg']['laggport'] = \FixtureRequest::$inventoryMembers;
+                    }
                 }
                 return json_encode($devices);
             }
@@ -188,6 +193,7 @@ namespace OPNsense\Core {
                 return '{"prepared":true,"detached":true,"owned":true,"device":"dhcpha0lagg"}';
             }
             if ($event === 'dhcp_interface_ha apply') {
+                \FixtureRequest::$needsReconcile = false;
                 if (\FixtureRequest::$controllerApply === 'failed') {
                     return '{"error":"controller apply failed"}';
                 }
@@ -208,13 +214,14 @@ namespace OPNsense\Core {
         private static function statusJson()
         {
             return json_encode([
-                'actual_attachment' => 'FENCED',
+                'actual_attachment' => (\FixtureRequest::$needsReconcile && Config::$assignments['wan'] === 'dhcpha0lagg') ? 'UNVERIFIED' : 'FENCED',
                 'desired_attachment' => 'FENCED',
-                'enabled' => false,
+                'enabled' => Config::$shared['enabled'] === '1',
                 'owned' => \FixtureRequest::$devicePresent,
                 'managed_by_dhcpha' => \FixtureRequest::$devicePresent
                     && Config::$assignments['wan'] === 'dhcpha0lagg'
                     && !\FixtureRequest::$managedMismatch,
+                'carrier_capable' => true,
                 'carrier' => ['name' => 'hn1', 'exists' => true, 'link_up' => true, 'mac' => '02:11:22:33:44:01'],
                 'dhcpha' => [
                     'name' => 'dhcpha0lagg',
@@ -497,6 +504,8 @@ namespace {
         public static $managedMismatch = false;
         public static $leaseOnOriginal = false;
         public static $devicePresent = true;
+        public static $needsReconcile = false;
+        public static $inventoryMembers = null;
         public static $controllerApply = 'success';
         public static $nativeApply = 'success';
         public static $invalidSettings = false;
@@ -524,6 +533,7 @@ namespace {
     $case = $argv[3] ?? 'configure_success';
     $action = $argv[4] ?? 'configure';
     $requestFlags = json_decode($argv[5] ?? '{}', true) ?: [];
+    \FixtureRequest::$inventoryMembers = $requestFlags['inventory_members'] ?? null;
     \FixtureRequest::$leaseOnOriginal = in_array($case, ['configure_success', 'configure_timeout', 'configure_native_save_unknown'], true);
     \FixtureRequest::$devicePresent = $case !== 'configure_missing_device_retry';
     \FixtureRequest::$controllerApply = $requestFlags['controller_apply'] ?? 'success';
@@ -579,7 +589,7 @@ namespace {
     $controller = new \OPNsense\DhcpInterfaceHa\Api\SettingsController();
     $settings = $controller->getAction();
     $shared = [
-        'enabled' => '1', // Configure must force disabled, regardless of client state.
+        'enabled' => $requestFlags['enabled'] ?? '0',
         'shared_mac' => '02:11:22:33:44:55',
         'failback_delay' => '0',
     ];

@@ -104,16 +104,16 @@ source MAC to change (Hyper-V: enable MAC spoofing). Choose one fixed shared
 unicast MAC for both nodes; a preferred node's dedicated carrier hardware MAC is
 valid. Do not dynamically choose whichever node obtains DHCP first.
 
-1. Install matching plugin versions on both nodes. Leave **Enable DHCP Interface
-   HA** off during local setup. Choose each node's own logical DHCP interface and
+1. Install matching plugin versions on both nodes. Select **Enable DHCP Interface
+   HA** when this save should also activate CARP-managed operation. Choose each node's own logical DHCP interface and
    one shared unicast MAC for both nodes. The carrier is captured from the
    selected native assignment; it has no separate selector.
-2. Click **Save & Apply** and confirm the possible interruption to connectivity.
+2. Click **Save & Apply**. Setup may interrupt this interface.
    If Shared interface MAC is empty, the action uses the selected carrier's
    freshly observed usable MAC. It saves the submitted settings while
    disabled, prepares the owned detached device, captures the original carrier
    before migration and moves the assignment using native OPNsense machinery.
-   It verifies the resulting mapping. Finish any pending native assignment edits first and avoid
+   It verifies the resulting mapping, then validates and applies the submitted Enable choice. Finish any pending native assignment edits first and avoid
    concurrent interface editing: native apply consumes a shared pending queue.
    Observed unrelated edits block setup, but the native API does not provide
    atomic isolation from another writer after the final check.
@@ -131,7 +131,7 @@ valid. Do not dynamically choose whichever node obtains DHCP first.
    includes this plugin in future native configuration sync. It does not contact
    the peer or restart services. Shared settings sync; the logical assignment
    and carrier remain local to each node. Configure and inspect both nodes.
-6. Enable and choose **Save & Apply** after local setup is verified. The summary
+6. No second save is needed when Enable was selected during setup. The summary
    distinguishes Active, Waiting for DHCP, Standby, Maintenance and unavailable
    observations. Native DHCP runs on `dhcpha0lagg`; standby intentionally keeps
    its carrier detached. Address observations do not elect the active node.

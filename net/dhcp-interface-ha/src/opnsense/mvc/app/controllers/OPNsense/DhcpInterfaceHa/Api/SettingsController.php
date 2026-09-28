@@ -492,6 +492,7 @@ class SettingsController extends ApiControllerBase
 
         // The form's carrier field is present for compatibility with the shared
         // settings payload, but only committed native assignment state can name it.
+        $requestedEnabled = (string)$sharedInput['enabled'];
         $sharedInput['enabled'] = '0';
         $observations = self::collectObservations();
         $initial = self::inspectSetupState($managedName, $observations, $revision);
@@ -600,34 +601,6 @@ class SettingsController extends ApiControllerBase
             }
         }
 
-        if ($initial['already_mapped'] && !$initial['pending_target']) {
-            $verification = self::verifySetup($managedName, $carrier, $saved['revision'], $initial['assignment_map']);
-            if ($verification['verified']) {
-                $this->logEvent('info', 'setup_completed', [
-                    'managed' => $managedName,
-                    'carrier' => $carrier,
-                    'outcome' => 'already_configured',
-                ]);
-                return self::setupResponse(result: 'saved', saved: true, applied: true, assignmentVerified: true, stage: 'verified', error: null, validations: [], revision: $saved['revision'], status: $verification['status']);
-            }
-            $this->logEvent('error', 'setup_failed', [
-                'operation' => 'verify_existing_assignment',
-                'managed' => $managedName,
-                'outcome' => $verification['unknown'] ? 'unknown' : 'failed',
-            ]);
-            return self::setupResponse(
-                result: 'failed',
-                saved: true,
-                applied: $verification['unknown'] ? null : false,
-                assignmentVerified: $verification['unknown'] ? null : false,
-                stage: $stage,
-                error: $verification['error'],
-                validations: [],
-                revision: $saved['revision'],
-                status: $verification['status']
-            );
-        }
-
         $stageResult = self::stageAssignment(
             $managedName,
             $carrier,
@@ -635,30 +608,7 @@ class SettingsController extends ApiControllerBase
             $initial['committed_device'],
             $initial['assignment_map']
         );
-        if ($stageResult['result'] === 'already_mapped') {
-            $stage = 'assignment_staged';
-        } elseif ($stageResult['result'] === 'complete') {
-            $verification = self::verifySetup($managedName, $carrier, $saved['revision'], $initial['assignment_map']);
-            if ($verification['verified']) {
-                $this->logEvent('info', 'setup_completed', [
-                    'managed' => $managedName,
-                    'carrier' => $carrier,
-                    'outcome' => 'already_configured',
-                ]);
-                return self::setupResponse(result: 'saved', saved: true, applied: true, assignmentVerified: true, stage: 'verified', error: null, validations: [], revision: $saved['revision'], status: $verification['status']);
-            }
-            return self::setupResponse(
-                result: $verification['conflict'] ? 'conflict' : 'failed',
-                saved: true,
-                applied: $verification['committed'] ? true : false,
-                assignmentVerified: $verification['unknown'] ? null : false,
-                stage: $verification['committed'] ? 'assignment_applied' : $stage,
-                error: $verification['error'],
-                validations: [],
-                revision: $saved['revision'],
-                status: $verification['status']
-            );
-        } elseif ($stageResult['result'] !== 'staged') {
+        if (!in_array($stageResult['result'], ['already_mapped', 'complete', 'staged'], true)) {
             $this->logEvent('error', 'setup_failed', [
                 'operation' => 'stage_assignment',
                 'managed' => $managedName,
@@ -679,13 +629,20 @@ class SettingsController extends ApiControllerBase
             $stage = 'assignment_staged';
         }
 
-        $apply = self::applyStagedAssignment(
+        $apply = $stageResult['result'] === 'complete'
+            ? ['applied' => true, 'error' => null]
+            : self::applyStagedAssignment(
             $managedName,
             $carrier,
             $saved['revision'],
             $initial['committed_device'],
             $initial['assignment_map']
         );
+        if ($apply['applied'] === true) {
+            // Native interface apply can raise the original carrier. Reconcile
+            // the disabled controller now, before verifying detached readiness.
+            self::applySavedSettings();
+        }
         $verification = self::verifySetup(
             $managedName,
             $carrier,
@@ -693,6 +650,30 @@ class SettingsController extends ApiControllerBase
             $initial['assignment_map']
         );
         if ($verification['verified']) {
+            // Setup stays disabled until native assignment and detachment are
+            // verified. Then honor Enable through the normal validation/apply path.
+            if ($requestedEnabled !== '0') {
+                $sharedInput['enabled'] = $requestedEnabled;
+                $enabled = $this->saveSettings($sharedInput, $localInput, $saved['revision'], unknownSaveOutcome: true);
+                if ($enabled['result'] !== 'saved') {
+                    return self::setupResponse(
+                        result: $enabled['result'], saved: true, applied: false,
+                        assignmentVerified: true, stage: 'verified',
+                        error: $enabled['error'] ?? gettext('Interface setup completed, but Enable could not be saved.'),
+                        validations: $enabled['validations'] ?? [], revision: $saved['revision']
+                    );
+                }
+                $saved = $enabled;
+                $apply = self::applySavedSettings();
+                if ($apply['applied'] !== true) {
+                    return self::setupResponse(
+                        result: 'failed', saved: true, applied: $apply['applied'],
+                        assignmentVerified: true, stage: 'verified', error: $apply['error'],
+                        revision: $saved['revision'], status: $apply['status'] ?? null
+                    );
+                }
+                $verification['status'] = $apply['status'] ?? null;
+            }
             $this->logEvent('info', 'setup_completed', [
                 'managed' => $managedName,
                 'carrier' => $carrier,
@@ -1096,7 +1077,7 @@ class SettingsController extends ApiControllerBase
                 ];
             }
         } elseif (!is_array($device) || ($device['laggproto'] ?? '') !== 'failover'
-            || !is_array($device['laggport'] ?? null) || $device['laggport'] !== []) {
+            || !is_array($device['laggport'] ?? []) || ($device['laggport'] ?? []) !== []) {
             return [
                 'result' => 'conflict',
                 'assignment_verified' => false,
@@ -1182,7 +1163,7 @@ class SettingsController extends ApiControllerBase
             && is_array($ifconfig)
             && isset($ifconfig['dhcpha0lagg'])
             && ($ifconfig['dhcpha0lagg']['laggproto'] ?? '') === 'failover'
-            && ($ifconfig['dhcpha0lagg']['laggport'] ?? null) === []) {
+            && ($ifconfig['dhcpha0lagg']['laggport'] ?? []) === []) {
             return ['prepared' => true, 'outcome' => $commandOutcome === 'reported_prepared' ? 'verified' : 'verified_after_unknown', 'error' => null];
         }
         $outcome = $commandOutcome === 'failed' ? 'failed' : 'unknown';

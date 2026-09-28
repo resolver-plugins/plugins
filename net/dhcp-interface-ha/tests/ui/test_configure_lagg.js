@@ -341,7 +341,7 @@ function deferredAjax(onChange) {
 async function testConfigureHandler() {
     const cancelled = configureFixture({confirm: false});
     await vm.runInContext('configureSelectedLagg()', cancelled.context);
-    assert.equal(cancelled.calls.length, 0, 'cancel sends no mutation');
+    assert.equal(cancelled.calls.length, 1, 'Save applies without a confirmation popup');
 
     const disabledSaved = configureFixture({savedEnabled: true, enabledDraft: false});
     await vm.runInContext('configureSelectedLagg()', disabledSaved.context);
@@ -386,14 +386,14 @@ async function testConfigureHandler() {
     const submitted = duplicate.calls[0];
     assert.equal(submitted.url, '/api/dhcpinterfaceha/settings/configure');
     assert.deepEqual(submitted.payload, {
-        dhcphashared: {enabled: '0', shared_mac: '02:00:00:00:00:01', failback_delay: '0'},
+        dhcphashared: {enabled: '1', shared_mac: '02:00:00:00:00:01', failback_delay: '0'},
         dhcphalocal: {managed_interface: 'opt7', carrier: 'em0'},
         revision: 'rev1'
-    }, 'Configure submits both complete roots and the current revision, forcing Enable off');
+    }, 'Configure submits both complete roots and the current revision, honoring Enable');
     finishPost({result: 'saved', saved: true, applied: true, assignment_verified: true, setup_stage: 'verified', revision: 'rev2'});
     await first;
-    assert.equal(duplicate.dom.field('dhcphashared.enabled').prop('checked'), false,
-        'a saved Configure result updates the visible Enable checkbox to match the forced disabled value');
+    assert.equal(duplicate.dom.field('dhcphashared.enabled').prop('checked'), true,
+        'successful setup preserves the requested Enable choice');
     assert.equal(duplicate.readbacks.length, 1);
 
     const partial = configureFixture({
@@ -402,7 +402,7 @@ async function testConfigureHandler() {
     await vm.runInContext('configureSelectedLagg()', partial.context);
     assert.equal(partial.calls.length, 1);
     assert.equal(partial.readbacks.length, 1, 'known partial save refreshes saved revision and assignment readback');
-    assert.equal(partial.dom.field('dhcphashared.enabled').prop('checked'), false);
+    assert.equal(partial.dom.field('dhcphashared.enabled').prop('checked'), true, 'readback determines saved Enable after partial setup');
 
     const mappedMissing = configureFixture();
     mappedMissing.context.previewDevice = 'dhcpha0lagg';
@@ -463,7 +463,20 @@ async function testConfigureReadbackGuards() {
     assert.equal(complete.context.configureRetryReady, false, 'verified mapping does not offer Retry');
     assert.equal(complete.context.configureOutcomeBlocked, false,
         'complete fresh settings and assignment readback clears the uncertain-outcome latch');
-    assert.match(complete.dom.getText('#setupResult'), /Readback verifies/);
+    assert.equal(complete.dom.getText('#setupResult'), '', 'successful save has no page notification');
+
+    const enabledSettings = settingsReadback();
+    enabledSettings.dhcphashared.enabled.value = '1';
+    const enabledStatus = setupReadbackStatus('clear');
+    enabledStatus.attachment.actual = 'ATTACHED';
+    enabledStatus.attachment.members = ['em0'];
+    const enabled = readbackFixture(enabledSettings, enabledStatus);
+    enabled.context.testPayload = JSON.parse(JSON.stringify(submitted));
+    enabled.context.testPayload.dhcphashared.enabled = '1';
+    await vm.runInContext('readConfigureOutcome("opt7", testPayload, 0, "em0", true)', enabled.context);
+    assert.equal(enabled.context.savedEnabled, true);
+    assert.equal(enabled.context.configureOutcomeBlocked, false, 'enabled setup need not remain detached');
+    assert.equal(enabled.dom.getText('#setupResult'), '');
 
     const retryable = readbackFixture(settingsReadback(), setupReadbackStatus('selected_relink', 'dhcpha0lagg'));
     retryable.context.testPayload = submitted;
