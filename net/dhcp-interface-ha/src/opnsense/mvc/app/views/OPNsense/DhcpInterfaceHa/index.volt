@@ -194,7 +194,7 @@ $(document).ready(function() {
         previewDevice = "";
         $("#currentMacSuggestion").text("Unavailable");
         $("#currentMacSource").text("unavailable");
-        $("#currentMacDescription").text(interfaceId ? "Checking selected interface" : "None selected");
+        $("#currentMacDescription").text(interfaceId ? "Checking selected interface" : "Disabled");
         $("#useCurrentMac").prop("disabled", true);
         if (!interfaceId) {
             managedDescription = "";
@@ -263,7 +263,7 @@ $(document).ready(function() {
         $("#summaryNode").text((data.local && data.local.hostname) || "Local node");
         $("#summaryInterface").text((data.managed && data.managed.description)
             ? data.managed.description + " (" + (data.managed.identifier || "?") + ")"
-            : "None");
+            : "Disabled");
         $("#summaryMac").text((data.attachment && data.attachment.configured_shared_mac) || "Unavailable");
 
         const reasonCode = controller.reason_code || "";
@@ -401,6 +401,11 @@ $(document).ready(function() {
 
     function updateActions() {
         const managed = field("dhcphalocal.managed_interface").val() || "";
+        const disabledSelection = managed === "";
+        if (disabledSelection) {
+            field("dhcphashared.enabled").prop("checked", false);
+        }
+        field("dhcphashared.enabled").prop("disabled", disabledSelection || !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked);
         const configured = isConfiguredForForm();
         const configureAllowed = canConfigureInterface && configureAllowedInterfaces.includes(managed);
         const retryReady = configureRetryReady && configureRetryGeneration === formGeneration && managed !== "";
@@ -439,9 +444,10 @@ $(document).ready(function() {
         $("#saveDraft").toggle(managed !== "" && !configured && !savedEnabled)
             .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || (savedEnabled && managed !== savedMapping.managed));
         $("#draftExplanation").toggle(managed !== "" && !configured);
-        $("#saveSettings").toggle(managed === "" || configured || savedEnabled)
-            .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || (savedEnabled && managed !== savedMapping.managed));
-        $("#saveIdentityNote").toggle(savedEnabled && managed !== savedMapping.managed)
+        const identityChangeBlocked = savedEnabled && !disabledSelection && managed !== savedMapping.managed;
+        $("#saveSettings").toggle(disabledSelection || configured || savedEnabled)
+            .prop("disabled", !canWriteSettings || configureBusy || settingsBusy || configureOutcomeBlocked || identityChangeBlocked);
+        $("#saveIdentityNote").toggle(identityChangeBlocked)
             .text("Save Disable with the current interface first, then wait for fresh detached status before changing identity.");
         $("#prepareDevice, #reconcileDiagnostics, #retryApply").prop("disabled", !canRunRecovery || configureBusy || settingsBusy || configureOutcomeBlocked);
         $("#generateMac").prop("disabled", !canGenerateMac || configureBusy || settingsBusy || configureOutcomeBlocked);
@@ -558,7 +564,7 @@ $(document).ready(function() {
             return;
         }
         const managed = field("dhcphalocal.managed_interface").val() || "";
-        if (savedEnabled && managed !== savedMapping.managed) {
+        if (savedEnabled && managed !== "" && managed !== savedMapping.managed) {
             $("#settingsResult").text("Save Disable with the current interface before changing the local identity.");
             return;
         }
@@ -572,15 +578,23 @@ $(document).ready(function() {
         if (draft) {
             payload.dhcphashared.enabled = "0";
         }
+        if (managed === "") {
+            payload.dhcphashared.enabled = "0";
+            payload.dhcphalocal.carrier = "";
+        }
         $("#settingsResult").text(draft
             ? "Saving the disabled draft and applying the controller's safe state; native assignment will not be changed."
             : "Saving both settings sections and applying the controller...");
         $("#retryApply").hide();
         invalidateStatus();
-        post(api + "/settings/set", payload, 35000)
+        post(api + "/settings/set", payload, managed === "" ? 70000 : 35000)
             .done(function(data) {
                 handleFormValidation("frm_Settings", data.validations);
-                if (data.result === "saved" && data.saved === true) {
+                if (data.result === "staged" && data.saved === true) {
+                    $("#revision").val(data.revision || $("#revision").val());
+                    $("#settingsResult").text(data.error || "DHCP Interface HA was disabled, but its interface selection was retained. Refresh status and save Disabled again.");
+                    loadSettings();
+                } else if (data.result === "saved" && data.saved === true) {
                     savedMapping = {managed: payload.dhcphalocal.managed_interface || "", carrier: payload.dhcphalocal.carrier || ""};
                     savedEnabled = valueOf(payload.dhcphashared.enabled) === "1";
                     $("#revision").val(data.revision || $("#revision").val());

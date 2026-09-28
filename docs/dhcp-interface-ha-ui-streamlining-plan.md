@@ -1,9 +1,9 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_13**, 2026-09-28, following
+Status: source implementation for experimental **0.2_14**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
-recorded in sections 10–14;
+recorded in sections 10–15;
 authenticated native acceptance remains a separate gate.
 
 Reviewed for a Luna Max implementation handoff on 2026-09-27. Implement the
@@ -557,3 +557,32 @@ restarted and HTTPS responds 200. Configuration remains byte-identical and the
 controller remains running. The private 0.2.12 rollback package, configuration
 backup and deployment evidence are in
 `/root/dhcpha-settings-flat-0.2_13.K9Ywjj` on HA-2. HA-1 was not changed.
+
+## 15. Guarded Disabled removal — HA-2 0.2.14, 2026-09-28
+
+Renamed the empty managed-interface choice from None to Disabled. Selecting it
+forces the unsaved Enable checkbox off, prevents re-enabling it and keeps Save &
+Apply available even when an enabled interface is currently saved. Saving
+Disabled clears the local managed interface, carrier and legacy failback value
+while retaining the shared MAC.
+
+An enabled installation uses a guarded two-phase server operation in one request:
+save Disable with the existing identity, apply and fence it, then clear the local
+mapping only after the ordinary fresh detached-state validation passes. Failed or
+unknown apply leaves the disabled mapping intact and returns a staged result so
+the UI reloads authoritative settings. Direct API callers cannot enable an empty
+selection. Other interface or MAC identity changes retain their existing
+disable-first guard.
+
+The candidate passed 108 Python tests, both Node UI suites, PHP lint, XML parsing,
+diff checks and native Volt compilation. The focused regressions reproduce the
+previous disabled Save button, verify one-request enabled removal and prove a
+failed fence retains the mapping. Installed
+`os-dhcp-interface-ha-devel-0.2_14` on HA-2, package SHA-256
+`c6b63241ece93bf8e6069281e0f132672879df1faab1215a0a46943641604230`.
+All 25 installed source hashes and package checksums pass. The Volt cache was
+cleared, the web GUI restarted and HTTPS responds 200. Installation did not run
+the removal operation: configuration remains byte-identical and the controller
+remains running. The private 0.2.13 rollback package, configuration backup and
+deployment evidence are in `/root/dhcpha-disabled-0.2_14.9sAykh` on HA-2. HA-1
+was not changed.

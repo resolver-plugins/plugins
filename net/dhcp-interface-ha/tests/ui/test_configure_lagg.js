@@ -559,6 +559,44 @@ function testConfiguredStateRequiresVerifiedOwnership() {
         'a native mapping alone cannot be treated as configured when the owned device is absent');
 }
 
+function testDisabledSelectionCanBeSaved() {
+    const dom = domFixture();
+    dom.setField('dhcphalocal.managed_interface', '');
+    dom.setField('dhcphashared.enabled', '', {checked: true});
+    const context = vm.createContext(Object.assign({}, dom, {
+        canWriteSettings: true,
+        canConfigureInterface: true,
+        canRunRecovery: true,
+        canGenerateMac: true,
+        configureAllowedInterfaces: ['opt7'],
+        configureBusy: false,
+        settingsBusy: false,
+        configureOutcomeBlocked: false,
+        configureRetryReady: false,
+        configureRetryGeneration: -1,
+        formGeneration: 1,
+        savedEnabled: true,
+        savedMapping: {managed: 'opt7', carrier: 'em0'},
+        statusData: null,
+        isConfiguredForForm: () => false,
+        statusIsFresh: () => false,
+        detachedEvidenceFresh: () => false,
+        mappedDeviceNeedsRecovery: () => false,
+        pendingAssignmentAllowsConfigure: () => false
+    }));
+    vm.runInContext(between('    function updateActions()', '    function requestStatusOnce()'), context);
+    vm.runInContext('updateActions()', context);
+    assert.equal(dom.field('dhcphashared.enabled').prop('checked'), false,
+        'Disabled forces the unsaved Enable value off');
+    assert.equal(dom.field('dhcphashared.enabled').prop('disabled'), true,
+        'Enable cannot be selected while the managed interface is Disabled');
+    assert.equal(dom.nodes['#saveSettings'].visible, true);
+    assert.equal(dom.nodes['#saveSettings'].props.disabled, false,
+        'Disabled remains saveable when an enabled interface was previously configured');
+    assert.equal(dom.nodes['#saveIdentityNote'].visible, false,
+        'the ordinary enabled identity-change warning does not block guarded removal');
+}
+
 function statusRequestSource() {
     return between('    function invalidateStatus(', '    function verifiedDetached(')
         + between('    function statusIsFresh(', '    function isConfiguredForForm(')
@@ -786,6 +824,7 @@ function testSummaryAndAddressMeaning() {
     await testSharedStatusReadbackAndFreshness();
     await testOldCarrierAndMacSuggestions();
     testConfiguredStateRequiresVerifiedOwnership();
+    testDisabledSelectionCanBeSaved();
     testSummaryAndAddressMeaning();
     console.log('DHCP Interface HA UI behavior checks passed');
 })().catch(error => {

@@ -30,7 +30,7 @@ class SettingsController extends ApiControllerBase
         $localNodes = $local->getNodes();
         $managedName = trim((string)$local->managed_interface);
         $localNodes['managed_interface'] = [
-            '' => ['value' => gettext('None'), 'selected' => $managedName === '' ? 1 : 0],
+            '' => ['value' => gettext('Disabled'), 'selected' => $managedName === '' ? 1 : 0],
         ];
         $managedChoices = [];
         $interfaces = $config->interfaces ?? null;
@@ -96,12 +96,8 @@ class SettingsController extends ApiControllerBase
                 'error' => gettext('Submit both complete settings sections and their revision.'),
             ];
         }
-        // None clears the plugin setup, retaining the submitted shared MAC.
-        // Identity changes still require the existing disabled/fenced checks.
         if (trim((string)$localInput['managed_interface']) === '') {
-            $localInput = ['managed_interface' => '', 'carrier' => ''];
-            $sharedInput['enabled'] = '0';
-            $sharedInput['failback_delay'] = '0';
+            return $this->disableAndClear($sharedInput, $revision);
         }
 
         $saved = $this->saveSettings($sharedInput, $localInput, $revision, unknownSaveOutcome: false);
@@ -122,6 +118,90 @@ class SettingsController extends ApiControllerBase
             'applied' => $apply['applied'],
             'error' => $apply['error'],
             'revision' => $saved['revision'],
+        ];
+        if (!empty($apply['status'])) {
+            $response['status'] = $apply['status'];
+        }
+        return $response;
+    }
+
+    /**
+     * Disable with the saved identity first, then clear it only after apply and
+     * the ordinary identity-change validation verify a detached device.
+     */
+    private function disableAndClear(array $sharedInput, $revision)
+    {
+        $currentShared = new Shared();
+        $currentLocal = new Local();
+        $targetShared = [
+            'enabled' => '0',
+            'shared_mac' => (string)$sharedInput['shared_mac'],
+            'failback_delay' => '0',
+        ];
+        $targetLocal = ['managed_interface' => '', 'carrier' => ''];
+
+        if (!empty((string)$currentShared->enabled)) {
+            $current = self::canonical($currentShared, $currentLocal);
+            $disableShared = $current['dhcphashared'];
+            $disableShared['enabled'] = '0';
+            $disabled = $this->saveSettings(
+                $disableShared,
+                $current['dhcphalocal'],
+                $revision,
+                unknownSaveOutcome: false
+            );
+            if ($disabled['result'] !== 'saved') {
+                return $disabled;
+            }
+            if ($disabled['changed']) {
+                $this->logEvent('info', 'settings_saved', [
+                    'operation' => 'settings_disable_for_clear',
+                    'outcome' => 'saved',
+                ]);
+            }
+            $apply = self::applySavedSettings();
+            if ($apply['applied'] !== true) {
+                $response = [
+                    'result' => 'staged',
+                    'saved' => true,
+                    'applied' => $apply['applied'],
+                    'cleared' => false,
+                    'revision' => $disabled['revision'],
+                    'error' => gettext('DHCP Interface HA was disabled, but its interface selection was retained because detachment could not be verified. Refresh status, then save Disabled again.'),
+                ];
+                if (!empty($apply['status'])) {
+                    $response['status'] = $apply['status'];
+                }
+                return $response;
+            }
+            $revision = $disabled['revision'];
+        }
+
+        $cleared = $this->saveSettings($targetShared, $targetLocal, $revision, unknownSaveOutcome: false);
+        if ($cleared['result'] !== 'saved') {
+            if (!empty((string)$currentShared->enabled)) {
+                $cleared['result'] = 'staged';
+                $cleared['saved'] = true;
+                $cleared['cleared'] = false;
+                $cleared['revision'] = $revision;
+                $cleared['error'] = gettext('DHCP Interface HA was disabled, but its interface selection was retained because detached state could not be verified. Refresh status, then save Disabled again.');
+            }
+            return $cleared;
+        }
+        if ($cleared['changed']) {
+            $this->logEvent('info', 'settings_saved', [
+                'operation' => 'settings_clear',
+                'outcome' => 'saved',
+            ]);
+        }
+        $apply = self::applySavedSettings();
+        $response = [
+            'result' => 'saved',
+            'saved' => true,
+            'applied' => $apply['applied'],
+            'cleared' => true,
+            'error' => $apply['error'],
+            'revision' => $cleared['revision'],
         ];
         if (!empty($apply['status'])) {
             $response['status'] = $apply['status'];

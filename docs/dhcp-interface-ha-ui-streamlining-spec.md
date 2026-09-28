@@ -207,11 +207,12 @@ store or imply that Save draft is a runtime-free operation.
 
 | Saved state / selected form value | Available action and meaning |
 |---|---|
-| Disabled; None | Save & Apply clears the local mapping, enablement and failback value, preserving MAC; no Configure action. |
+| Disabled; Disabled | Save & Apply clears the local mapping, enablement and failback value, preserving MAC; no Configure action. |
 | Disabled; eligible original native device | Configure interface is primary; Save draft is secondary. Setup forces Enable off even if checked in the submitted form. |
 | Disabled; selected assignment already maps to the owned LAGG with a known carrier | Interface configured; Save & Apply is primary. Remaining prerequisites appear separately. |
 | Enabled; identity unchanged | Save & Apply for ordinary edits or disabling; Configure is unavailable. |
-| Enabled; interface/MAC/None changed | Require saving Disable with the old identity first, then fresh detached evidence before identity changes. |
+| Enabled; interface/MAC changed | Require saving Disable with the old identity first, then fresh detached evidence before identity changes. |
+| Enabled; Disabled selected | Save & Apply first disables and fences the saved identity, then clears the local mapping only after fresh detached evidence. A failed or unknown fence retains the mapping. |
 | Foreign device, ambiguous carrier, stale observation or missing permission | Explain the specific blocker; no Configure/Retry action that bypasses it. |
 
 “Interface configured” proves committed native mapping, recorded carrier and
@@ -316,9 +317,11 @@ ambiguity and provide guarded recovery guidance; do not guess from driver name,
 MAC prefix or another node's interface name.
 
 Enablement still requires valid local setup. Identity changes still require a
-saved disabled state and verified fencing. None clears plugin settings on save
-except the shared MAC, preserving the established behavior. It does not delete
-native assignments, rules or gateways or silently restore an original native
+saved disabled state and verified fencing. Disabled clears plugin settings on
+save except the shared MAC. When the saved configuration is enabled, the same
+request first saves and applies Disable with the old identity, then clears the
+mapping only after fresh detached evidence. It does not delete native
+assignments, rules or gateways or silently restore an original native
 assignment. Describe that boundary at removal time.
 
 ### 3. Conditions that people and agents can interpret

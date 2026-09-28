@@ -8,7 +8,7 @@ older manual-setup and UI presentation requirements below, particularly sections
 in the new documents are tracked with implementation and verification evidence
 in the linked plan; source changes are not evidence of deployed behavior.
 
-- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_13; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
+- **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-2 runs 0.2_14; HA-1’s last verified deployment remains 0.2_8. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
 - **Plugin path:** `net/dhcp-interface-ha/`
 - **Last verified deployment (before this increment):** HA-1 and HA-2 have 0.2_8 with automatic carrier capture and no separate carrier selector. At that earlier verification both were configured and enabled, HA-1 was in operator-selected CARP maintenance and HA-2 was MASTER. HA-2 acquired 10.250.100.100 with automatic promiscuous reception verified. See the [deployment records](dhcp-interface-ha-ui-plan.md#ha-1-installation--2026-09-27).
@@ -629,13 +629,14 @@ Below the interface/carrier fields, show a compact mapping:
 The generated device name may be shown as supporting detail. The administrator
 MUST NOT need to create or edit a native LAGG object manually.
 
-The empty managed-interface choice is **None**. Selecting it clears the form's
-interface and carrier selections, unchecks enablement and resets failback delay
-to zero, while retaining the shared MAC. **Save & Apply** persists this reset in
-the existing single transaction; the API also normalizes these fields for direct
-callers. An enabled configuration must first be disabled and saved, with fencing
-verified, before clearing its identity. This removes the plugin setup, not the
-native logical interface, its assignments or firewall rules.
+The empty managed-interface choice is **Disabled**. Selecting it clears the
+form's interface and carrier selections, unchecks and locks enablement, and
+resets failback delay to zero while retaining the shared MAC. **Save & Apply**
+persists this reset; the API also normalizes these fields for direct callers.
+When the saved configuration is enabled, the request first saves and applies
+Disable with the old identity, then clears the mapping only after fresh detached
+evidence. A failed or unknown fence retains the mapping. This removes the plugin
+setup, not the native logical interface, its assignments or firewall rules.
 
 Carrier candidates must use the existing capability/reservation checks. Preserve
 a configured carrier in the selector when it is excluded from general native

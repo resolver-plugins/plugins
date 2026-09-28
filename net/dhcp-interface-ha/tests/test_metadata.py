@@ -284,7 +284,7 @@ namespace {{
                 self.assertEqual(managed["effective_mac_suggestion"], expected)
                 self.assertEqual(managed["mac_source"], source)
 
-    def test_none_clears_plugin_settings_preserves_mac_and_requires_verified_detachment(self):
+    def test_disabled_clears_plugin_settings_preserves_mac_and_requires_verified_detachment(self):
         php = shutil.which("php")
         self.assertIsNotNone(php, "PHP CLI is required for the settings API behavior check")
         harness = PLUGIN / "tests/fixtures/settings_controller.php"
@@ -295,10 +295,14 @@ namespace {{
                     [php, str(harness), str(controller), case], check=True, capture_output=True, text=True,
                 )
                 data = json.loads(result.stdout)
-                if case == "clear_none":
+                self.assertEqual(
+                    data["loaded_settings"]["dhcphalocal"]["managed_interface"][""]["value"],
+                    "Disabled",
+                )
+                if case in ("clear_none", "clear_enabled"):
                     self.assertEqual(data["response"]["result"], "saved")
                     self.assertTrue(data["response"]["applied"])
-                    self.assertEqual(data["save_count"], 1)
+                    self.assertEqual(data["save_count"], 2 if case == "clear_enabled" else 1)
                     self.assertEqual(data["save_snapshot"], {
                         "shared": {"enabled": "0", "shared_mac": "02:11:22:33:44:55", "failback_delay": "0"},
                         "local": {"managed_interface": "", "carrier": ""},
@@ -309,6 +313,21 @@ namespace {{
                     self.assertEqual(data["save_count"], 0)
                     self.assertNotIn("dhcp_interface_ha apply", data["events"])
                 self.assertFalse(data["locked"])
+
+        failed_apply = subprocess.run(
+            [php, str(harness), str(controller), "clear_enabled", "settings", "failed"],
+            check=True, capture_output=True, text=True,
+        )
+        staged = json.loads(failed_apply.stdout)
+        self.assertEqual(staged["response"]["result"], "staged")
+        self.assertTrue(staged["response"]["saved"])
+        self.assertFalse(staged["response"]["cleared"])
+        self.assertEqual(staged["save_count"], 1)
+        self.assertEqual(staged["save_snapshot"], {
+            "shared": {"enabled": "0", "shared_mac": "02:11:22:33:44:55", "failback_delay": "60"},
+            "local": {"managed_interface": "wan", "carrier": "hn1"},
+        })
+        self.assertEqual(staged["events"].count("dhcp_interface_ha apply"), 1)
 
     def test_save_and_retry_apply_preserve_failure_and_unknown_results(self):
         php = shutil.which("php")
