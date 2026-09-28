@@ -907,3 +907,11 @@ Local. Native model version metadata and initialization remain, as do current
 scope validation, setup/teardown and package lifecycle safety checks. Historical
 migration evidence above describes development builds, not a supported upgrade
 path for this release.
+
+Validation: 117 plugin tests and both UI checks pass. Built and installed 0.2_32
+on HA-2; package contents omit the migration. The old package left an unowned
+M1_1_0.php behind, so its hash was verified against the prior source and the file
+was moved out of the installed tree into the deployment evidence directory.
+No legacy-file cleanup or migration logic was added to the new package. Installed
+source hashes, package integrity and fresh-state checks pass; configuration is
+unchanged and the web UI was restarted. HA-1 remains on 0.2_30.
