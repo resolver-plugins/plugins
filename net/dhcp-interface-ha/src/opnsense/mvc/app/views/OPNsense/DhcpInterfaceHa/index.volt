@@ -260,12 +260,6 @@ $(document).ready(function() {
         const detached = verifiedDetached(data);
         const role = carp.role || "role unavailable";
         const address = updateAddressDetail(data);
-        $("#summaryNode").text((data.local && data.local.hostname) || "Local node");
-        $("#summaryInterface").text((data.managed && data.managed.description)
-            ? data.managed.description + " (" + (data.managed.identifier || "?") + ")"
-            : "Disabled");
-        $("#summaryMac").text((data.attachment && data.attachment.configured_shared_mac) || "Unavailable");
-
         const reasonCode = controller.reason_code || "";
         const attachmentUnsafe = actual === "UNVERIFIED" || reasonCode === "attachment_unverified"
             || (actual === "ATTACHED" && (!data.attachment || data.attachment.owned !== true
@@ -312,7 +306,7 @@ $(document).ready(function() {
         statusObservedAt = 0;
         clearTimeout(staleTimer);
         setSummary("Status unavailable", "label-default");
-        $("#summaryInterface, #summaryMac, #detailRole, #detailAttachment, #detailAddress, #detailController, "
+        $("#detailRole, #detailAttachment, #detailAddress, #detailController, "
             + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA, #detailRemoval")
             .text("Unavailable");
         updateActions();
@@ -894,7 +888,7 @@ $(document).ready(function() {
     $("#reconcileDiagnostics, #retryApply").on("click", function() {
         runRecovery($(this), "/service/apply", "Guarded reconciliation completed.");
     });
-    $("#refreshStatus, #refreshDiagnostics").on("click", function() {
+    $("#refreshDiagnostics").on("click", function() {
         invalidateStatus();
         renderStatusUnavailable("Refreshing required observations...");
         refreshStatus();
@@ -996,14 +990,7 @@ $(document).ready(function() {
 
     <div class="tab-content content-box">
         <div class="tab-pane fade in active" id="settings">
-            <div class="content-box" aria-live="polite">
-                <h4>{{ lang._('Current local state') }}</h4>
-                <p><strong>{{ lang._('State') }}:</strong> <span id="summaryState" class="label label-default">{{ lang._('Loading') }}</span></p>
-                <p><strong>{{ lang._('Node') }}:</strong> <span id="summaryNode">{{ lang._('Loading') }}</span></p>
-                <p><strong>{{ lang._('Interface') }}:</strong> <span id="summaryInterface">{{ lang._('Loading') }}</span></p>
-                <p><strong>{{ lang._('Shared MAC') }}:</strong> <span id="summaryMac">{{ lang._('Loading') }}</span></p>
-                <button class="btn btn-default" id="refreshStatus" type="button">{{ lang._('Refresh status') }}</button>
-            </div>
+            <p aria-live="polite"><strong>{{ lang._('State') }}:</strong> <span id="summaryState" class="label label-default">{{ lang._('Loading') }}</span></p>
 
             {% if not canWriteSettings %}
             <div class="alert alert-info">{{ lang._('This account can view settings and diagnostics but cannot save or run plugin actions.') }}</div>

@@ -144,8 +144,9 @@ foreign-device conflict by weakening ownership checks or altering that device.
 - **Settings** is the default tab and includes the operational summary; the
   separate Status tab is removed. Existing status links/bookmarks should land on
   the summary rather than a dead tab.
-- The summary shows this node, operational role/state, selected interface,
-  observed IPv4 address or DHCP wait state, and the configured shared MAC.
+- At the top of Settings, show only `State: <status>` without a surrounding
+  box, heading, node/interface/MAC rows or separate refresh button. Keep automatic
+  updates and stale/unavailable state handling.
 - Combine existing observations for presentation without replacing the
   controller state machine. Examples: **Active · CARP MASTER · 10.250.100.100**,
   **Active · Waiting for DHCP**, **Standby · Interface intentionally

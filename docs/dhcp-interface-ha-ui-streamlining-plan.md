@@ -1,6 +1,6 @@
 # DHCP Interface HA UI and logging implementation plan
 
-Status: source implementation for experimental **0.2_19**, 2026-09-28, following
+Status: source implementation for experimental **0.2_20**, 2026-09-28, following
 the user’s implementation request. Local behavior checks and native source/
 syntax probes are recorded below. HA-2 deployments and UI corrections are
 recorded in sections 10–16;
@@ -688,3 +688,14 @@ the empty-value Disabled option. All 114 Python tests and both UI suites pass;
 PHP lint, package integrity and all 25 installed source hashes pass. UI cache
 cleared and web UI restarted. Evidence: `/root/dhcpha-fix-0.2_19.WTt7KG`.
 Package SHA-256: `544475ad850ffaae5cdd578e43649f0e92ec80263527bbc1a9945105df9ca455`.
+
+
+### 0.2_20 — minimal Settings state display
+
+Replace the Current local state box with a single live `State: <status>` line
+at the top of Settings. Remove its node/interface/MAC rows and refresh button;
+automatic status updates and the Diagnostics refresh action remain.
+
+UI behavior suite and diff checks pass. Deployed 0.2_20 to HA-2; package integrity
+and all installed source hashes verified, UI cache cleared and web UI restarted.
+Evidence: `/root/dhcpha-fix-0.2_20.8N2vzv`.
