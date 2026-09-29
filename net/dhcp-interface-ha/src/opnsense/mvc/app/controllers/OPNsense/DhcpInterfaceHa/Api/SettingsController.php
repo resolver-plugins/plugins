@@ -9,6 +9,7 @@ use OPNsense\Core\Config;
 use OPNsense\Core\Hasync;
 use OPNsense\Core\Syslog;
 use OPNsense\DhcpInterfaceHa\Local;
+use OPNsense\DhcpInterfaceHa\NativeReceiveMode;
 use OPNsense\DhcpInterfaceHa\Shared;
 
 class SettingsController extends ApiControllerBase
@@ -236,6 +237,13 @@ class SettingsController extends ApiControllerBase
             return $saved;
         }
 
+        if (!empty($saved['receive_mode_only'])) {
+            $saved['applied'] = true;
+            $saved['status'] = self::readRuntimeStatus();
+            $this->logEvent('info', 'receive_mode_configured', ['outcome' => 'saved']);
+            return $saved;
+        }
+
         if ($saved['changed']) {
             $this->logEvent('info', 'settings_saved', [
                 'operation' => 'settings_set',
@@ -443,6 +451,11 @@ class SettingsController extends ApiControllerBase
             if (!self::isSelectedPendingRelink($pending, $managedName, $carrier)) {
                 return ['restored' => false, 'applied' => false, 'error' => gettext('The native restoration queue could not be verified; plugin settings were retained.')];
             }
+            // Restore before native apply configures the original carrier. A
+            // failed apply leaves HA disabled and can safely retry this relink.
+            if (NativeReceiveMode::update($nativeConfig->interfaces->$managedName, false)) {
+                $config->save(['description' => gettext('HA DHCP Interface restore native receive mode')]);
+            }
         } catch (\Throwable $exception) {
             return ['restored' => false, 'applied' => false, 'error' => gettext('Native assignment restoration could not be staged; plugin settings were retained.')];
         } finally {
@@ -552,23 +565,48 @@ class SettingsController extends ApiControllerBase
             $candidateShared->setNodes($sharedInput);
             $candidateLocal->setNodes($localInput);
 
+            $managedName = trim((string)$candidateLocal->managed_interface);
+            $previousName = trim((string)$currentLocal->managed_interface);
+            if ($managedName !== '' && $previousName !== '' && $managedName !== $previousName
+                && isset($config->object()->interfaces->$previousName->dhcpha_original_promisc)) {
+                return ['result' => 'failed', 'saved' => false, 'applied' => null,
+                    'error' => gettext('Select Disabled and save to restore the previous interface before choosing another.')];
+            }
+            $receiveName = $managedName ?: trim((string)$currentLocal->managed_interface);
+            $nativeInterface = $config->object()->interfaces->$receiveName ?? null;
+            $receiveChanged = false;
+            $receiveCarrier = trim((string)($managedName !== '' ? $candidateLocal->carrier : $currentLocal->carrier));
+            if ($receiveName !== '' && $receiveCarrier !== '' && $nativeInterface !== null
+                && in_array((string)$nativeInterface->if, [$receiveCarrier, 'dhcpha0lagg'], true)) {
+                $candidateInterface = simplexml_load_string($nativeInterface->asXML());
+                $receiveChanged = NativeReceiveMode::update($candidateInterface, $managedName !== '');
+            }
+            if ($receiveChanged && !$this->nativeRouteAllowed('/api/interfaces/assignment/set_item/' . $receiveName)) {
+                return ['result' => 'failed', 'saved' => false, 'applied' => null,
+                    'error' => gettext('Native interface write permission is required to configure receive mode.')];
+            }
+
             // An ordinary unchanged save is not a request to repair runtime state.
             // Check under the lock so a stale page cannot bypass conflict detection.
-            if ($skipUnchanged && hash_equals(self::revision($candidateShared, $candidateLocal), $revision)) {
+            if ($skipUnchanged && !$receiveChanged && hash_equals(self::revision($candidateShared, $candidateLocal), $revision)) {
                 return ['result' => 'unchanged', 'saved' => false, 'applied' => null, 'revision' => $revision];
             }
 
             $validations = self::modelValidations($candidateShared, 'dhcphashared');
             $validations += self::modelValidations($candidateLocal, 'dhcphalocal');
-            $validations += self::crossValidations(
-                $currentShared,
-                $currentLocal,
-                $candidateShared,
-                $candidateLocal,
-                $config->object(),
-                $observations,
-                $needsEvidence
-            );
+            // A receive-mode-only correction changes no HA identity or enable
+            // state and needs no runtime action or promotion evidence.
+            if (!$unchanged || $needsEvidence) {
+                $validations += self::crossValidations(
+                    $currentShared,
+                    $currentLocal,
+                    $candidateShared,
+                    $candidateLocal,
+                    $config->object(),
+                    $observations,
+                    $needsEvidence
+                );
+            }
             if (!empty($validations)) {
                 return [
                     'result' => 'failed',
@@ -585,6 +623,9 @@ class SettingsController extends ApiControllerBase
 
             $oldRevision = self::revision($currentShared, $currentLocal);
             $newRevision = self::revision($candidateShared, $candidateLocal);
+            if ($receiveChanged) {
+                NativeReceiveMode::update($nativeInterface, $managedName !== '');
+            }
             $candidateShared->serializeToConfig(false, true);
             $candidateLocal->serializeToConfig(false, true);
             $saveAttempted = true;
@@ -594,6 +635,7 @@ class SettingsController extends ApiControllerBase
                 'saved' => true,
                 'revision' => $newRevision,
                 'changed' => !hash_equals($oldRevision, $newRevision),
+                'receive_mode_only' => $receiveChanged && hash_equals($oldRevision, $newRevision),
             ];
         } catch (\Throwable $exception) {
             $this->logEvent('error', 'settings_save_failed', [

@@ -34,6 +34,8 @@ namespace OPNsense\Core {
         public static $local = [];
         public static $assignments = ['wan' => 'hn1', 'lan' => 'hn2'];
         public static $pending = [];
+        public static $receiveModes = [];
+        public static $appliedReceiveModes = [];
         public static $sync = ['synchronizetoip' => '192.0.2.2', 'syncitems' => 'interfaces,firewall'];
         public static $pendingShared = null;
         public static $pendingLocal = null;
@@ -60,6 +62,11 @@ namespace OPNsense\Core {
                     '</interfaces><virtualip><vip><mode>carp</mode><interface>lan</interface><disabled>0</disabled></vip></virtualip>' .
                     '<OPNsense><DhcpInterfaceHaShared/></OPNsense></opnsense>'
                 );
+                foreach (self::$receiveModes as $name => $fields) {
+                    foreach ($fields as $key => $value) {
+                        $this->xml->interfaces->$name->$key = $value;
+                    }
+                }
             }
             return $this->xml;
         }
@@ -84,6 +91,8 @@ namespace OPNsense\Core {
             }
             if (is_array($metadata) && str_contains($metadata['description'] ?? '', 'configuration sync')) {
                 self::$saveKind = 'sync';
+            } elseif (is_array($metadata) && str_contains($metadata['description'] ?? '', 'receive mode')) {
+                self::$saveKind = 'receive';
             } elseif (is_array($metadata)) {
                 self::$saveKind = 'plugin';
             } else {
@@ -91,6 +100,14 @@ namespace OPNsense\Core {
             }
             if (self::$failSave === self::$saveKind) {
                 throw new \RuntimeException('injected config save failure');
+            }
+            foreach ($this->object()->interfaces->children() as $name => $node) {
+                self::$receiveModes[(string)$name] = [];
+                foreach (['promisc', 'dhcpha_original_promisc'] as $key) {
+                    if (isset($node->$key)) {
+                        self::$receiveModes[(string)$name][$key] = (string)$node->$key;
+                    }
+                }
             }
             self::$saveCount++;
             if (self::$saveKind === 'plugin') {
@@ -101,7 +118,7 @@ namespace OPNsense\Core {
             } elseif (self::$saveKind === 'sync') {
                 self::$sync = self::$pendingSync;
                 self::$pendingSync = null;
-            } else {
+            } elseif (self::$saveKind === 'native') {
                 foreach ($this->object()->interfaces->children() as $name => $node) {
                     self::$assignments[(string)$name] = (string)$node->if;
                     \FixtureRequest::$needsReconcile = true;
@@ -213,6 +230,7 @@ namespace OPNsense\Core {
                 return self::statusJson();
             }
             if ($event === 'interface apply') {
+                Config::$appliedReceiveModes[] = Config::$receiveModes;
                 if (\OPNsense\Core\Config::$nativeApply === 'failed') {
                     return 'FAILED';
                 }
@@ -551,6 +569,7 @@ namespace {
         }
     }
 
+    require dirname($argv[2]) . '/NativeReceiveMode.php';
     require $argv[1];
     require $argv[2];
 
@@ -588,10 +607,25 @@ namespace {
         \OPNsense\Core\Config::$local = ['managed_interface' => 'wan', 'carrier' => 'hn1'];
         \OPNsense\Core\Config::$assignments['wan'] = 'dhcpha0lagg';
     }
+    if (str_starts_with($case, 'teardown_') || str_starts_with($case, 'save_unchanged')) {
+        \OPNsense\Core\Config::$receiveModes['wan'] = [
+            'promisc' => '1', 'dhcpha_original_promisc' => json_encode([false, ''])
+        ];
+    }
+    if (array_key_exists('original_promisc', $requestFlags)) {
+        \OPNsense\Core\Config::$receiveModes['wan'] = ['promisc' => $requestFlags['original_promisc']];
+    }
+    if (isset($requestFlags['receive_backup'])) {
+        \OPNsense\Core\Config::$receiveModes['wan']['dhcpha_original_promisc'] = $requestFlags['receive_backup'];
+    }
+    if (!empty($requestFlags['receive_missing'])) {
+        \OPNsense\Core\Config::$receiveModes['wan'] = [];
+    }
     if ($case === 'save_unchanged_disabled') {
         \OPNsense\Core\Config::$shared['enabled'] = '0';
         \OPNsense\Core\Config::$local = ['managed_interface' => '', 'carrier' => ''];
         \OPNsense\Core\Config::$assignments['wan'] = 'hn1';
+        \OPNsense\Core\Config::$receiveModes['wan'] = [];
     }
     if ($case === 'configure_unrelated_pending') {
         \OPNsense\Core\Config::$pending = ['lan' => ['pending_action' => 'relink', 'pending_if' => 'hn3']];
@@ -740,6 +774,8 @@ namespace {
         'progress_reads' => \FixtureRequest::$progressReads,
         'progress_checks' => $progressChecks,
         'response' => $response,
+        'applied_receive_modes' => \OPNsense\Core\Config::$appliedReceiveModes,
+        'receive_modes' => \OPNsense\Core\Config::$receiveModes,
         'save_count' => \OPNsense\Core\Config::$saveCount,
         'shared' => \OPNsense\Core\Config::$shared,
         'local' => \OPNsense\Core\Config::$local,

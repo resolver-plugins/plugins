@@ -17,7 +17,7 @@ in the linked plan; source changes are not evidence of deployed behavior.
 - **Scope:** high availability for one IPv4 DHCP client interface in an existing active/passive OPNsense CARP cluster. WAN is the default use case, not a required interface role.
 - **Restored controller baseline:** 0.2_1 provides the CARP-following carrier controller, combined Settings transaction, Settings/Status/Diagnostics page, structured local status/readiness, explicit setup preparation and independent node-local logical/NIC assignments. Peer API credentials and release holds are absent. See the [rollback record](dhcp-interface-ha-ui-plan.md#source-and-ha-2-rollback--2026-09-27).
 - **Source 0.2_7:** Configure LAGG captures the selected assignment's original device and saves it through the existing validated Settings transaction before native relinking. It saves the submitted shared MAC and other plugin form settings with enablement off. The updated revision is retained; failed settings save/apply prevents relinking. Native apply failures leave the carrier saved for recovery. The carrier selector is removed; preview detects the current native device and retains a saved carrier for migrated assignments. If a migrated assignment has no saved carrier, restore its original device while disabled and repeat setup. Native assignment privileges and confirmation still apply.
-- **Source 0.2_8:** The controller automatically sets promiscuous receive mode on its owned LAGG before attachment, verifies member inheritance before activation, and repairs cleared filters on an otherwise correct active attachment without bringing it down. This addresses Hyper-V receive filtering with cloned MACs. Failed filter verification fences the attachment. The setting is scoped to the runtime LAGG; native configuration is unchanged, and detached members release the inherited filter.
+- **Source 0.2_8:** The controller automatically sets promiscuous receive mode on its owned LAGG before attachment, verifies member inheritance before activation, and repairs cleared filters on an otherwise correct active attachment without bringing it down. This addresses Hyper-V receive filtering with cloned MACs. Failed filter verification fences the attachment. Detached members release the inherited filter. Since 0.2_37, setup also maintains the native logical-interface promiscuous-mode setting so native link-up configuration does not clear the runtime filter (see below).
 - **Source 0.2_9:** The UI/setup/logging increment adds a guarded server-side Configure action, sender-specific sync selection, structured diagnostic responsibility/resolution and native event logging. Settings, Diagnostics and Log replace the separate Status tab. See the linked plan for source verification and outstanding native acceptance; HA-2 deployment is recorded in section 10 of that plan; HA-2 was STANDBY before and after installation.
 - **Source 0.2_15:** Save & Apply is the only Settings mutation action. It invokes guarded native setup when the selected logical interface is not migrated, and ordinary settings save afterward. Initial setup defaults an empty shared MAC to the freshly observed usable MAC of the selected carrier. The separate Configure and Save draft controls are removed.
 - **Source 0.2_19:** The native device hook releases the carrier reservation while disabled, allowing Disabled + Save to restore the native assignment and clear local plugin settings in one request. HA-2 removal and the resulting Disabled selection were verified.
@@ -441,6 +441,35 @@ raises the LAGG before judging link readiness. A still-missing link remains a
 visible fault; the carrier stays up so native link negotiation can recover.
 BACKUP/maintenance still detach and down the carrier. The plugin does not itself
 request CARP demotion for link loss alone; native CARP remains authoritative.
+
+### Native receive-mode configuration (0.2_37)
+
+Setup saves `promisc=1` on the selected native logical interface before applying
+its assignment. The interface-local `dhcpha_original_promisc` metadata records
+whether the original field existed and its exact value; repeated saves never
+overwrite that snapshot. Removal restores the original value before native
+assignment apply, then removes the metadata. Invalid restoration metadata fails
+closed. This is internal configuration ownership, not a user setup prerequisite,
+a model migration, or a setting in the plugin XMLRPC shared section.
+
+An existing installation acquires this setting on Save & Apply. If plugin
+settings are unchanged, this correction only saves native configuration and reads
+status: it does not relink, restart DHCP, or invoke controller apply. Once native
+configuration is correct, unchanged saves remain no-ops. Native interface write
+permission is required for this correction. Runtime receive-mode verification and
+repair remain in place as safeguards.
+
+On 2026-09-29, HA-2 became MASTER at 08:52:21 CDT, its LAGG came up at :22, and
+DHCP reported the shared address at :23. During return to HA-1, MASTER at :45
+was followed by link-up at :48, an additional link-down/up, repeated native
+interface configuration, and DHCP address acquisition at :59. Native apply
+cleared promiscuous mode, and the controller repaired it on subsequent passes.
+Offline execution of the installed native receive-mode decision code reproduces
+that conflict. The existing-device preparation hook performs no interface writes.
+The command responsible for the additional physical link reset remains unproven;
+do not claim this receive-mode fix eliminates the entire delay without a measured
+failover. A coordinated capture must correlate CARP, executed `ifconfig` commands,
+physical/LAGG link events, DHCP completion and traffic recovery.
 
 ### 14.2 Conditions that MUST NOT by themselves trigger HA movement
 

@@ -271,6 +271,7 @@ namespace {
         }
     }
 
+    require __DIR__ . '/../../src/opnsense/mvc/app/models/OPNsense/DhcpInterfaceHa/NativeReceiveMode.php';
     require $argv[1];
     require_once dirname($argv[1]) . '/ServiceController.php';
     $case = $argv[2] ?? 'success';

@@ -35,6 +35,53 @@ def run_controller(case, action="configure", flags=None):
 
 
 class SettingsStreamliningTests(unittest.TestCase):
+    def test_native_receive_mode_is_saved_before_assignment_apply(self):
+        for original in (None, "", "0", "1"):
+            with self.subTest(original=original):
+                flags = {} if original is None else {"original_promisc": original}
+                outcome = run_controller("configure_success", flags=flags)
+                self.assertEqual(outcome["response"]["result"], "saved")
+                native = outcome["receive_modes"]["wan"]
+                self.assertEqual(native["promisc"], "1")
+                self.assertEqual(json.loads(native["dhcpha_original_promisc"]),
+                                 [original is not None, original or ""])
+                self.assertEqual(outcome["applied_receive_modes"][0]["wan"], native)
+
+    def test_missing_native_receive_mode_is_repaired_without_relink_or_apply(self):
+        outcome = run_controller("save_unchanged", action="settings", flags={"receive_missing": True})
+        self.assertEqual(outcome["response"]["result"], "saved")
+        self.assertTrue(outcome["response"]["receive_mode_only"])
+        self.assertEqual(outcome["save_count"], 1)
+        self.assertEqual(outcome["receive_modes"]["wan"]["promisc"], "1")
+        self.assertNotIn("interface apply", outcome["events"])
+        self.assertNotIn("dhcp_interface_ha apply", outcome["events"])
+        denied = run_controller("save_unchanged", action="settings", flags={
+            "receive_missing": True,
+            "denied_routes": ["/api/interfaces/assignment/set_item/wan"],
+        })
+        self.assertEqual(denied["save_count"], 0)
+        self.assertEqual(denied["response"]["result"], "failed")
+
+    def test_removal_restores_receive_mode_before_native_apply(self):
+        outcome = run_controller("teardown_success", action="settings")
+        self.assertEqual(outcome["response"]["result"], "saved")
+        self.assertFalse(outcome["receive_modes"]["wan"])
+        self.assertFalse(outcome["applied_receive_modes"][0]["wan"])
+
+    def test_receive_mode_restore_preserves_original_values_and_rejects_bad_backup(self):
+        for original in ("", "0", "1"):
+            with self.subTest(original=original):
+                outcome = run_controller("teardown_success", action="settings", flags={
+                    "receive_backup": json.dumps([True, original]),
+                })
+                self.assertEqual(outcome["response"]["result"], "saved")
+                self.assertEqual(outcome["receive_modes"]["wan"], {"promisc": original})
+                self.assertEqual(outcome["applied_receive_modes"][0]["wan"], {"promisc": original})
+        invalid = run_controller("save_unchanged", action="settings", flags={"receive_backup": "invalid"})
+        self.assertEqual(invalid["response"]["result"], "failed")
+        self.assertEqual(invalid["save_count"], 0)
+        self.assertNotIn("dhcp_interface_ha apply", invalid["events"])
+
     def test_progress_is_live_request_scoped_and_not_configuration_authority(self):
         outcome = run_controller('configure_success', flags={'progress_id': secrets.token_hex(16)})
         applying = next(item['progress'] for item in outcome['progress_reads'] if item['event'] == 'interface apply')
