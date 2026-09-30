@@ -34,8 +34,8 @@ class Host:
         self.ignore = None
 
     def command(self, argv):
-        if argv[0].endswith('pluginctl'):
-            return json.dumps(self.items)
+        if argv == ['/sbin/ifconfig', '-Lm']:
+            return self.ifconfig()
         if argv[0].endswith('sysctl'):
             return '1'
         self.commands.append(tuple(argv))
@@ -89,6 +89,33 @@ class Host:
             raise AssertionError(argv)
         self.after(argv)
         return ''
+
+    def ifconfig(self):
+        """Model kernel observations in FreeBSD's non-verbose wire format."""
+        lines = []
+        for name, item in self.items.items():
+            flags = ','.join(flag.upper() for flag in item['flags'])
+            lines.append(f"{name}: flags=1<{flags}> metric 0 mtu {item.get('mtu', '1500')}")
+            for key, field in [('ether', 'macaddr'), ('hwaddr', 'macaddr_hw')]:
+                if field in item:
+                    lines.append(f"\t{key} {item[field]}")
+            for family, key in [('ipv4', 'inet'), ('ipv6', 'inet6')]:
+                for address in item.get(family, []):
+                    lines.append(f"\t{key} {address['ipaddr']}")
+            if item.get('groups'):
+                lines.append('\tgroups: ' + ' '.join(item['groups']))
+            for key in ('status', 'laggproto'):
+                if key in item:
+                    label = key + ':' if key == 'status' else key
+                    lines.append(f"\t{label} {item[key]}")
+            for field, key in [('laggport', 'laggport'), ('members', 'member')]:
+                for member in item.get(field, {}):
+                    lines.append(f"\t{key}: {member} flags=0<>")
+            for vhid, carp in item.get('carp', {}).items():
+                lines.append(f"\tcarp: {carp['status']} vhid {vhid} advbase 1 advskew 0")
+            if item.get('vlan'):
+                lines.append('\tvlan: 7 vlanproto: 802.1q vlanpcp: 0 parent interface: ' + item['vlan']['parent'])
+        return '\n'.join(lines)
 
 
 class RuntimeTests(unittest.TestCase):
@@ -269,10 +296,11 @@ class RuntimeTests(unittest.TestCase):
         self.assert_fenced()
 
     def test_invalid_configuration_and_inventory_block_promotion(self):
-        for mutation in ('collision', 'vlan', 'assigned', 'delay', 'mtu', 'missing_carp', 'address'):
+        for mutation in ('collision', 'hardware_collision', 'vlan', 'assigned', 'delay', 'mtu', 'missing_carp', 'address'):
             with self.subTest(mutation=mutation):
                 self.setUp()
                 if mutation == 'collision': self.host.items['hn0']['macaddr'] = MAC
+                if mutation == 'hardware_collision': self.host.items['hn0']['macaddr_hw'] = MAC
                 if mutation == 'vlan': self.host.items['hn1']['vlan'] = {'parent': 'hn0'}
                 if mutation == 'assigned': self.edit('<if>hn0</if>', '<if>hn1</if>')
                 if mutation == 'delay': self.edit('<failback_delay>0', '<failback_delay>120')

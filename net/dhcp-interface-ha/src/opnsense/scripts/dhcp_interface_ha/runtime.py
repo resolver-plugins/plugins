@@ -21,13 +21,13 @@ from core import (
     DesiredAttachment, GlobalRole, InterfaceSnapshot, ObservedState, Settings, DHCPHA_DEVICE,
     desired_state, plan_reconcile, reduce_carp_role, validate_shared_mac,
 )
+from inventory import DEVICE_RE, parse_interface_inventory
 
 
 RUNTIME_DIR = Path("/var/run/dhcp-interface-ha")
 COMMAND_TIMEOUT = 5
 LOCK_TIMEOUT = 5
 STATUS_LOCK_TIMEOUT = 2
-DEVICE_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_.-]{0,14}\Z")
 EVENT_PROGRAM = "dhcp-interface-ha"
 EVENT_MAX_LENGTH = 1024
 
@@ -90,6 +90,8 @@ def _ipv4_addresses(inventory, device):
 
 def _command_category(argv):
     name = Path(str(argv[0])).name
+    if name == "ifconfig" and argv[1:] == ["-Lm"]:
+        return "interface_inventory"
     if name == "ifconfig" and len(argv) > 2:
         action = str(argv[2])
         return "ifconfig_detach" if action.startswith("-") else "ifconfig_" + action
@@ -339,7 +341,7 @@ class Controller:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     def inventory(self):
-        items = json.loads(self._command(["/usr/local/sbin/pluginctl", "-D"]))
+        items = parse_interface_inventory(self._command(["/sbin/ifconfig", "-Lm"]))
         if not isinstance(items, dict) or not items or any(not isinstance(v, dict) for v in items.values()):
             raise ValueError("invalid native interface inventory")
         for name, item in items.items():

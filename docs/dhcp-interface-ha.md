@@ -538,6 +538,32 @@ A lightweight controller/service performs local invariant reconciliation approxi
 
 This interval is initially an implementation constant, not a user-visible tuning option.
 
+Since source 0.2_38, controller inventory reads use `/sbin/ifconfig -Lm` and a
+plugin-owned Python parser instead of `pluginctl -D`. Native `pluginctl -D`
+executes `ifconfig -Lmv`; its verbose transceiver diagnostics caused repeated
+Intel ix I²C reads in the 2026-09-30 CPU trace. The controller needs live
+interface safety fields, not SFP diagnostics. Every inventory request still
+takes a fresh read, including pre-mutation and final verification, status and
+the CARP health hook. The daemon still waits five seconds after each cycle.
+
+The reader preserves administrative/promiscuous flags, link state, MTU, current
+and original hardware MACs, ownership groups, LAGG and bridge membership, VLAN
+parents, tunnel presence, addresses and CARP instances/roles. `hwaddr` is printed
+without verbose mode when it differs from `ether`; otherwise the reader uses
+the same current-MAC fallback as the native parser. Physical-device
+classification follows OPNsense's `interfaces_virtual_patterns()` list.
+Malformed safety rows fail the observation instead of being silently treated
+as absent. Inventory failures keep the `interface_inventory` log category.
+
+The fresh-install native package check compares the installed reader with one
+native inventory read for these safety fields. This qualification read is not
+part of periodic operation. Runtime tests exercise transitions using
+non-verbose output, including original-hardware-MAC collision rejection.
+On an appliance, confirm field equivalence with stable interfaces and repeat
+idle CPU attribution after installation; local fixtures do not establish a
+measured appliance CPU reduction or a relationship to tunnel packet loss.
+Native dashboard inventory requests still use OPNsense's core reader.
+
 The periodic path does not ping the Internet and does not conduct election. It only asserts local facts such as:
 
 - current global CARP role;

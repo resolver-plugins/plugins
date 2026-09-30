@@ -1054,3 +1054,34 @@ the web UI restarted. Configuration is unchanged: CARP remains BACKUP in
 maintenance, shared Enable is on, and the local interface is unconfigured with
 an empty detached LAGG (`SETUP_INCOMPLETE`). No interface setup or failover was
 performed. Evidence: `/root/dhcpha-package-0.2_36.M9vk1z`.
+
+### 0.2_38 — avoid verbose inventory during HA polling
+
+The 2026-09-30 idle CPU trace attributed recurring bursts to four native
+`ifconfig -Lmv` inventory reads per active steady-state cycle. Intel ix
+transceiver I²C reads consumed about 260 ms of CPU per query; the captured
+non-verbose comparison used about 6 ms. These timings describe the previous
+appliance observation, not a measurement of the new package.
+
+`Controller.inventory()` now reads `/sbin/ifconfig -Lm` through the existing
+bounded command boundary. A pure plugin-owned parser supplies the safety fields
+used by reconciliation, fencing, status and health. Every observation remains
+fresh; ownership, original-hardware-MAC collision, CARP, topology and receive
+filter checks remain in force. Unsupported/malformed safety rows fail the
+observation. The five-second wait and native OPNsense inventory APIs are
+unchanged. The package revision is 0.2_38.
+
+The command-boundary regression failed against the previous `pluginctl -D`
+reader and passes with the replacement. Runtime tests now feed non-verbose
+FreeBSD output through the real parser during simulated transitions, including
+hardware-MAC collision rejection. Local verification passes 131 Python tests,
+both UI suites, 16 release-helper tests, Python 3.13 syntax checks and diff
+whitespace checks. A temporary
+differential harness also compared the new parser with OPNsense's native PHP
+parser for six representative interfaces and matched all consumed safety
+fields; the harness was removed.
+
+The existing native fresh-install package test now compares the installed
+reader's safety fields with a single native inventory read. This native check
+and an appliance CPU repeat remain unexecuted locally. No workflow was
+dispatched, package published or appliance changed for this increment.
