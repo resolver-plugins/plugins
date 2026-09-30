@@ -1,9 +1,8 @@
 # HA DHCP Interface standby Internet access implementation plan
 
-Status: source implementation for experimental 0.2_39, 2026-09-30. Focused local
-behavior checks and initial HA-2 path probes pass. Package installation and
-native callback qualification are pending at this checkpoint; full two-node
-handover qualification remains separate.
+Status: implemented and installed as experimental 0.2_39 on HA-2, 2026-09-30.
+Local and target fixture checks, native routing callbacks, cleanup/restart and
+standby service probes pass. Full two-node handover qualification remains open.
 
 Implement the [standby Internet specification](dhcp-interface-ha-standby-internet-spec.md)
 as an optional IPv4 path through the active firewall's LAN CARP VIP. Preserve
@@ -17,9 +16,9 @@ BIND/CI behavior. Preserve existing working-tree changes and use no worktrees.
 This gate precedes feature code. Establish the routing mechanism on the exact
 target OPNsense build, not only a development checkout.
 
-- [ ] Trace native DHCP gateway discovery, default selection, route inventory,
+- [x] Trace native DHCP gateway discovery, default selection, route inventory,
   routing reconfigure and gateway-alarm paths, including their filter reloads.
-- [ ] Prove that a locally configured LAN CARP VIP in BACKUP state is usable
+- [x] Prove that a locally configured LAN CARP VIP in BACKUP state is usable
   as a remote next hop: observe the gateway route, LAN neighbor/MAC and actual
   forwarded traffic. Distinguish CARP ownership from address presence and test
   for local/loopback resolution. If this fails, revise the proposed next-hop
@@ -68,18 +67,18 @@ record the actual supported target behavior.
 
 Depends on the native routing gate.
 
-- [ ] Extend the existing node-local model with disabled-by-default standby
+- [x] Extend the existing node-local model with disabled-by-default standby
   enablement, logical LAN interface and selected existing IPv4 CARP VIP.
-- [ ] Preserve shared XMLRPC sync isolation and existing configuration revision
+- [x] Preserve shared XMLRPC sync isolation and existing configuration revision
   checks. An old configuration must retain existing behavior after upgrade.
-- [ ] Validate static LAN addressing, connected subnet, native VIP membership,
+- [x] Validate static LAN addressing, connected subnet, native VIP membership,
   distinct local/VIP addresses and exclusions in the specification.
-- [ ] Reject unsupported conflicting defaults/multi-WAN before enablement.
+- [x] Reject unsupported conflicting defaults/multi-WAN before enablement.
   Require native privileges for any operation that actually changes native
   gateway configuration; do not bypass them with plugin-only access.
-- [ ] Put the optional controls in Settings using existing form conventions.
+- [x] Put the optional controls in Settings using existing form conventions.
   Apply on Save & Apply; do not introduce another setup action or wizard.
-- [ ] Preserve retry information when disable/change cleanup fails. Do not
+- [x] Preserve retry information when disable/change cleanup fails. Do not
   clear the old selection before it can be safely released.
 
 Completion evidence: settings fixtures demonstrate opt-in, validation, revision
@@ -91,21 +90,21 @@ configuration and runtime application outcomes separately.
 Depends on sections 1 and 2. Extend the existing controller and lock rather
 than creating a service or general routing abstraction.
 
-- [ ] Add route/VIP observations at the explicit runtime boundary and derive
+- [x] Add route/VIP observations at the explicit runtime boundary and derive
   standby eligibility from a fresh complete all-BACKUP inventory.
-- [ ] Reconcile the qualified routing primitive idempotently. Check current
+- [x] Reconcile the qualified routing primitive idempotently. Check current
   configuration and ownership before mutation and verify kernel readback.
-- [ ] Integrate demotion after verified carrier fencing, and promotion cleanup
+- [x] Integrate demotion after verified carrier fencing, and promotion cleanup
   before WAN attachment. Recheck role and revision at mutation boundaries.
-- [ ] Keep the standby candidate excluded on MASTER even before DHCP succeeds
+- [x] Keep the standby candidate excluded on MASTER even before DHCP succeeds
   and throughout gateway alarms/common ISP outages.
-- [ ] Cover maintenance, unknown/mixed states, disablement, stop, identity
+- [x] Cover maintenance, unknown/mixed states, disablement, stop, identity
   changes, mapping removal and uninstall through the same ownership contract.
-- [ ] Preserve an unrelated native/admin route, detect competing edits and
+- [x] Preserve an unrelated native/admin route, detect competing edits and
   avoid restoring cached WAN gateway values.
-- [ ] Recover from a missed event, interrupted operation or daemon restart
+- [x] Recover from a missed event, interrupted operation or daemon restart
   using the existing periodic loop. Do not promise atomic kernel transitions.
-- [ ] Keep ordinary standby routing failure outside CARP service-health
+- [x] Keep ordinary standby routing failure outside CARP service-health
   demotion. Treat an owned standby route that cannot be removed as a promotion
   obstruction, with explicit evidence and bounded retries.
 
@@ -116,16 +115,16 @@ how the qualified primitive prevents or bounds that behavior.
 
 ## 4. Status and operational guidance
 
-- [ ] Extend existing read-only status with desired/observed path, gateway,
+- [x] Extend existing read-only status with desired/observed path, gateway,
   LAN interface, source address, ownership, reason and evidence age.
-- [ ] Show verified selection separately from Internet reachability; retain the
+- [x] Show verified selection separately from Internet reachability; retain the
   safe Standby attachment state when optional Internet access is unavailable.
-- [ ] Log path changes, conflicts, cleanup failures and recovery using existing
+- [x] Log path changes, conflicts, cleanup failures and recovery using existing
   structured native events and suppression. Do not add a probe daemon.
-- [ ] Document policy and NAT on both potential active nodes: specific native
+- [x] Document policy and NAT on both potential active nodes: specific native
   LAN source addresses, adequate ingress permission and NAT to the DHCP WAN
   interface address. Inspect existing rules before adding any rule.
-- [ ] Document DNS/NTP/update source binding, internal destination exclusions,
+- [x] Document DNS/NTP/update source binding, internal destination exclusions,
   role-dependent defaults, maintenance behavior and verified removal.
 
 Completion evidence: existing PHP/UI fixtures cover truthful status and read-only
@@ -203,7 +202,8 @@ or session preservation from fixtures or standby update downloads.
   from the maintainer index and controller design.
 - [x] Record the native routing mechanism selected in section 1.
 - [x] Implement and complete focused local checks.
-- [ ] Complete authorized native two-node qualification and operational docs.
+- [x] Complete authorized HA-2 installation, native checks and operational docs.
+- [ ] Complete the broader native two-node qualification matrix.
 - [ ] Package/release through the existing approved publication system only
   when requested; record actual workflow URL/outcome if a run is authorized.
 
@@ -261,4 +261,80 @@ quiet steady state, native replacement, cleanup before promotion, optional
 install failure versus promotion obstruction, unknown/mixed roles, unrelated
 route preservation, source failure recovery and a role change during mutation.
 The settings seam tests selected-interface/VIP validation and node-local storage.
-Native package/callback/install evidence will be appended after testing.
+Native package/callback/install evidence follows. The source-observation
+regressions cover both a wrong source value and an ENETUNREACH exception.
+
+
+## 9. HA 2 deployment and qualification — 2026-09-30
+
+Installed `os-dhcp-interface-ha-devel-0.2_39` on OPNsense `26.7.3_11` /
+FreeBSD 15 amd64. The final package records source commit `25fb5985c` and SHA256
+`4ab3b838e2542aa761acaea3f9439c401cd1e4aad6d799dce43e8ce888050919`.
+Build and installation used the existing native development-package framework;
+no signed repository or publication workflow was changed or run. The framework's
+Git-derived version lookup warns in an extracted archive; the explicit source
+hash is verified against installed version metadata and every installed source
+file. The target package parser retained checksums for all 31 files, and
+`pkg check -s os-dhcp-interface-ha-devel` passed.
+
+The final configured path is enabled on HA-2 only:
+
+| Setting or observation | Actual value |
+|---|---|
+| Node-local internal assignment | management (`opt1`) |
+| Native device/source | `vlan0.5` / `10.250.5.4` |
+| Existing CARP VIP/default next hop | `10.250.5.1` |
+| Final standby path | `selected`, owned, source readback verified |
+| HA role/attachment | STANDBY / all six instances BACKUP / FENCED |
+| Managed WAN/carrier | `wan` / `dhcpha0lagg`, empty member list; `hn1` down |
+| Native IPv6 default | Existing `wg1` route retained |
+
+This mapping is deployment configuration, not a product default. A root CLI
+invocation of the native Settings GET method returned management, home and iot
+choices, selected management and its VIP, and excluded disabled `lan` and
+loopback. Configuration writes used the native Local model, validation and
+configuration lock/save boundary. An authenticated browser Save & Apply session
+was not part of these checks.
+
+| Native check | Outcome |
+|---|---|
+| `configctl interface routes configure` | Native default recalculation followed by monitor callback restored verified standby selection. |
+| `configctl interface routes alarm WAN_DHCP` | Alarm monitor syshook restored verified selection after native routing. |
+| Native `newwanip` plugin callback | Verified selection retained. This invokes the callback boundary, not an actual lease renewal. |
+| Controller stop/start | Stop removed the owned default and ledger, returning to native `link#11` / `dhcpha0lagg`; start selected the internal VIP. |
+| Feature disable/re-enable | Disable removed the owned default and ledger; re-enable restored verified selection. |
+| Native route replacement without callback | Existing periodic loop restored the selected path after a six-second observation interval. |
+| IPv4 repository request | `fetch -4` downloaded actual `26.7/latest/meta.conf` over HTTPS from `pkg.opnsense.org`, including hostname resolution. |
+| NTP query | `ntpdate -q time.cloudflare.com` received IPv4 and IPv6 replies; query mode did not adjust the clock. |
+| ISP-facing capture during service probes | `tcpdump -pni hn1` recorded zero packets captured/received/dropped; capture did not enable promiscuous mode. |
+| Stability/readiness | Five samples over approximately 25 seconds retained BACKUP, FENCED and selected source/route; final native health returned success. |
+
+Local and target Python/PHP fixture suites passed 149 tests; both local JavaScript
+UI suites passed. PHP/shell syntax and diff whitespace checks passed. Review
+regressions protect gateway-qualified deletion against concurrent replacement,
+fresh observation before native restoration, source-failure recovery, per-command
+promotion self-route checks, and preservation of a correct active attachment
+when optional routing observation fails.
+
+Backups, rollback package `os-dhcp-interface-ha-devel-0.2_38.pkg`, source archive,
+package, logs, route/status records and ISP capture remain under root-private
+`/root/dhcpha-standby-0.2_39.plB1TC` on HA-2. Temporary harnesses are not committed.
+Compared with the pre-install backup, native interface/CARP, shared HA, XMLRPC
+sync, gateway, NAT/filter, VLAN/LAGG and static-route configuration is unchanged.
+Only the node-local feature settings and native model/save metadata were added.
+
+For ordinary removal of this optional path, deselect **Standby Internet access**
+and Save & Apply. Verify Diagnostics no longer shows an owned standby selection;
+`configctl dhcp_interface_ha route_status` must show the current native default,
+and the ownership ledger must be absent. Disable and verify cleanup before
+selecting a different internal interface/VIP. A failed cleanup retains ownership
+evidence for retry; consult the plugin Log and actual kernel routing table.
+
+HA-1 and native CARP ownership were not modified. Paired promotion/demotion,
+active-node NAT capture, abrupt MASTER loss, reboot, real DHCP renewal, full
+package uninstall, common upstream failure and application session continuity
+remain the section 6 qualification work. The successful repository/NTP probes
+do not establish reachability to all destinations: the earlier 1.1.1.1 HTTPS
+probe timed out, and the home network's existing VPN policy gave a different
+result. Existing native firewall/NAT policy was sufficient for management and
+was not changed by this implementation.

@@ -1,7 +1,7 @@
 # HA DHCP Interface standby Internet access specification
 
-Status: implementation contract, 2026-09-30. Source implementation and initial
-HA-2 path probes are recorded in the [implementation plan](dhcp-interface-ha-standby-internet-plan.md), which
+Status: implementation contract, 2026-09-30. Source implementation and native
+HA-2 deployment/probes are recorded in the [implementation plan](dhcp-interface-ha-standby-internet-plan.md), which
 records the work and evidence required to ship it.
 
 “LAN” in this document means a selected internal network, not the logical
