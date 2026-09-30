@@ -564,6 +564,18 @@ idle CPU attribution after installation; local fixtures do not establish a
 measured appliance CPU reduction or a relationship to tunnel packet loss.
 Native dashboard inventory requests still use OPNsense's core reader.
 
+The authorized 2026-09-30 deployment qualified 0.2_38 on HA-2 before updating
+HA-1. Both installed readers matched native safety fields with stable
+interfaces, package/source integrity and health checks passed, and final
+configuration, ownership and status matched their pre-deployment values.
+HA-1 remains ACTIVE/MASTER and HA-2 STANDBY/BACKUP. Separate 30-second HA-1
+idle traces measured approximately 4.44 CPU seconds attributed to `ifconfig`
+before the update and 0.11 afterward (97.6% lower), with zero Intel ix I²C
+requests in the after trace. These are sampled inventory CPU measurements,
+not tunnel packet-loss or full failover qualification. Package provenance,
+restart observations and rollback evidence are recorded in the
+[0.2_38 deployment notes](dhcp-interface-ha-ui-streamlining-plan.md#02_38--avoid-verbose-inventory-during-ha-polling).
+
 The periodic path does not ping the Internet and does not conduct election. It only asserts local facts such as:
 
 - current global CARP role;

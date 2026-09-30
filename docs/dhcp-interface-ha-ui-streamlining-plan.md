@@ -1082,6 +1082,50 @@ parser for six representative interfaces and matched all consumed safety
 fields; the harness was removed.
 
 The existing native fresh-install package test now compares the installed
-reader's safety fields with a single native inventory read. This native check
-and an appliance CPU repeat remain unexecuted locally. No workflow was
-dispatched, package published or appliance changed for this increment.
+reader's safety fields with a single native inventory read. At the local
+checkpoint, native qualification and an appliance CPU repeat were pending;
+no package had been published or deployed.
+
+Deployment completed on 2026-09-30 after maintainer authorization, in the
+requested order: HA-2 first, qualification there, then HA-1. The source change
+is `8f710a70f` on PR #102. Its
+[controller CI run](https://github.com/resolver-plugins/plugins/actions/runs/36753229996)
+completed successfully. The native FreeBSD 15 amd64 development package is
+`os-dhcp-interface-ha-devel-0.2_38.pkg`, product ABI 26.7, product hash
+`8f710a70f`. Package SHA-256:
+`9245fdb08667bb77ccbdfc2899c04cc30d4589cac68ff3b77177028a2a2288d8`.
+
+HA-2 (OPNsense 26.7.3_11) passed all 131 tests on native Python 3.13 before
+installation. Candidate and installed inventory readers matched native HA
+safety fields. Installed source bytes and package checksums, native menu/tab
+routes, the health hook and seven stable status observations over at least
+30 seconds passed. The restarted controller remains STANDBY/BACKUP/FENCED
+with an empty detached LAGG. Configuration and ownership identity are unchanged.
+
+HA-1 (OPNsense 26.7.1_1) received the identical verified package only after
+HA-2 passed. Its normal controller restart fenced and reattached ix0; logs
+record fencing at 12:48:29 CDT, attachment at 12:48:31 and restoration of the
+same DHCP address by 12:48:36. An initial sequential inventory comparison
+overlapped restart convergence; repeating it with stable interfaces passed.
+Installed source bytes and package checksums, native routes, health and seven
+stable status observations over at least 30 seconds passed. The final state
+is ACTIVE/MASTER/ATTACHED with unchanged address, shared MAC, MTU, receive
+filters, CARP roles, configuration and ownership identity. HA-2 remains BACKUP.
+
+An alternating five-sample native command comparison on HA-1 measured median
+CPU cost of 5.357 ms for `ifconfig -Lm` and 260.353 ms for `ifconfig -Lmv`.
+Bounded idle DTrace sampling at 199 Hz on each CPU measured 883 `ifconfig`
+samples before deployment and 21 afterward in separate 30-second windows:
+approximately 4.44 versus 0.11 CPU seconds, a 97.6% reduction in attributed
+`ifconfig` CPU. The traces recorded 17 `ifconfig` executions before and 24 afterward;
+the faster cycle still retains fresh reads and the five-second wait. The
+after trace recorded zero `ixgbe_if_i2c_req` calls by `ifconfig`. This qualifies
+the recurring inventory CPU fix; it does not establish tunnel packet-loss
+causality or complete the separate HA failover/traffic qualification.
+
+Private appliance evidence and rollback 0.2_37 packages are retained under
+`/root/dhcpha-package-0.2_38.hC5CUvjC` on HA-2 and
+`/root/dhcpha-package-0.2_38.i6qzhEBl` on HA-1, including configuration backups,
+before/after/final status, source/package checks, restart logs and CPU evidence.
+Temporary investigation harnesses remain outside the committed diff. Signed
+release publication was not dispatched.
