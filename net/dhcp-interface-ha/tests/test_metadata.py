@@ -38,7 +38,10 @@ class MetadataTests(unittest.TestCase):
         self.assertIn("<managed_interface", local)
         self.assertNotIn("<Default>wan</Default>", local)
         self.assertIn("<version>1.1.0</version>", shared)
-        self.assertIn("<version>1.1.0</version>", local)
+        self.assertIn("<version>1.2.0</version>", local)
+        for field in ('standby_enabled', 'standby_interface', 'standby_vip'):
+            self.assertIn('<' + field, local)
+            self.assertNotIn('<' + field, shared)
 
     def test_shared_config_registers_without_local_config(self):
         integration = (

@@ -35,6 +35,27 @@ def run_controller(case, action="configure", flags=None):
 
 
 class SettingsStreamliningTests(unittest.TestCase):
+    def test_standby_enablement_rejects_live_foreign_default_before_save(self):
+        result = run_controller('save_unchanged', action='settings', flags={
+            'standby': {'standby_enabled': '1', 'standby_interface': 'opt2', 'standby_vip': '192.168.10.1'},
+            'default_route': {'gateway': '10.0.0.1', 'netif': 'wg0'}})
+        self.assertFalse(result['response']['saved'])
+        self.assertIn('dhcphalocal.standby_enabled', result['response']['validations'])
+
+    def test_standby_path_uses_selected_internal_interface_and_validates_its_vip(self):
+        fields = {'standby_enabled': '1', 'standby_interface': 'opt2', 'standby_vip': '192.168.10.1'}
+        good = run_controller('save_unchanged', action='settings', flags={'standby': fields})
+        self.assertTrue(good['response']['saved'])
+        for key, value in fields.items():
+            self.assertEqual(good['local'][key], value)
+        for interface, vip in [('lan', '192.168.10.1'), ('opt2', '192.168.10.3'), ('opt2', '192.168.20.1')]:
+            with self.subTest(interface=interface, vip=vip):
+                bad = run_controller('save_unchanged', action='settings', flags={'standby': dict(fields,
+                    standby_interface=interface, standby_vip=vip)})
+                self.assertFalse(bad['response']['saved'])
+                self.assertIn('dhcphalocal.standby_vip', bad['response']['validations'])
+                self.assertEqual(bad['save_count'], 0)
+
     def test_native_receive_mode_is_saved_before_assignment_apply(self):
         for original in (None, "", "0", "1"):
             with self.subTest(original=original):
@@ -190,7 +211,8 @@ class SettingsStreamliningTests(unittest.TestCase):
                 self.assertTrue(outcome["response"]["cleared"])
                 self.assertEqual(outcome["assignments"]["wan"], "hn1")
                 self.assertEqual(outcome["pending"], [])
-                self.assertEqual(outcome["local"], {"managed_interface": "", "carrier": ""})
+                self.assertEqual(outcome["local"], {"managed_interface": "", "carrier": "",
+                    "standby_enabled": "0", "standby_interface": "", "standby_vip": ""})
                 self.assertEqual(outcome["shared"]["shared_mac"], "02:11:22:33:44:55")
                 self.assertIn("interface apply", outcome["events"])
 

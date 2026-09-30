@@ -8,6 +8,13 @@ older manual-setup and UI presentation requirements below, particularly sections
 in the new documents are tracked with implementation and verification evidence
 in the linked plan; source changes are not evidence of deployed behavior.
 
+The optional standby Internet increment has a separate
+[specification](dhcp-interface-ha-standby-internet-spec.md) and
+[implementation plan](dhcp-interface-ha-standby-internet-plan.md). It adds a
+role-dependent IPv4 path through the active firewall over LAN while preserving
+the managed WAN's Layer-2 fence. Its source is implemented in experimental revision 0.2_39; its native
+routing integration must pass the plan's first gate before feature code.
+
 - **Status:** Experimental. The API-coordinated handoff increment was withdrawn and rolled back to 0.2_1 on 2026-09-27; later revisions below retain native CARP-driven handoff. HA-1 runs 0.2_32; reset HA-2 has a verified fresh 0.2_32 installation, disabled and unconfigured. HA-1 was upgraded from 0.2_8 with configuration unchanged and returned to ACTIVE/MASTER with DHCP address 10.250.100.100. Authenticated browser, enabled boot and paired-network qualification remain outstanding. This is not production qualified.
 - **Target repository:** `resolver-plugins/plugins`
 - **Plugin path:** `net/dhcp-interface-ha/`

@@ -195,6 +195,38 @@ assignments and firewall settings remain under OPNsense's native controls.
 
 ## Verification
 
+### Standby Internet access
+
+Revision 0.2_39 adds optional IPv4 Internet access through the active firewall
+while the managed WAN stays fenced. Enable **Standby Internet access**, select
+an enabled **Standby internal interface** with static IPv4, and select its
+existing **Standby gateway CARP VIP**. Save & Apply verifies the selected path.
+The interface can be any suitable local assignment, including a VLAN; it does
+not need to be named `lan`. Configure each node separately, since these settings
+are node-local and excluded from shared XMLRPC synchronization.
+
+Both potential active nodes need ingress permission for the peer's native
+internal IPv4 address and outbound NAT to their current DHCP WAN address.
+Reuse existing adequate rules. Policy routing on the selected network must
+allow the desired Internet path; a VPN-directed network may give different
+results from a management network. Services bound to the disconnected WAN or
+its former address require compatible native source-binding settings.
+
+On promotion, the controller releases its standby default before attaching
+the WAN. On demotion, it fences first, then selects the internal VIP. Native
+routing callbacks and the existing reconcile loop maintain this selection.
+A conflicting default on another interface is reported rather than replaced.
+Disable standby access and verify cleanup before changing its interface/VIP.
+Stop, disablement and removal release owned routing state through current
+native IPv4 routing recalculation. IPv6 routing and existing firewall/NAT
+policy remain native. Diagnostics distinguish a selected route from Internet
+reachability; a missing optional path does not elect a different CARP owner.
+
+See the [specification](../../docs/dhcp-interface-ha-standby-internet-spec.md)
+and [implementation and qualification record](../../docs/dhcp-interface-ha-standby-internet-plan.md).
+
+### Local checks
+
 ```sh
 python3 -m compileall -q net/dhcp-interface-ha/src/opnsense/scripts/dhcp_interface_ha
 python3 -m unittest discover -s net/dhcp-interface-ha/tests -v

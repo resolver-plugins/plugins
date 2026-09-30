@@ -310,6 +310,7 @@ class StatusController extends ApiControllerBase
                     'promiscuous' => $runtime['dhcpha']['promiscuous'] ?? null,
                 ],
             ],
+            'standby_internet' => $runtime['standby_internet'] ?? null,
             'carp' => $runtime === null ? null : [
                 'role' => $runtime['global_role'] ?? 'INDETERMINATE',
                 'allowed' => $runtime['carp_allowed'] ?? null,

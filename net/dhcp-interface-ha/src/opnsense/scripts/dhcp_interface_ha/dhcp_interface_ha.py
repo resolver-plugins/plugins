@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.set_defaults(func=cmd_status)
 
-    for command in ("prepare", "prepare_setup", "reconcile", "fence", "suspend", "resume", "remove", "health", "serve", "apply"):
+    for command in ("prepare", "prepare_setup", "reconcile", "fence", "suspend", "resume", "remove", "health", "serve", "apply", "routing", "route_status"):
         action = sub.add_parser(command, help="root controller operation")
         action.set_defaults(func=cmd_runtime)
     return parser

@@ -22,6 +22,7 @@ from core import (
     desired_state, plan_reconcile, reduce_carp_role, validate_shared_mac,
 )
 from inventory import DEVICE_RE, parse_interface_inventory
+import standby
 
 
 RUNTIME_DIR = Path("/var/run/dhcp-interface-ha")
@@ -106,6 +107,13 @@ def run(argv, timeout=COMMAND_TIMEOUT):
                           timeout=timeout).stdout.strip()
 
 
+def ipv4_route_source():
+    # UDP connect selects a source without sending an application packet.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(('192.0.2.1', 9))
+        return probe.getsockname()[0]
+
+
 def flag(node, name):
     child = node.find(name) if node is not None else None
     return child is not None and (child.text or "").strip().lower() not in ("0", "false", "no")
@@ -180,19 +188,179 @@ class Snapshot:
 
 class Controller:
     def __init__(self, config_path=Path("/conf/config.xml"), runtime_dir=RUNTIME_DIR,
-                 command=run, ifindex=socket.if_nametoindex, event_sink=None):
+                 command=run, ifindex=socket.if_nametoindex, event_sink=None,
+                 route_source=ipv4_route_source):
         self.config_path = Path(config_path)
         self.runtime_dir = Path(runtime_dir)
         self.command = command
         self.command_deadline = None
         self.ifindex = ifindex
         self.event_sink = event_sink
+        self.route_source = route_source
         self._daemon_failures = {}
         self._last_interface_observation = None
         self._last_command = None
         self._failed_command = None
         self.marker = self.runtime_dir / "device.dhcpha0lagg"
         self.stopped = self.runtime_dir / "stopped"
+        self.standby_marker = self.runtime_dir / 'standby-route.json'
+
+    def _default_route(self):
+        return standby.default_route(self._command(['/usr/bin/netstat', '--libxo', 'json', '-rn', '-f', 'inet']))
+
+    def _standby_record(self):
+        if not self.standby_marker.exists():
+            return None
+        if self.standby_marker.is_symlink():
+            raise ValueError('Standby route ownership file is a symlink.')
+        record = json.loads(self.standby_marker.read_text())
+        ipaddress.IPv4Address(record['gateway'])
+        if not DEVICE_RE.fullmatch(record['netif']):
+            raise ValueError('Invalid standby route ownership.')
+        return record
+
+    @staticmethod
+    def _standby_path(snapshot):
+        return standby.configuration(ET.fromstring(snapshot.raw_config), snapshot.managed_interface,
+                                     snapshot.settings.carrier)
+
+    @staticmethod
+    def _standby_eligible(snapshot, path):
+        addresses, known = _ipv4_addresses(snapshot.inventory, path['device'])
+        return (path['enabled'] and not path['error'] and snapshot.settings.enabled
+                and snapshot.settings.managed_by_dhcpha and not snapshot.local_error and not snapshot.stopped
+                and snapshot.carp_aligned and snapshot.observed.carp_allowed
+                and bool(snapshot.observed.carp_states)
+                and all(state == 'BACKUP' for state in snapshot.observed.carp_states)
+                and snapshot.observed.dhcpha_owned and not snapshot.observed.dhcpha.lagg_members
+                and not snapshot.observed.carrier.up and known and path['source_address'] in addresses
+                and 'up' in snapshot.inventory.get(path['device'], {}).get('flags', []))
+
+    def _withdraw_standby_locked(self, restore=False):
+        record = self._standby_record()
+        if record is None:
+            return False
+        current = self._default_route()
+        if current == record:
+            self._command(['/sbin/route', '-n', 'delete', '-inet', 'default', record['gateway']])
+            if self._default_route() == record:
+                raise RuntimeError('Standby default route cleanup did not verify.')
+        if restore and self._default_route() is None:
+            # Do not clear retry evidence until native recalculation completes.
+            # This bridge suppresses monitor callbacks to avoid lock recursion.
+            self._command(['/usr/local/bin/php',
+                           '/usr/local/opnsense/scripts/dhcp_interface_ha/restore_routing.php'])
+            if self._default_route() == record:
+                raise RuntimeError('Native routing reselected the standby default during cleanup.')
+        # A native/admin replacement belongs to its writer. Never delete it.
+        self.standby_marker.unlink()
+        self._event('standby_path_withdrawn', gateway=record['gateway'], interface=record['netif'],
+                    outcome='verified')
+        return current == record
+
+    def _standby_source_matches(self, path):
+        try:
+            return self.route_source() == path['source_address']
+        except OSError:
+            return False
+
+    def _reconcile_standby_locked(self, snapshot):
+        path = self._standby_path(snapshot)
+        record = self._standby_record()
+        if not path['enabled'] and record is None:
+            return
+        if not self._standby_eligible(snapshot, path):
+            self._withdraw_standby_locked(restore=True)
+            if path['error']:
+                raise RuntimeError(path['error'])
+            return
+        expected = {'gateway': path['vip'], 'netif': path['device']}
+        if record is not None and record != expected:
+            self._withdraw_standby_locked()
+        current = self._default_route()
+        if current == expected:
+            if record != expected:
+                raise RuntimeError('An unowned default already uses the selected CARP VIP.')
+            if self._standby_source_matches(path):
+                return
+            self._withdraw_standby_locked(restore=True)
+            current = self._default_route()
+        if current is not None and current['netif'] != DHCPHA_DEVICE:
+            raise RuntimeError('An unrelated IPv4 default route conflicts with the standby path.')
+        fresh = self.snapshot()
+        if (fresh.raw_config != snapshot.raw_config or not self._standby_eligible(fresh, path)
+                or self._default_route() != current):
+            raise RuntimeError('Role or settings changed before standby routing.')
+        # Write intent before mutation, so a crash can still release our route.
+        temporary = self.standby_marker.with_suffix('.tmp')
+        with temporary.open('w') as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(expected, handle)
+        temporary.replace(self.standby_marker)
+        # FreeBSD route change can retain the addressless WAN's source nexthop.
+        # Recreate the default, as native system_default_route() does, and bind
+        # both interface and primary address before source readback.
+        if current:
+            delete = ['/sbin/route', '-n', 'delete', '-inet', 'default']
+            if current['gateway'].startswith('link#'):
+                delete += ['-interface', current['netif']]
+            else:
+                delete.append(current['gateway'])
+            self._command(delete)
+        self._command(['/sbin/route', '-n', 'add', '-inet', 'default', path['vip'],
+                       '-ifp', path['device'], '-ifa', path['source_address']])
+        final = self.snapshot()
+        if (final.raw_config != snapshot.raw_config or not self._standby_eligible(final, path)
+                or self._default_route() != expected or not self._standby_source_matches(path)):
+            self._withdraw_standby_locked(restore=True)
+            raise RuntimeError('Standby route/interface/source readback did not verify.')
+        self._event('standby_path_selected', gateway=path['vip'], interface=path['interface'],
+                    source=path['source_address'], outcome='verified')
+
+    def route_status(self):
+        return {'observed_default': self._default_route()}
+
+    def routing(self):
+        """Postprocess native routing without triggering interface transitions."""
+        snapshot = None
+        try:
+            with self.locked():
+                snapshot = self.snapshot()
+                self._reconcile_standby_locked(snapshot)
+        except Exception as error:
+            self._report_failure('standby_routing', error, 'unchanged', snapshot)
+            raise
+
+    def _standby_status(self, snapshot):
+        path = self._standby_path(snapshot)
+        result = dict(path, state='disabled', observed_default=None, owned=False,
+                      observed_at=time.time(), source_address=None, reason=path['error'],
+                      cleanup_pending=self.standby_marker.exists())
+        try:
+            record = self._standby_record()
+            if not path['enabled'] and record is None:
+                return result
+            current = self._default_route()
+            eligible = self._standby_eligible(snapshot, path)
+            result.update(observed_default=current, owned=record is not None and current == record,
+                          cleanup_pending=record is not None and not eligible)
+            expected = {'gateway': path['vip'], 'netif': path['device']}
+            if eligible and current == expected and result['owned']:
+                source = self.route_source()
+                result['source_address'] = source
+                if source == path['source_address']:
+                    result.update(state='selected', reason='IPv4 default selected through the internal CARP VIP; reachability not tested.')
+                else:
+                    result.update(state='unavailable', reason='Default route source address differs from the selected internal address.')
+            elif record is not None:
+                result.update(state='unavailable', reason='Owned standby routing requires reconciliation.')
+            elif path['enabled']:
+                result.update(state='unavailable' if snapshot.observed.carp_states and
+                              all(s == 'BACKUP' for s in snapshot.observed.carp_states) else 'inactive',
+                              reason=path['error'] or 'Standby path is not selected in the current role or configuration.')
+        except Exception as error:
+            result.update(state='unknown', reason=str(error))
+        return result
 
     def _event(self, code, severity=syslog.LOG_INFO, **fields):
         emit_event(code, severity, self.event_sink, **fields)
@@ -530,6 +698,19 @@ class Controller:
                 if self.snapshot().observed.carrier.up:
                     raise RuntimeError("reserved carrier remained up after fencing")
 
+    def _guard_master_route(self, snapshot, strict=True):
+        path = self._standby_path(snapshot)
+        if not path['enabled']:
+            return
+        try:
+            current = self._default_route()
+        except Exception:
+            if strict:
+                raise
+            return
+        if current and current['gateway'] == path['vip']:
+            raise RuntimeError('An IPv4 default points at the locally owned CARP VIP.')
+
     def promote_locked(self, start):
         plan = plan_reconcile(start.settings, start.observed)
         if plan.warnings and plan.desired.attachment is not DesiredAttachment.ATTACHED:
@@ -540,6 +721,7 @@ class Controller:
                     or not fresh.observed.dhcpha_owned
                     or desired_state(fresh.settings, fresh.observed).attachment is not DesiredAttachment.ATTACHED):
                 raise RuntimeError("promotion cancelled: configuration, ownership or CARP eligibility changed")
+            self._guard_master_route(fresh, strict=self._attachment_event_state(start) != 'ATTACHED')
             args = cmd.argv
             if (args[2] == "down" and args[1] not in (DHCPHA_DEVICE, start.settings.carrier)
                     and args[1] not in fresh.observed.dhcpha.lagg_members):
@@ -568,6 +750,7 @@ class Controller:
                     raise RuntimeError("member, MAC or MTU verification failed before activation")
             self._command(list(args))
         final = self.snapshot()
+        self._guard_master_route(final, strict=self._attachment_event_state(start) != 'ATTACHED')
         if (final.raw_config != start.raw_config or final.local_error or final.stopped
                 or desired_state(final.settings, final.observed).attachment is not DesiredAttachment.ATTACHED
                 or plan_reconcile(final.settings, final.observed).commands
@@ -582,6 +765,7 @@ class Controller:
         try:
             with self.observing():
                 snapshot = self.snapshot()
+                standby_status = self._standby_status(snapshot)
         finally:
             self.command_deadline = previous_deadline
         plan = plan_reconcile(snapshot.settings, snapshot.observed)
@@ -723,6 +907,7 @@ class Controller:
                 and validate_shared_mac(snapshot.inventory.get(snapshot.settings.carrier, {}).get("macaddr", ""))[0]
             ),
             "shared_mac_collisions": snapshot.shared_mac_collisions,
+            "standby_internet": standby_status,
         }
 
     @staticmethod
@@ -780,6 +965,9 @@ class Controller:
                         final_members = ()
                     else:
                         plan = plan_reconcile(snapshot.settings, snapshot.observed)
+                        if previous_attachment != 'ATTACHED':
+                            self._withdraw_standby_locked()
+                        self._guard_master_route(snapshot, strict=previous_attachment != 'ATTACHED')
                         self.promote_locked(snapshot)
                         final_members = (snapshot.settings.carrier,)
 
@@ -801,6 +989,15 @@ class Controller:
                             condition=self._repair_condition(plan), safety="verified",
                             outcome="completed",
                         )
+                    try:
+                        if self._standby_path(snapshot)['enabled'] or self.standby_marker.exists():
+                            self._reconcile_standby_locked(self.snapshot())
+                    except Exception as route_error:
+                        # Optional connectivity failure must not demote a safe
+                        # standby or tear down a correct active attachment.
+                        self._report_failure('standby_routing', route_error, 'unchanged', snapshot, daemon)
+                    else:
+                        self._report_daemon_recovery('standby_routing')
                 except Exception as exc:
                     try:
                         self.fence_locked(snapshot)
@@ -897,6 +1094,7 @@ class Controller:
                     previous_members = tuple(sorted(dhcpha.lagg_members))
                     previous_attachment = self._attachment_event_state(snapshot)
                 self.fence_locked(snapshot)
+                self._withdraw_standby_locked(restore=True)
         except Exception as exc:
             self._report_failure(operation, exc, "unverified", snapshot)
             raise
@@ -943,6 +1141,7 @@ class Controller:
                 previous_attachment = "ATTACHED" if previous_members else "FENCED"
                 self.stopped.touch(mode=0o600)
                 self.fence_locked()
+                self._withdraw_standby_locked(restore=True)
                 if DHCPHA_DEVICE in self.inventory():
                     if not self.owned():
                         raise RuntimeError("refusing removal of an unowned interface")
@@ -978,4 +1177,20 @@ class Controller:
             if incapable:
                 self.fence_locked(snapshot)
                 return False
+            if (snapshot.observed.carp_states and all(s == 'MASTER' for s in snapshot.observed.carp_states)
+                    and self.standby_marker.exists()):
+                try:
+                    self._withdraw_standby_locked()
+                except Exception:
+                    if self._attachment_event_state(snapshot) == 'ATTACHED':
+                        try:
+                            self._guard_master_route(snapshot, strict=False)
+                        except Exception:
+                            self.fence_locked(snapshot)
+                            return False
+                        return True
+                    # Only a local promotion obstruction affects native health;
+                    # an unavailable standby Internet path never demotes BACKUP.
+                    self.fence_locked(snapshot)
+                    return False
             return True

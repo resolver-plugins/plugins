@@ -16,6 +16,7 @@ class SettingsController extends ApiControllerBase
 {
     private const SHARED_FIELDS = ['enabled', 'shared_mac', 'failback_delay'];
     private const LOCAL_FIELDS = ['managed_interface', 'carrier'];
+    private const STANDBY_FIELDS = ['standby_enabled', 'standby_interface', 'standby_vip'];
     private $eventLogger = null;
 
     private $saveProgress = null;
@@ -164,6 +165,30 @@ class SettingsController extends ApiControllerBase
         $config = Config::getInstance()->object();
         $sharedNodes = $shared->getNodes();
         $localNodes = $local->getNodes();
+        $standbyInterface = trim((string)($local->standby_interface ?? ''));
+        $standbyVip = trim((string)($local->standby_vip ?? ''));
+        $localNodes['standby_interface'] = ['' => ['value' => gettext('Select an internal interface'), 'selected' => $standbyInterface === '' ? 1 : 0]];
+        $localNodes['standby_vip'] = ['' => ['value' => gettext('Select a CARP VIP'), 'selected' => $standbyVip === '' ? 1 : 0]];
+        foreach ($config->interfaces->children() as $name => $interface) {
+            if (!empty((string)$interface->enable) && filter_var((string)$interface->ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $description = (string)$interface->descr ?: strtoupper($name);
+                $localNodes['standby_interface'][$name] = ['value' => sprintf('%s (%s)', $description, $name), 'selected' => $name === $standbyInterface ? 1 : 0];
+            }
+        }
+        foreach ($config->virtualip->vip ?? [] as $vip) {
+            if ((string)$vip->mode === 'carp' && empty((string)$vip->disabled)
+                && filter_var((string)$vip->subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $address = (string)$vip->subnet;
+                $logical = (string)$vip->interface;
+                $description = (string)($config->interfaces->$logical->descr ?? '') ?: strtoupper($logical);
+                $localNodes['standby_vip'][$address] = ['value' => sprintf('%s — %s (%s)', $address, $description, $logical), 'selected' => $address === $standbyVip ? 1 : 0];
+            }
+        }
+        foreach (['standby_interface' => $standbyInterface, 'standby_vip' => $standbyVip] as $field => $selection) {
+            if ($selection !== '' && !isset($localNodes[$field][$selection])) {
+                $localNodes[$field][$selection] = ['value' => sprintf(gettext('%s (saved selection unavailable)'), $selection), 'selected' => 1];
+            }
+        }
         $managedName = trim((string)$local->managed_interface);
         $localNodes['managed_interface'] = [
             '' => ['value' => gettext('Disabled'), 'selected' => $managedName === '' ? 1 : 0],
@@ -220,7 +245,7 @@ class SettingsController extends ApiControllerBase
         $localInput = $this->request->getPost('dhcphalocal');
         $revisionInput = $this->request->getPost('revision', null, '');
         $revision = is_string($revisionInput) ? $revisionInput : '';
-        if (!self::hasFields($sharedInput, self::SHARED_FIELDS) || !self::hasFields($localInput, self::LOCAL_FIELDS) || $revision === '') {
+        if (!self::hasFields($sharedInput, self::SHARED_FIELDS) || !self::hasLocalFields($localInput) || $revision === '') {
             return [
                 'result' => 'failed',
                 'saved' => false,
@@ -280,7 +305,7 @@ class SettingsController extends ApiControllerBase
             'shared_mac' => (string)$sharedInput['shared_mac'],
             'failback_delay' => '0',
         ];
-        $targetLocal = ['managed_interface' => '', 'carrier' => ''];
+        $targetLocal = ['managed_interface' => '', 'carrier' => '', 'standby_enabled' => '0', 'standby_interface' => '', 'standby_vip' => ''];
 
         if (empty((string)$currentShared->enabled) && $managedName === '' && $carrier === '') {
             $unchanged = $this->saveSettings($targetShared, $targetLocal, $revision, unknownSaveOutcome: false, validateOnly: true, skipUnchanged: true);
@@ -544,6 +569,15 @@ class SettingsController extends ApiControllerBase
             ? ($knownObservations ?? self::collectObservations())
             : ['collected_at' => microtime(true)];
 
+        $routeObservation = null;
+        if (!empty((string)$probeShared->enabled) && !empty((string)($probeLocal->standby_enabled ?? '0'))) {
+            try {
+                $routeObservation = json_decode((new Backend())->configdRun('dhcp_interface_ha route_status', false, 3, 1), true);
+            } catch (\Throwable $exception) {
+                // Required enablement evidence is checked before persistence.
+            }
+        }
+
         $config = Config::getInstance();
         $config->lock(true);
         $saveAttempted = false;
@@ -594,6 +628,27 @@ class SettingsController extends ApiControllerBase
 
             $validations = self::modelValidations($candidateShared, 'dhcphashared');
             $validations += self::modelValidations($candidateLocal, 'dhcphalocal');
+            $standbyError = self::standbyPathError($candidateLocal, $config->object());
+            if (!empty((string)$candidateShared->enabled) && $standbyError !== null) {
+                $validations['dhcphalocal.standby_vip'] = $standbyError;
+            }
+            if (!empty((string)$candidateShared->enabled) && !empty((string)($candidateLocal->standby_enabled ?? '0'))) {
+                $route = $routeObservation['observed_default'] ?? null;
+                $ownedPath = $observations['sources']['status']['standby_internet'] ?? [];
+                if (!is_array($routeObservation) || !array_key_exists('observed_default', $routeObservation)) {
+                    $validations['dhcphalocal.standby_enabled'] = gettext('IPv4 default route observation is unavailable; retry before enabling standby access.');
+                } elseif ($route !== null && (!is_array($route) || (($route['netif'] ?? '') !== 'dhcpha0lagg'
+                    && !(($route['gateway'] ?? '') === (string)$candidateLocal->standby_vip
+                        && !empty($ownedPath['owned']) && ($ownedPath['observed_default'] ?? null) === $route)))) {
+                    $validations['dhcphalocal.standby_enabled'] = gettext('An unrelated IPv4 default route conflicts with standby access.');
+                }
+            }
+            if (!empty((string)($currentLocal->standby_enabled ?? '0'))
+                && !empty((string)($candidateLocal->standby_enabled ?? '0'))
+                && ((string)$currentLocal->standby_interface !== (string)$candidateLocal->standby_interface
+                    || (string)$currentLocal->standby_vip !== (string)$candidateLocal->standby_vip)) {
+                $validations['dhcphalocal.standby_enabled'] = gettext('Disable standby Internet access and verify cleanup before changing its internal path.');
+            }
             // A receive-mode-only correction changes no HA identity or enable
             // state and needs no runtime action or promotion evidence.
             if (!$unchanged || $needsEvidence) {
@@ -662,7 +717,7 @@ class SettingsController extends ApiControllerBase
         $localInput = $this->request->getPost('dhcphalocal');
         $revisionInput = $this->request->getPost('revision', null, '');
         $revision = is_string($revisionInput) ? $revisionInput : '';
-        if (!self::hasFields($sharedInput, self::SHARED_FIELDS) || !self::hasFields($localInput, self::LOCAL_FIELDS) || $revision === '') {
+        if (!self::hasFields($sharedInput, self::SHARED_FIELDS) || !self::hasLocalFields($localInput) || $revision === '') {
             return self::setupResponse(
                 result: 'failed',
                 saved: false,
@@ -1757,7 +1812,7 @@ class SettingsController extends ApiControllerBase
 
     private static function canonical(Shared $shared, Local $local)
     {
-        return [
+        $result = [
             'dhcphashared' => [
                 'enabled' => (string)$shared->enabled,
                 'shared_mac' => (string)$shared->shared_mac,
@@ -1768,6 +1823,81 @@ class SettingsController extends ApiControllerBase
                 'carrier' => (string)$local->carrier,
             ],
         ];
+        // Preserve the disabled baseline revision and legacy clients. If a
+        // client omits all optional fields, setNodes retains their saved values.
+        foreach (self::STANDBY_FIELDS as $field) {
+            $value = (string)($local->$field ?? '');
+            if ($value !== '' && $value !== '0') {
+                foreach (self::STANDBY_FIELDS as $key) {
+                    $result['dhcphalocal'][$key] = (string)($local->$key ?? ($key === 'standby_enabled' ? '0' : ''));
+                }
+                break;
+            }
+        }
+        return $result;
+    }
+
+    private static function hasLocalFields($input)
+    {
+        return self::hasFields($input, self::LOCAL_FIELDS)
+            || self::hasFields($input, array_merge(self::LOCAL_FIELDS, self::STANDBY_FIELDS));
+    }
+
+    private static function standbyPathError($local, $config)
+    {
+        if (empty((string)($local->standby_enabled ?? '0'))) {
+            return null;
+        }
+        $name = trim((string)$local->standby_interface);
+        $vip = trim((string)$local->standby_vip);
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,14}$/D', $name)) {
+            return gettext('Select an enabled internal interface with a static IPv4 address.');
+        }
+        $interface = $config->interfaces->$name ?? null;
+        $address = (string)($interface->ipaddr ?? '');
+        $prefix = (string)($interface->subnet ?? '');
+        if ($interface === null || empty((string)$interface->enable) || $name === (string)$local->managed_interface
+            || in_array((string)$interface->if, ['lo0', 'dhcpha0lagg', (string)$local->carrier], true)
+            || !filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            || !filter_var($vip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            || !ctype_digit($prefix) || (int)$prefix < 1 || (int)$prefix > 30) {
+            return gettext('Select an enabled internal interface and an IPv4 CARP VIP on its static subnet.');
+        }
+        $mask = -1 << (32 - (int)$prefix);
+        $network = ip2long($address) & $mask;
+        $candidate = ip2long($vip);
+        if (($candidate & $mask) !== $network || $vip === $address || $candidate === $network
+            || $candidate === ($network | (~$mask & 0xffffffff))) {
+            return gettext('Choose a distinct CARP VIP on the selected internal IPv4 subnet.');
+        }
+        $matches = 0;
+        foreach ($config->virtualip->vip ?? [] as $item) {
+            if ((string)$item->mode === 'carp' && empty((string)$item->disabled)
+                && (string)$item->interface === $name && (string)$item->subnet === $vip) {
+                $matches++;
+            }
+        }
+        if ($matches !== 1) {
+            return gettext('Choose an existing IPv4 CARP VIP on the selected internal interface.');
+        }
+        $managedGateways = [strtoupper((string)$local->managed_interface) . '_DHCP'];
+        foreach ([$config->gateways->gateway_item ?? [], $config->OPNsense->Gateways->gateway_item ?? []] as $gateways) {
+            foreach ($gateways as $gateway) {
+                if ((string)$gateway->interface === (string)$local->managed_interface) {
+                    $managedGateways[] = (string)$gateway->name;
+                } elseif (empty((string)$gateway->disabled) && (string)$gateway->ipprotocol === 'inet'
+                    && !empty((string)$gateway->defaultgw)) {
+                    return gettext('Another IPv4 upstream gateway conflicts with standby Internet access.');
+                }
+            }
+        }
+        foreach ($config->staticroutes->route ?? [] as $route) {
+            if (empty((string)$route->disabled) && (string)$route->network === '0.0.0.0/0'
+                && !in_array((string)$route->gateway, $managedGateways, true)) {
+                return gettext('An unrelated static IPv4 default route conflicts with standby Internet access.');
+            }
+        }
+        return null;
     }
 
     private static function revision(Shared $shared, Local $local)
@@ -2065,6 +2195,13 @@ class SettingsController extends ApiControllerBase
                 $applied = true;
                 $error = null;
                 $status = $apply;
+                $path = $status['standby_internet'] ?? [];
+                if ((!empty($path['enabled']) || !empty($path['cleanup_pending']))
+                    && in_array($path['state'] ?? '', ['unavailable', 'unknown'], true)) {
+                    $applied = ($path['state'] ?? '') === 'unknown' ? null : false;
+                    $error = gettext('Settings were saved, but standby Internet routing could not be verified.')
+                        . ' ' . ($path['reason'] ?? '');
+                }
             } elseif ($raw !== '') {
                 $applied = false;
                 $error = gettext('Settings were saved, but the controller could not apply them.')

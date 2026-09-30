@@ -343,7 +343,10 @@ $(document).ready(function() {
         } else if (carp.maintenance === true && detached) {
             setSummary("Maintenance · Interface disconnected", "label-warning");
         } else if ((controller.state === "STANDBY" || role === "BACKUP") && detached) {
-            setSummary("Standby · Interface intentionally disconnected", "label-warning");
+            const path = data.standby_internet || {};
+            setSummary(path.enabled || path.cleanup_pending ? (path.state === "selected" ? "Standby · Internet via internal network"
+                : (path.state === "unknown" ? "Standby · Internet path unknown" : "Standby · Internet path unavailable"))
+                : "Standby · Interface intentionally disconnected", "label-warning");
         } else if (controller.state === "ACTIVE" && role === "MASTER" && actual === "ATTACHED"
             && data.attachment && data.attachment.owned === true) {
             setSummary("Active · CARP MASTER · " + address, "label-success");
@@ -369,7 +372,7 @@ $(document).ready(function() {
         clearTimeout(staleTimer);
         setSummary("Status unavailable", "label-default");
         $("#detailRole, #detailAttachment, #detailAddress, #detailController, "
-            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA")
+            + "#detailCarrier, #detailDevice, #detailDhcp, #detailGateway, #detailHA, #detailStandbyInternet")
             .text("Unavailable");
         updateActions();
     }
@@ -414,6 +417,10 @@ $(document).ready(function() {
             + " · XMLRPC destination " + (xmlrpc.sender_configured ? "configured" : "not configured")
             + " · this plugin " + (xmlrpc.plugin_settings_sync === true ? "included" : (xmlrpc.plugin_settings_sync === false ? "not included" : "unknown"))
             + " · peer readiness unverified");
+        const path = data.standby_internet || {};
+        $("#detailStandbyInternet").text(path.enabled || path.cleanup_pending ? (path.state || "unknown")
+            + " · interface " + (path.interface || "unknown") + " · gateway " + (path.vip || "unknown")
+            + " · source " + (path.source_address || "unknown") + " · " + (path.reason || "") : "Disabled");
         updateActions();
     }
 
@@ -1082,6 +1089,7 @@ $(document).ready(function() {
                 <dt>{{ lang._('Native DHCP observation') }}</dt><dd id="detailDhcp">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('IPv4 gateway') }}</dt><dd id="detailGateway">{{ lang._('Unknown') }}</dd>
                 <dt>{{ lang._('HA configuration') }}</dt><dd id="detailHA">{{ lang._('Unknown') }}</dd>
+                <dt>{{ lang._('Standby Internet path') }}</dt><dd id="detailStandbyInternet">{{ lang._('Unknown') }}</dd>
             </dl>
             <h4>{{ lang._('Native configuration') }}</h4>
             <ul>

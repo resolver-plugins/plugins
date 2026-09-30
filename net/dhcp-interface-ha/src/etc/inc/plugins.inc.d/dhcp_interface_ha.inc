@@ -87,3 +87,24 @@ function dhcp_interface_ha_xmlrpc_sync()
         'id' => 'dhcp-interface-ha',
     ]];
 }
+
+function dhcp_interface_ha_configure()
+{
+    // Native routing finishes its default/static routes before this callback.
+    return [
+        'monitor' => ['dhcp_interface_ha_routing:0'],
+        'newwanip' => ['dhcp_interface_ha_routing:0'],
+    ];
+}
+
+function dhcp_interface_ha_routing()
+{
+    $config = \OPNsense\Core\Config::getInstance()->object();
+    if ((string)($config->OPNsense->DhcpInterfaceHaLocal->standby_enabled ?? '0') !== '1'
+        && !is_file('/var/run/dhcp-interface-ha/standby-route.json')) {
+        return;
+    }
+    if (mwexecf('/usr/local/bin/python3 /usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py routing') !== 0) {
+        log_msg('HA DHCP Interface standby routing could not be verified; inspect plugin diagnostics', LOG_ERR);
+    }
+}

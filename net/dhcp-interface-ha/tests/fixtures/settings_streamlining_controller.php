@@ -44,6 +44,7 @@ namespace OPNsense\Core {
         public static $saveKind = null;
         public static $failSave = null;
         public static $nativeApply = 'success';
+        public static $internalPath = false;
 
         public static function getInstance()
         {
@@ -66,6 +67,17 @@ namespace OPNsense\Core {
                     foreach ($fields as $key => $value) {
                         $this->xml->interfaces->$name->$key = $value;
                     }
+                }
+                if (self::$internalPath) {
+                    $this->xml->interfaces->lan->enable = '0';
+                    $internal = $this->xml->interfaces->addChild('opt2');
+                    $internal->addChild('enable', '1');
+                    $internal->addChild('if', 'vlan0.10');
+                    $internal->addChild('ipaddr', '192.168.10.3');
+                    $internal->addChild('subnet', '24');
+                    $this->xml->virtualip->vip->interface = 'opt2';
+                    $this->xml->virtualip->vip->subnet = '192.168.10.1';
+                    $this->xml->virtualip->vip->vhid = '10';
                 }
             }
             return $this->xml;
@@ -180,6 +192,9 @@ namespace OPNsense\Core {
                     'progress' => (new \OPNsense\DhcpInterfaceHa\Api\SettingsController())->progressAction(\FixtureRequest::$post['progress_id']),
                 ];
                 \FixtureRequest::$method = $method;
+            }
+            if ($event === 'dhcp_interface_ha route_status') {
+                return json_encode(['observed_default' => \FixtureRequest::$defaultRoute]);
             }
             if ($event === 'dhcp_interface_ha status') {
                 if (\FixtureRequest::$statusUnavailable) {
@@ -355,21 +370,33 @@ namespace OPNsense\DhcpInterfaceHa {
     {
         public $managed_interface;
         public $carrier;
+        public $standby_enabled;
+        public $standby_interface;
+        public $standby_vip;
 
         public function __construct()
         {
             $this->managed_interface = (string)(\OPNsense\Core\Config::$local['managed_interface'] ?? '');
             $this->carrier = (string)(\OPNsense\Core\Config::$local['carrier'] ?? '');
+            foreach (['standby_enabled', 'standby_interface', 'standby_vip'] as $key) {
+                $this->$key = \OPNsense\Core\Config::$local[$key] ?? null;
+            }
         }
 
         public function getNodes()
         {
-            return ['managed_interface' => $this->managed_interface, 'carrier' => $this->carrier];
+            $nodes = ['managed_interface' => $this->managed_interface, 'carrier' => $this->carrier];
+            foreach (['standby_enabled', 'standby_interface', 'standby_vip'] as $key) {
+                if ($this->$key !== null) {
+                    $nodes[$key] = (string)$this->$key;
+                }
+            }
+            return $nodes;
         }
 
         public function setNodes(array $nodes)
         {
-            foreach (['managed_interface', 'carrier'] as $key) {
+            foreach (['managed_interface', 'carrier', 'standby_enabled', 'standby_interface', 'standby_vip'] as $key) {
                 if (array_key_exists($key, $nodes)) {
                     $this->$key = (string)$nodes[$key];
                 }
@@ -539,6 +566,7 @@ namespace {
         public static $logs = [];
         public static $aclChecks = [];
         public static $deniedRoutes = [];
+        public static $defaultRoute = ['gateway' => 'link#42', 'netif' => 'dhcpha0lagg'];
         public static $statusUnavailable = false;
         public static $statusUnavailableAfterApply = false;
         public static $managedMismatchAfterApply = false;
@@ -577,6 +605,8 @@ namespace {
     \FixtureRequest::$assignmentCacheStale = str_starts_with($case, 'teardown_');
     $action = $argv[4] ?? 'configure';
     $requestFlags = json_decode($argv[5] ?? '{}', true) ?: [];
+    \OPNsense\Core\Config::$internalPath = isset($requestFlags['standby']);
+    \FixtureRequest::$defaultRoute = $requestFlags['default_route'] ?? ['gateway' => 'link#42', 'netif' => 'dhcpha0lagg'];
     \FixtureRequest::$runtimeState = $requestFlags['runtime_state'] ?? 'STANDBY';
     \FixtureRequest::$inventoryMembers = $requestFlags['inventory_members'] ?? null;
     \FixtureRequest::$leaseOnOriginal = in_array($case, ['configure_success', 'configure_timeout', 'configure_native_save_unknown'], true);
@@ -741,6 +771,10 @@ namespace {
     if (isset($requestFlags['progress_id'])) {
         \FixtureRequest::$username = 'fixture-admin-' . getmypid();
         \FixtureRequest::$post['progress_id'] = $requestFlags['progress_id'];
+    }
+
+    if (isset($requestFlags['standby'])) {
+        \FixtureRequest::$post['dhcphalocal'] += $requestFlags['standby'];
     }
 
     try {
