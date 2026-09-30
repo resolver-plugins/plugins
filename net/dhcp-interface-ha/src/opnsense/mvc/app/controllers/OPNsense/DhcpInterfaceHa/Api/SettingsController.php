@@ -170,7 +170,9 @@ class SettingsController extends ApiControllerBase
         $localNodes['standby_interface'] = ['' => ['value' => gettext('Select an internal interface'), 'selected' => $standbyInterface === '' ? 1 : 0]];
         $localNodes['standby_vip'] = ['' => ['value' => gettext('Select a CARP VIP'), 'selected' => $standbyVip === '' ? 1 : 0]];
         foreach ($config->interfaces->children() as $name => $interface) {
-            if (!empty((string)$interface->enable) && filter_var((string)$interface->ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            if (!empty((string)$interface->enable) && $name !== (string)$local->managed_interface
+                && !in_array((string)$interface->if, ['lo0', 'dhcpha0lagg', (string)$local->carrier], true)
+                && filter_var((string)$interface->ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
                 $description = (string)$interface->descr ?: strtoupper($name);
                 $localNodes['standby_interface'][$name] = ['value' => sprintf('%s (%s)', $description, $name), 'selected' => $name === $standbyInterface ? 1 : 0];
             }

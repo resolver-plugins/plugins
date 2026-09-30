@@ -35,6 +35,13 @@ def run_controller(case, action="configure", flags=None):
 
 
 class SettingsStreamliningTests(unittest.TestCase):
+    def test_standby_options_exclude_disabled_lan_and_loopback(self):
+        result = run_controller('save_unchanged', action='get', flags={'standby': {}})
+        options = result['response']['dhcphalocal']['standby_interface']
+        self.assertIn('opt2', options)
+        self.assertNotIn('lan', options)
+        self.assertNotIn('lo0', options)
+
     def test_standby_enablement_rejects_live_foreign_default_before_save(self):
         result = run_controller('save_unchanged', action='settings', flags={
             'standby': {'standby_enabled': '1', 'standby_interface': 'opt2', 'standby_vip': '192.168.10.1'},

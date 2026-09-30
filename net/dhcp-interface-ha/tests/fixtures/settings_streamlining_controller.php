@@ -70,6 +70,10 @@ namespace OPNsense\Core {
                 }
                 if (self::$internalPath) {
                     $this->xml->interfaces->lan->enable = '0';
+                    $loopback = $this->xml->interfaces->addChild('lo0');
+                    $loopback->addChild('enable', '1');
+                    $loopback->addChild('if', 'lo0');
+                    $loopback->addChild('ipaddr', '127.0.0.1');
                     $internal = $this->xml->interfaces->addChild('opt2');
                     $internal->addChild('enable', '1');
                     $internal->addChild('if', 'vlan0.10');
@@ -778,9 +782,12 @@ namespace {
     }
 
     try {
-        $response = $action === 'sync'
+        if ($action === 'get') {
+            \FixtureRequest::$method = 'GET';
+        }
+        $response = $action === 'get' ? $controller->getAction() : ($action === 'sync'
             ? $controller->enable_syncAction()
-            : ($action === 'settings' ? $controller->setAction() : $controller->configureAction());
+            : ($action === 'settings' ? $controller->setAction() : $controller->configureAction()));
     } catch (\Throwable $exception) {
         $response = ['result' => 'denied', 'error' => $exception->getMessage()];
     }
