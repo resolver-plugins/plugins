@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/local/etc/rc.d/dhcp_interface_ha onestart

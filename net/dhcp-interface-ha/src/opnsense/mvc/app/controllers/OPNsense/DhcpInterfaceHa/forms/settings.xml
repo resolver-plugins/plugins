@@ -1,0 +1,38 @@
+<form>
+    <field>
+        <id>dhcphashared.enabled</id>
+        <label>Enable HA DHCP Interface</label>
+        <type>checkbox</type>
+        <help>Enable only after the local interface is configured and all required checks pass. This setting is shared by native XMLRPC configuration sync.</help>
+    </field>
+    <field>
+        <id>dhcphalocal.managed_interface</id>
+        <label>Managed logical interface</label>
+        <type>dropdown</type>
+        <help>Select the local OPNsense assignment to manage. Save &amp; Apply captures its current device and moves the assignment to the plugin-owned adapter when setup is required. Choose Disabled to turn off the service and clear this node's plugin mapping while retaining the shared MAC; native assignments are not deleted.</help>
+    </field>
+    <field>
+        <id>dhcphashared.shared_mac</id>
+        <label>Shared interface MAC</label>
+        <type>text</type>
+        <help>This unicast identity is used by the active node and should match on both peers. This setting is sync from MASTER to BACKUP through XMLRPC configuration sync.</help>
+    </field>
+    <field>
+        <id>dhcphalocal.standby_enabled</id>
+        <label>Standby Internet access</label>
+        <type>checkbox</type>
+        <help>Use the active firewall through the selected internal CARP VIP while this node is BACKUP. This optional IPv4 path is local to this node and requires suitable firewall and outbound NAT rules on both nodes.</help>
+    </field>
+    <field>
+        <id>dhcphalocal.standby_interface</id>
+        <label>Standby internal interface</label>
+        <type>dropdown</type>
+        <help>Select an enabled internal interface with a static IPv4 address. Its logical name may be LAN, OPT or another assignment; VLAN interfaces are supported. The managed DHCP interface cannot be selected.</help>
+    </field>
+    <field>
+        <id>dhcphalocal.standby_vip</id>
+        <label>Standby gateway CARP VIP</label>
+        <type>dropdown</type>
+        <help>Select the existing IPv4 CARP VIP on that internal interface. The plugin releases this standby route before attaching the WAN on promotion. Internet reachability depends on the active firewall and its upstream connection.</help>
+    </field>
+</form>

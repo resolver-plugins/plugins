@@ -104,6 +104,10 @@ def series_abi_path(abi: str, series: str) -> str:
 
 def package_release_title(tag: str) -> str:
     """Return the purpose-first display title for one package channel tag."""
+    ha_channel = re.fullmatch(r"pkg-dhcp-interface-ha-(\d+\.\d+)(?:-([0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?))?", tag)
+    if ha_channel:
+        series, version = ha_channel.groups()
+        return f"HA DHCP Interface {series} — {version or 'latest'}"
     value = tag.removeprefix("pkg-")
     if value == tag:
         raise ValueError("invalid package release tag")
