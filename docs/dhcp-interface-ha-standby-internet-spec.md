@@ -142,6 +142,16 @@ a default. Store route ownership intent before mutation so cleanup survives an
 interrupted operation. A native/admin default on an unrelated interface is a
 conflict; do not replace it.
 
+Native WAN reassignment can leave an IPv4 interface default (`link#N`) on the
+original carrier even after the logical WAN moves to `dhcpha0lagg`. Reconciliation
+and native post-routing callbacks may remove this unusable route while standby
+access is disabled. Require a committed managed assignment, verified device
+ownership, valid local reservation and an addressless, down, detached carrier.
+Match both the current carrier interface index and route identity; recheck
+configuration, ownership and detachment immediately before gateway-qualified
+deletion. Preserve IP-gateway defaults, defaults on other interfaces and
+concurrent replacements. Read-only status/validation does not perform cleanup.
+
 On cleanup, use current native IPv4 routing recalculation with monitor callbacks
 suppressed, avoiding recursion while holding the transition lock. Retain the
 ownership record until required cleanup/recalculation completes. Never replay

@@ -208,6 +208,32 @@ class Controller:
     def _default_route(self):
         return standby.default_route(self._command(['/usr/bin/netstat', '--libxo', 'json', '-rn', '-f', 'inet']))
 
+    def _cleanup_carrier_default_locked(self, snapshot):
+        # Native reassignment can leave an addressless interface default on
+        # the original NIC. It cannot carry traffic once we reserve and fence it.
+        if (not snapshot.settings.managed_by_dhcpha or snapshot.local_error
+                or not snapshot.carrier_safe or not snapshot.observed.dhcpha_owned
+                or snapshot.observed.dhcpha.lagg_members or snapshot.observed.carrier.up):
+            return
+        carrier = snapshot.settings.carrier
+        carrier_index = self.ifindex(carrier)
+        stale = {'gateway': f'link#{carrier_index}', 'netif': carrier}
+        if self._default_route() != stale:
+            return
+        fresh = self.snapshot()
+        if (fresh.raw_config != snapshot.raw_config or fresh.local_error or not fresh.carrier_safe
+                or not fresh.observed.dhcpha_owned or fresh.observed.dhcpha.lagg_members
+                or fresh.observed.carrier.up or self.ifindex(carrier) != carrier_index
+                or self._default_route() != stale):
+            return
+        # Match the AF_LINK gateway as well as the destination. A concurrent
+        # replacement through another gateway must survive this delete.
+        self._command(['/sbin/route', '-n', 'delete', '-inet', 'default', '-interface', carrier])
+        if self._default_route() == stale:
+            raise RuntimeError('Stale carrier default route cleanup did not verify.')
+        self._event('stale_carrier_default_removed', interface=snapshot.managed_interface,
+                    carrier=carrier, gateway=stale['gateway'], outcome='verified')
+
     def _standby_record(self):
         if not self.standby_marker.exists():
             return None
@@ -326,6 +352,7 @@ class Controller:
         try:
             with self.locked():
                 snapshot = self.snapshot()
+                self._cleanup_carrier_default_locked(snapshot)
                 self._reconcile_standby_locked(snapshot)
         except Exception as error:
             self._report_failure('standby_routing', error, 'unchanged', snapshot)
@@ -990,6 +1017,8 @@ class Controller:
                             outcome="completed",
                         )
                     try:
+                        if not final_members:
+                            self._cleanup_carrier_default_locked(self.snapshot())
                         if self._standby_path(snapshot)['enabled'] or self.standby_marker.exists():
                             self._reconcile_standby_locked(self.snapshot())
                     except Exception as route_error:

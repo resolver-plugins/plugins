@@ -205,6 +205,12 @@ The interface can be any suitable local assignment, including a VLAN; it does
 not need to be named `lan`. Configure each node separately, since these settings
 are node-local and excluded from shared XMLRPC synchronization.
 
+Revision 0.2_41 removes an unusable IPv4 interface default left on the original
+carrier after native WAN reassignment. Cleanup requires the owned HA device,
+committed mapping and an addressless, down, detached carrier. It also runs
+before standby access is enabled. Defaults through other interfaces or IP
+gateways remain subject to the existing conflict checks.
+
 Both potential active nodes need ingress permission for the peer's native
 internal IPv4 address and outbound NAT to their current DHCP WAN address.
 Reuse existing adequate rules. Policy routing on the selected network must

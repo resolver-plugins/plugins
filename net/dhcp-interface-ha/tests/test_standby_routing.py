@@ -11,6 +11,62 @@ class StandbyRoutingTests(unittest.TestCase):
     edit = baseline.RuntimeTests.edit
     assert_fenced = baseline.RuntimeTests.assert_fenced
 
+    def test_reassigned_carrier_default_is_removed_before_standby_enablement(self):
+        self.enable_standby()
+        self.edit('<standby_enabled>1</standby_enabled>', '<standby_enabled>0</standby_enabled>')
+        self.host.route = {'gateway': 'link#42', 'netif': 'hn1'}
+        status = self.controller.reconcile()
+        self.assertIsNone(self.host.route)
+        self.assert_fenced()
+        self.assertEqual(status['standby_internet']['state'], 'disabled')
+        self.assertFalse(self.controller.standby_marker.exists())
+        self.edit('<standby_enabled>0</standby_enabled>', '<standby_enabled>1</standby_enabled>')
+        self.controller.reconcile()
+        self.assertEqual(self.host.route, {'gateway': '192.168.10.1', 'netif': 'hn0'})
+
+    def test_carrier_cleanup_preserves_unrelated_defaults_and_unverified_carrier(self):
+        self.enable_standby()
+        self.edit('<standby_enabled>1</standby_enabled>', '<standby_enabled>0</standby_enabled>')
+        for route in [{'gateway': '10.0.0.1', 'netif': 'hn1'},
+                      {'gateway': 'link#99', 'netif': 'hn1'},
+                      {'gateway': 'link#42', 'netif': 'wg0'}]:
+            with self.subTest(route=route):
+                self.host.route = route.copy()
+                self.controller.reconcile()
+                self.assertEqual(self.host.route, route)
+        self.host.route = {'gateway': 'link#42', 'netif': 'hn1'}
+        self.host.items['hn1']['ipv4'] = [{'ipaddr': '198.51.100.3'}]
+        self.controller.reconcile()
+        self.assertEqual(self.host.route, {'gateway': 'link#42', 'netif': 'hn1'})
+
+    def test_carrier_cleanup_preserves_concurrent_gateway_replacement(self):
+        self.enable_standby()
+        self.edit('<standby_enabled>1</standby_enabled>', '<standby_enabled>0</standby_enabled>')
+        self.host.route = {'gateway': 'link#42', 'netif': 'hn1'}
+        foreign = {'gateway': '10.0.0.1', 'netif': 'wg0'}
+        original = self.controller.command
+        def replace(argv):
+            if argv[0] == '/sbin/route' and 'delete' in argv:
+                self.host.route = foreign.copy()
+            return original(argv)
+        self.controller.command = replace
+        self.controller.reconcile()
+        self.assertEqual(self.host.route, foreign)
+        self.assert_fenced()
+
+    def test_carrier_cleanup_cancels_when_assignment_changes(self):
+        self.enable_standby()
+        self.edit('<standby_enabled>1</standby_enabled>', '<standby_enabled>0</standby_enabled>')
+        self.host.route = {'gateway': 'link#42', 'netif': 'hn1'}
+        original = self.controller.command
+        def reassign(argv):
+            if argv[0] == '/usr/bin/netstat':
+                self.edit('<if>dhcpha0lagg</if>', '<if>hn1</if>')
+            return original(argv)
+        self.controller.command = reassign
+        self.controller.reconcile()
+        self.assertEqual(self.host.route, {'gateway': 'link#42', 'netif': 'hn1'})
+
     def enable_standby(self):
         self.edit('<lan><enable>1</enable><if>hn0</if></lan>',
                   '<lan><if>unused0</if></lan><opt2><enable>1</enable><if>hn0</if>'

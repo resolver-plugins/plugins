@@ -464,3 +464,37 @@ result and status records remain under `/root/dhcpha-restore-recovery.x9ceezdz`
 on HA-1; package reinstall evidence is under
 `/root/dhcpha-redeploy-0.2_40.wq4bu7oc`. This recovery establishes configuration
 and enablement in maintenance, not a new paired failover qualification.
+
+## 13. Reserved-carrier default cleanup, revision 0.2_41
+
+After the restored HA-1 WAN moved from `ix0` to `dhcpha0lagg`, the live kernel
+retained `default → link#5 → ix0`. Saved `WAN_DHCP` and its static default route
+already referred to logical `wan` on the new device. The native gateway was
+defunct while that WAN was fenced and addressless; native IPv4 recalculation
+did not remove the old route. A validation-only invocation of the actual
+Settings save path reproduced the unrelated-default rejection for management
+`opt1` / `10.250.5.1` without writing settings.
+
+Revision 0.2_41 adds cleanup at the existing controller/kernel boundary.
+After fencing, and at native post-routing callbacks, remove only an IPv4
+interface default whose `link#N` gateway matches the current index of the
+reserved original carrier. Require committed managed WAN configuration, owned
+LAGG, valid local/carrier safety, no carrier addresses, carrier down and no LAGG
+members. Re-read the configuration, ownership, detachment, interface index and
+default immediately before deletion. Use `route delete -inet default -interface
+<carrier>` so a concurrent gateway replacement is not accidentally removed;
+verify readback and log `stale_carrier_default_removed`.
+
+This cleanup operates before optional standby enablement and preserves the
+existing rejection of unrelated routes. It leaves IP-gateway defaults, different
+interfaces, index mismatches and invalid reservation/configuration untouched.
+No broad route-table flush, configuration rewrite, gateway-priority change or
+IPv6 route change is introduced. Cleanup failures use the existing routing
+failure reporting/retry path and do not tear down an active attachment.
+
+The regression at the existing reconciliation seam failed before implementation:
+the carrier default survived with standby access disabled. It now verifies
+cleanup followed by successful standby selection. Additional behavior checks
+cover foreign defaults, addressed carriers, concurrent gateway replacement and
+assignment change before deletion. Native deployment evidence follows after
+verification.

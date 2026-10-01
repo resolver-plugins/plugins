@@ -36,6 +36,9 @@ class Host:
     def command(self, argv):
         if argv == ['/sbin/ifconfig', '-Lm']:
             return self.ifconfig()
+        if argv[0] == '/usr/bin/netstat':
+            return json.dumps({'statistics': {'route-information': {'route-table': {
+                'rt-family': [{'address-family': 'Internet', 'rt-entry': []}]}}}})
         if argv[0].endswith('sysctl'):
             return '1'
         self.commands.append(tuple(argv))
