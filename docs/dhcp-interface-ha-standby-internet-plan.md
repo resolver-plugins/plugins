@@ -496,5 +496,32 @@ The regression at the existing reconciliation seam failed before implementation:
 the carrier default survived with standby access disabled. It now verifies
 cleanup followed by successful standby selection. Additional behavior checks
 cover foreign defaults, addressed carriers, concurrent gateway replacement and
-assignment change before deletion. Native deployment evidence follows after
-verification.
+assignment change before deletion.
+
+Native build and deployment completed on restored HA-1, OPNsense `26.7.1_1` /
+FreeBSD 15 amd64. The local and native Python/PHP suites passed 153 tests; both
+local UI suites passed. The fresh development archive has 31 files, complete
+target-readable checksums and no bytecode/cache entries. It records source
+`d47af4929`, version `0.2_41`, SHA256
+`5a428d1c9db06158fb242eb21dc54c18cf459f5a19632510507da79464908d01`.
+Installed source hashes, version metadata and package integrity passed. Existing
+configuration and device ownership were preserved; the controller was restarted
+while HA-1 remained in native maintenance with its WAN fenced.
+
+The native controller logged `stale_carrier_default_removed` for `ix0` /
+`link#5`. The same validation-only Settings invocation then returned `valid`.
+The maintainer-selected management path was enabled through the native Settings
+save action: default `10.250.5.1` via `vlan0.5`, source `10.250.5.3`. Seven samples
+over 30 seconds retained selected/owned standby access, BACKUP, maintenance,
+FENCED, no managed WAN addresses or LAGG members, and both WireGuard tunnels
+DOWN. A repository HTTPS download with hostname resolution succeeded over IPv4.
+Native `configctl interface routes configure` retained verified standby selection.
+Only local standby enablement and model/save metadata changed after installation.
+
+HA-2 remains active on `0.2_40`; its role/attachment stayed MASTER/ATTACHED and
+its WireGuard tunnels UP. A one-minute check passed 60 direct IPv4 and 60 IPv6
+WireGuard upstream connections. This increment was deployed to HA-1 only; full
+paired failover qualification remains outstanding. Native source/build/install,
+rollback `0.2_40` package, configuration/ownership snapshots, cleanup event,
+validation and connectivity evidence are private under
+`/root/dhcpha-package-0.2_41.7svop0mj` on HA-1. No signed publication was run.
