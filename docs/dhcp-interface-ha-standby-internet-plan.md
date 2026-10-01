@@ -410,3 +410,57 @@ checks after package installation passed 60/60 IPv4 probes on each node and
 Installed package checksums passed again on both nodes afterward. This supports
 the dependency correction as the stabilization for the observed periodic outage;
 it does not establish application session continuity across failover.
+
+## 12. HA-1 backup restore and WAN setup recovery
+
+On 2026-10-01, the maintainer restored HA-1 from an older backup. The restored
+node ran OPNsense `26.7.1_1` with no DHCP HA package or models, a static native
+WAN on `ix0`, and the older WAN CARP VIPs. HA-2 remained active on `0.2_40`.
+The verified 31-file `0.2_40` archive from section 10 was reinstalled on HA-1;
+installed checksums/source hashes, native inventory compatibility, menu/tab
+routes and the initial disabled/unconfigured controller state passed.
+
+The maintainer subsequently changed WAN to IPv4 DHCP with IPv6 unset, removed
+the old WAN CARP VIPs and restored WireGuard's management VIP dependency.
+Guarded setup still failed after native reassignment: `ix0` retained an IPv6
+link-local address, and controller verification correctly rejected an addressed
+carrier. Setup logs showed IPv4 cleanup followed by `carrier_ipv6=1` and
+`carrier must have no IP addresses or CARP instances`. Native WAN apply/reset
+does not guarantee removal of this residual IPv6 state. On this restored host,
+IPv6 automatic link-local creation was enabled.
+
+A read-only replay using actual native inventory reproduced the carrier guard
+failure after simulating the native relink/IPv4 cleanup. Removing only the
+residual link-local address from that captured inventory made the same guard
+pass; native setup preflight also passed. No ownership, addressing or eligibility
+check was weakened.
+
+Recovery verified that WAN was IPv4 DHCP with no configured IPv6 or WAN VIPs,
+the plugin was disabled, CARP maintenance was set, and the owned LAGG was empty.
+Only `ix0`'s residual IPv6 state was cleared: disable automatic link-local
+creation and IPv6 on that carrier, then delete its observed link-local address.
+The plugin's actual Settings `configureAction()` then completed native
+reassignment and requested enablement with assignment/runtime readback verified.
+The controller's original live carrier guard now passes.
+
+HA-1 is enabled on `wan` / `dhcpha0lagg`, with saved carrier `ix0`. It remains
+in the maintainer's existing CARP maintenance mode, all six internal VIPs BACKUP,
+the carrier down, no managed WAN IPv4 address, and an empty owned LAGG. Standby
+Internet remains disabled on HA-1. Its WireGuard instances reference management
+VIP `10.250.5.1` and are DOWN. Configuration comparison preserved everything
+outside guarded WAN assignment/receive-mode fields and the plugin's models/save
+metadata. No signed package, package revision, native CARP role, firewall, NAT,
+WireGuard configuration or global IPv6 setting was changed by recovery.
+
+Seven samples over 30 seconds retained enabled/BACKUP/maintenance/FENCED with
+no local error. HA-2 remained MASTER/ATTACHED; a one-minute check passed all 60
+direct IPv4 and all 60 IPv6 WireGuard upstream connections. Installed package
+integrity passed again on HA-1. When diagnosing this restore pattern, inspect
+the carrier's actual addresses: IPv6 unset in saved WAN configuration does not
+prove that a prior kernel link-local address has been removed.
+
+Private before/after configuration snapshots, interface evidence, native setup
+result and status records remain under `/root/dhcpha-restore-recovery.x9ceezdz`
+on HA-1; package reinstall evidence is under
+`/root/dhcpha-redeploy-0.2_40.wq4bu7oc`. This recovery establishes configuration
+and enablement in maintenance, not a new paired failover qualification.
