@@ -212,6 +212,12 @@ allow the desired Internet path; a VPN-directed network may give different
 results from a management network. Services bound to the disconnected WAN or
 its former address require compatible native source-binding settings.
 
+For synchronized WireGuard instances, select a valid existing CARP VIP in
+WireGuard's native CARP dependency setting on both nodes. Verify the tunnel
+interfaces are UP on MASTER and DOWN on BACKUP. A dependency referencing a
+deleted VIP can leave both copies UP; standby Internet access then allows
+them to contact the remote peer using the same WireGuard identity.
+
 On promotion, the controller releases its standby default before attaching
 the WAN. On demotion, it fences first, then selects the internal VIP. Native
 routing callbacks and the existing reconcile loop maintain this selection.

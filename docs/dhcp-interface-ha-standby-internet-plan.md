@@ -357,3 +357,56 @@ controller behavior. Build from a fresh private extraction that excludes
 bytecode/cache entries and verify installed integrity again after the controller
 has run. This does not change the signed publication system. Native deployment
 evidence follows when verification completes.
+
+On 2026-10-01, a fresh native build on HA-1 passed all 149 Python/PHP fixture
+tests with bytecode writes disabled. The target parser verified exactly 31
+archive files, all with checksums and no cache entries. The exact same archive
+was installed on HA-2, verified, then installed on HA-1. Both now report
+`os-dhcp-interface-ha-devel-0.2_40`, source hash `d46fb1da4`, archive SHA256
+`932158631d2cd6740968f3fd668ef83908a34ef8bd08692326ef0324b7dbddce`.
+
+Installed source hashes and `pkg check -s` passed on both nodes after the
+controller had run. Current configuration snapshots, including the maintainer's
+WireGuard corrections, remained unchanged outside native save metadata;
+node-local settings and carrier ownership were preserved. Seven samples per
+node over 30 seconds retained HA-1 MASTER/ATTACHED and HA-2 BACKUP/FENCED.
+Native health, observed default-route selection, local BIND queries with
+NOERROR and an answer, and IPv4 repository HTTPS downloads all passed.
+The revision contains the same reviewed runtime source as 0.2_39; no controller
+restart was requested. HA-1's supervisor/controller PIDs were preserved across
+its upgrade. HA-2's running controller predates its upgrade.
+
+Build evidence remains under `/root/dhcpha-package-0.2_40.aZfQJU` on HA-1.
+Private pre-upgrade configuration/status snapshots, installation logs and
+verification records remain under `/root/dhcpha-upgrade-0.2_40.x_26dv_4` on
+HA-1 and `/root/dhcpha-upgrade-0.2_40.b6fs6pst` on HA-2. No signed repository
+or publication workflow was changed or run. The paired failover qualification
+items in section 6 remain outstanding.
+
+## 11. WireGuard dependency correction and connectivity
+
+When HA-2 gained standby Internet access, both copies of its external WireGuard
+tunnel were observed contacting the remote peer with the same public identity
+while HA-2 remained BACKUP. Both WireGuard instances on HA-1 referenced a CARP
+UUID absent from its current VIP configuration. Native
+`wg-service-control.php` defaults the interface to UP and selects DOWN only
+when the configured dependency exists and is not MASTER. A missing dependency
+therefore does not suppress the backup tunnel. During the investigation,
+direct WAN IPv4 probes succeeded while probes through HA-1's IPv6 WireGuard
+path intermittently timed out, consistent with competing tunnel endpoints.
+
+The maintainer corrected the WireGuard dependencies. Readback on both nodes
+now resolves both instances to management VIP `10.250.5.1`, VHID 5. HA-1's
+`wg0` and `wg1` are UP; HA-2's are DOWN. HA-2 retains its enabled standby IPv4
+default through management, with `hn1` down and an empty managed LAGG.
+The agent made no WireGuard, firewall, NAT or key changes.
+
+A one-minute check with both nodes online passed 60/60 TCP connections to
+the IPv4 upstream on each node and 60/60 connections through HA-1's IPv6
+WireGuard path. A second one-minute check during the HA-2 package upgrade
+again passed all 60 direct WAN and 60 WireGuard probes on HA-1. Final one-minute
+checks after package installation passed 60/60 IPv4 probes on each node and
+60/60 IPv6 WireGuard probes on HA-1; tunnel states and HA roles remained correct.
+Installed package checksums passed again on both nodes afterward. This supports
+the dependency correction as the stabilization for the observed periodic outage;
+it does not establish application session continuity across failover.
