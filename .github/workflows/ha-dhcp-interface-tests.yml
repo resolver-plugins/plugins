@@ -1,48 +1,26 @@
-name: DHCP Interface HA controller tests
+name: HA DHCP Interface tests
 
 on:
   push:
     paths:
+      - '.github/ci/ha_dhcp/**'
+      - '.github/ci/shared/**'
+      - '.github/ci/ci-tests/**'
       - 'net/dhcp-interface-ha/**'
-      - '.github/workflows/dhcp-interface-ha-tests.yml'
-      - '.github/workflows/dhcp-interface-ha-release.yml'
-      - '.github/ci/build-dhcp-interface-ha.sh'
-      - '.github/ci/publish-dhcp-interface-ha.py'
-      - '.github/ci/dhcp_interface_ha_channel.py'
-      - '.github/ci/package_catalogue.py'
-      - '.github/ci/ci-tests/test_package_catalogue.py'
-      - '.github/workflows/package-release.yml'
-      - '.github/ci/dhcp_interface_ha_release.py'
-      - '.github/ci/verify-dhcp-interface-ha.sh'
-      - '.github/ci/release_channel.py'
-      - '.github/ci/target_pkg.py'
-      - '.github/ci/package_checksums.py'
-      - '.github/ci/setup-opnsense-repository.sh'
+      - '.github/workflows/ha-dhcp-interface-tests.yml'
+      - '.github/workflows/ha-dhcp-interface-release.yml'
+      - '.github/workflows/bind-package-release.yml'
       - '.resolver-plugins/target-pkg.json'
-      - '.github/ci/ci-tests/test_dhcp_interface_ha_release.py'
-      - '.github/ci/ci-tests/ha_fixtures.py'
-      - '.github/ci/ci-tests/test_setup_opnsense_repository.py'
   pull_request:
     paths:
+      - '.github/ci/ha_dhcp/**'
+      - '.github/ci/shared/**'
+      - '.github/ci/ci-tests/**'
       - 'net/dhcp-interface-ha/**'
-      - '.github/workflows/dhcp-interface-ha-tests.yml'
-      - '.github/workflows/dhcp-interface-ha-release.yml'
-      - '.github/ci/build-dhcp-interface-ha.sh'
-      - '.github/ci/publish-dhcp-interface-ha.py'
-      - '.github/ci/dhcp_interface_ha_channel.py'
-      - '.github/ci/package_catalogue.py'
-      - '.github/ci/ci-tests/test_package_catalogue.py'
-      - '.github/workflows/package-release.yml'
-      - '.github/ci/dhcp_interface_ha_release.py'
-      - '.github/ci/verify-dhcp-interface-ha.sh'
-      - '.github/ci/release_channel.py'
-      - '.github/ci/target_pkg.py'
-      - '.github/ci/package_checksums.py'
-      - '.github/ci/setup-opnsense-repository.sh'
+      - '.github/workflows/ha-dhcp-interface-tests.yml'
+      - '.github/workflows/ha-dhcp-interface-release.yml'
+      - '.github/workflows/bind-package-release.yml'
       - '.resolver-plugins/target-pkg.json'
-      - '.github/ci/ci-tests/test_dhcp_interface_ha_release.py'
-      - '.github/ci/ci-tests/ha_fixtures.py'
-      - '.github/ci/ci-tests/test_setup_opnsense_repository.py'
   workflow_dispatch:
   workflow_call:
 
@@ -89,5 +67,5 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check 'pytest==8.3.5'
           python -m pytest -q .github/ci/ci-tests/test_dhcp_interface_ha_release.py .github/ci/ci-tests/test_setup_opnsense_repository.py .github/ci/ci-tests/test_package_catalogue.py
-          sh -n .github/ci/build-dhcp-interface-ha.sh .github/ci/verify-dhcp-interface-ha.sh .github/ci/setup-opnsense-repository.sh
-          shellcheck -s sh .github/ci/build-dhcp-interface-ha.sh .github/ci/verify-dhcp-interface-ha.sh .github/ci/setup-opnsense-repository.sh
+          sh -n .github/ci/ha_dhcp/build-dhcp-interface-ha.sh .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh .github/ci/shared/setup-opnsense-repository.sh
+          shellcheck -s sh .github/ci/ha_dhcp/build-dhcp-interface-ha.sh .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh .github/ci/shared/setup-opnsense-repository.sh

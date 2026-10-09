@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import importlib.util
-import shlex
-import tempfile
-from contextlib import contextmanager
-from collections.abc import Iterator
-from pathlib import Path
+from module_fixtures import *
 
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "package_checksums.py"
-SPEC = importlib.util.spec_from_file_location("package_checksums", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-package_checksums = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(package_checksums)
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "ci-local"
+package_checksums = load_module("package_checksums", "shared/package_checksums.py")
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "ci-local"
 
 
 @contextmanager
@@ -57,7 +48,7 @@ def test_rejects_missing_or_null_file_checksums(tmp_path: Path, output: str) -> 
     archive = tmp_path / "bind920.pkg"
     archive.touch()
     with pkg_fixture(output) as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="bind920.pkg"):
+        with pytest.raises(package_checksums.PackageChecksumError, match="incomplete target-readable"):
             package_checksums.verify_archive(str(pkg), archive)
 
 

@@ -1,8 +1,5 @@
 """Exercise repository bootstrap with local commands and no package mutations."""
-import os
-from pathlib import Path
-import subprocess
-import tempfile
+from common_imports import *
 
 import pytest
 

@@ -24,7 +24,7 @@ jobs:
   test:
     needs: profile
     if: needs.profile.outputs.release == 'true'
-    uses: ./.github/workflows/dhcp-interface-ha-tests.yml
+    uses: ./.github/workflows/ha-dhcp-interface-tests.yml
 
   profile:
     runs-on: ubuntu-24.04
@@ -43,7 +43,7 @@ jobs:
         id: select
         env:
           SERIES: ${{ inputs.series || '26.7' }}
-        run: python3 .github/ci/dhcp_interface_ha_release.py select --series "$SERIES" >> "$GITHUB_OUTPUT"
+        run: python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py select --series "$SERIES" >> "$GITHUB_OUTPUT"
       - id: profile
         if: steps.select.outputs.release == 'true'
         env:
@@ -55,8 +55,8 @@ jobs:
           git fetch --no-tags origin "refs/heads/release/bind-rp/$SERIES:refs/remotes/origin/ha-build-profile"
           profile_commit=$(git rev-parse refs/remotes/origin/ha-build-profile)
           git show "$profile_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
-          freebsd_release=$(python3 .github/ci/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
-          python3 .github/ci/target_pkg.py field .resolver-plugins/target-pkg.json "$SERIES" version
+          freebsd_release=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
+          python3 .github/ci/shared/target_pkg.py field .resolver-plugins/target-pkg.json "$SERIES" version
           printf 'profile_commit=%s\nfreebsd_release=%s\n' "$profile_commit" "$freebsd_release" >> "$GITHUB_OUTPUT"
 
   build:
@@ -95,7 +95,7 @@ jobs:
             pkg update -f
             pkg install -y python3 git
             git config --global --add safe.directory "$PWD"
-            RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
+            RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/ha_dhcp/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: dhcp-interface-ha-${{ needs.profile.outputs.series }}
@@ -134,7 +134,7 @@ jobs:
         run: |
           set -eu
           (cd "artifacts/$SERIES" && sha256sum --check SHA256SUMS)
-          reused=$(python3 .github/ci/dhcp_interface_ha_channel.py reuse \
+          reused=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py reuse \
             --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
             --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
@@ -143,7 +143,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
-          python3 .github/ci/package_catalogue.py fetch --component bind --series "$SERIES" --output "artifacts/$SERIES/bind-current"
+          python3 .github/ci/shared/package_catalogue.py fetch --component bind --series "$SERIES" --output "artifacts/$SERIES/bind-current"
       - name: Sign isolated plugin and shared catalogues
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -165,22 +165,22 @@ jobs:
             pkg update -f
             pkg install -y python3 git
             git config --global --add safe.directory "$PWD"
-            RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/dhcp_interface_ha_release.py snapshot --series "$SERIES")
+            RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py snapshot --series "$SERIES")
             export RP_OPNSENSE_SNAPSHOT
-            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/setup-opnsense-repository.sh "$SERIES" >/dev/null
+            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$SERIES" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$SERIES"
+            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$SERIES"
             umask 077
             key=.rp-dhcpha-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
             printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
             if [ "$REUSED" != true ]; then
-              python3 .github/ci/dhcp_interface_ha_channel.py stage \
+              python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py stage \
                 --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
                 --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" \
                 --trusted-upstream artifacts/trusted/upstream.json --key "$key"
             fi
-            python3 .github/ci/package_catalogue.py stage \
+            python3 .github/ci/shared/package_catalogue.py stage \
               --bind-channel "artifacts/$SERIES/bind-current" --dhcp-channel "artifacts/$SERIES/repository/current" \
               --output "artifacts/$SERIES/repository/combined" --series "$SERIES" --key "$key"
             rm -f "$key"
@@ -221,7 +221,7 @@ jobs:
             pkg install -y python3 git
             expected="artifacts/$SERIES/repository/current"
             combined="artifacts/$SERIES/repository/combined"
-            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/verify-dhcp-interface-ha.sh \
+            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
               "$SERIES" "$expected" "file://$PWD/$combined" "$combined"
 
   publish:
@@ -252,9 +252,9 @@ jobs:
           GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
         run: |
           set -eu
-          python3 .github/ci/dhcp_interface_ha_channel.py promote \
+          python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py promote \
             --directory "artifacts/$SERIES/repository/current" --recovery "$RUNNER_TEMP/dhcpha-recovery"
-          python3 .github/ci/package_catalogue.py publish \
+          python3 .github/ci/shared/package_catalogue.py publish \
             --directory "artifacts/$SERIES/repository/combined" --recovery "$RUNNER_TEMP/catalogue-recovery"
 
   verify-published:
@@ -287,7 +287,7 @@ jobs:
             pkg install -y python3 git
             expected="artifacts/$SERIES/repository/current"
             combined="artifacts/$SERIES/repository/combined"
-            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/verify-dhcp-interface-ha.sh \
+            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
               "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/$SERIES/latest" "$combined"
 
   source-release:
@@ -315,6 +315,6 @@ jobs:
           mkdir "$source_output"
           cp "artifacts/$SERIES/repository/current/"os-dhcp-interface-ha-*.pkg "artifacts/$SERIES/repository/current/build-metadata.txt" "artifacts/$SERIES/repository/current/upstream.json" "$source_output/"
           (cd "$source_output" && sha256sum ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)
-          python3 .github/ci/publish-dhcp-interface-ha.py \
+          python3 .github/ci/ha_dhcp/publish-dhcp-interface-ha.py \
             --repository "$GITHUB_REPOSITORY" --directory "$source_output" \
             --series "$SERIES" --source-commit "$SOURCE_COMMIT"

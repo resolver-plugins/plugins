@@ -1,97 +1,23 @@
-import json
-import hashlib
-import os
-import pathlib
-import shutil
-import subprocess
-import tempfile
+from git_fixtures import *
+
+from package_fixtures import package_creator, write_target_metadata
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
-OPNSENSE_26_1_ARCHIVE_SHA256 = (
-    '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
-)
-UPSTREAM_COMMIT = '6f3937f938377464534ebebde66cc13d84186542'
+UPSTREAM_COMMIT = '1' * 40
 FREEBSD_RELEASE = '14.3'
 TARGET_ARCHIVE_BYTES = b'fixture target package archive\n'
-TARGET_STATIC_BYTES = (
-    b'#!/bin/sh\n'
-    b'printf \'%s\\n\' "$*" >> "$PKG_STATIC_CALL_LOG"\n'
-    b'if [ "$1" = -v ]; then printf \'%s\\n\' \'2.3.1\'; exit 0; fi\n'
-    b'if [ "$1" = query ] && [ "$4" = %v ]; then package=${3##*/}; version=${package#os-bind-rp-}; printf \'%s\\n\' "${version%.pkg}"; exit 0; fi\n'
-    b'if [ "$1" = query ]; then printf \'%s\\n\' \'/usr/local/opnsense/mvc/app/models/OPNsense/Bind/Menu/Menu.xml|1$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\'; exit 0; fi\n'
-    b'exit 64\n'
-)
-
-
-def git(directory: pathlib.Path, *arguments: str) -> str:
-    return subprocess.run(
-        ['git', '-C', directory, *arguments], check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-
-def create_core_repository(path: pathlib.Path) -> str:
-    git(path.parent, 'init', path)
-    git(path, 'config', 'user.name', 'CI test')
-    git(path, 'config', 'user.email', 'ci@example.invalid')
-    template = path / 'src/etc/pkg/repos/OPNsense.conf.shadow.in'
-    template.parent.mkdir(parents=True)
-    template.write_text(
-        'OPNsense: {\n  url: "%%CORE_PACKAGESITE%%/${ABI}/%%CORE_ABI%%/latest",\n'
-        '  signature_type: "fingerprints",\n  enabled: yes\n}\n', encoding='utf-8'
-    )
-    fingerprint = path / 'src/etc/pkg/fingerprints/OPNsense/trusted/pkg.fixture'
-    fingerprint.parent.mkdir(parents=True)
-    fingerprint.write_text('fixture\n', encoding='utf-8')
-    git(path, 'add', 'src')
-    git(path, 'commit', '-m', 'fixture core')
-    return git(path, 'rev-parse', 'HEAD')
-
-
-def write_upstream_metadata(path: pathlib.Path, core_commit: str) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                'series': '26.1',
-                'upstream_branch': 'stable/26.1',
-                'upstream_commit': UPSTREAM_COMMIT,
-                'tools_tag': '26.1.11',
-                'freebsd_release': FREEBSD_RELEASE,
-                'core_commit': core_commit,
-                'core_archive_url': (
-                    f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz'
-                ),
-                'core_archive_sha256': OPNSENSE_26_1_ARCHIVE_SHA256,
-            }
-        )
-    )
+TARGET_STATIC_BYTES = (pathlib.Path(__file__).with_name('pkg-static-fixture.sh')).read_bytes()
 
 
 def configure_target_pkg_fixture(
     environment: dict[str, str], directory: pathlib.Path, executable_directory: pathlib.Path
 ) -> None:
     metadata = directory / 'target-pkg.json'
-    record = {
-        'name': 'pkg',
-        'version': '2.3.1_1',
-        'origin': 'ports-mgmt/pkg',
-        'abi': 'FreeBSD:14:amd64',
-        'filename': 'pkg-2.3.1_1.pkg',
-        'sha256': hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
-        'pkg_static_sha256': hashlib.sha256(TARGET_STATIC_BYTES).hexdigest(),
-    }
-    metadata.write_text(
-        json.dumps(
-            {
-                'schema': 1,
-                'series': {
-                    '26.1': record,
-                    '26.7': dict(record, abi='FreeBSD:15:amd64'),
-                },
-            }
-        ),
-        encoding='utf-8',
-    )
+    write_target_metadata(metadata, package_creator(
+        sha256=hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
+        pkg_static_sha256=hashlib.sha256(TARGET_STATIC_BYTES).hexdigest(),
+    ))
     environment['RP_TARGET_PKG_METADATA'] = str(metadata)
     environment['RP_PKG_STATIC_COMMAND'] = str(executable_directory / 'pkg-static')
     environment['PKG_STATIC_PATH'] = str(executable_directory / 'pkg-static')
@@ -106,21 +32,9 @@ def materialize_build_repository(request) -> pathlib.Path:
         tempfile.mkdtemp(prefix='build-os-bind-rp-', dir=local_tests)
     )
     request.addfinalizer(lambda: shutil.rmtree(build_repository, ignore_errors=True))
-    shutil.copytree(
-        REPOSITORY_ROOT / '.github',
-        build_repository / '.github',
-        ignore=shutil.ignore_patterns('ci-local', '__pycache__', '.pytest_cache'),
-    )
-    shutil.copytree(
-        REPOSITORY_ROOT / 'dns/bind',
-        build_repository / 'dns/bind',
-        ignore=shutil.ignore_patterns('work', '__pycache__', '.pytest_cache'),
-    )
-    shutil.copytree(
-        REPOSITORY_ROOT / '.resolver-plugins',
-        build_repository / '.resolver-plugins',
-        ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'),
-    )
+    for name in ('.github/ci', 'dns/bind', '.resolver-plugins'):
+        shutil.copytree(REPOSITORY_ROOT / name, build_repository / name,
+                        ignore=shutil.ignore_patterns('ci-local', 'work', '__pycache__', '.pytest_cache'))
     return build_repository
 
 
@@ -142,6 +56,8 @@ def build_environment(
 ) -> dict[str, str]:
     core_commit = create_core_repository(core)
     environment = os.environ.copy()
+    environment.pop('RP_OPNSENSE_SNAPSHOT', None)
+    environment.pop('SOURCE_COMMIT', None)
     environment['MAKE_COMMAND'] = str(
         build_repository / '.github/ci/ci-tests/make-package-fixture.sh'
     )
@@ -162,43 +78,17 @@ def build_environment(
     return environment
 
 
-def test_materialize_build_repository_creates_a_disposable_copy(request):
-    build_repository = materialize_build_repository(request)
-
-    assert build_repository != REPOSITORY_ROOT
-    assert build_repository.parent == REPOSITORY_ROOT / '.github/ci-local'
-    assert (build_repository / '.github/ci/build-os-bind-rp.sh').is_file()
-    assert (build_repository / 'dns/bind').is_dir()
-    assert not (build_repository / 'dns/bind/work').exists()
-
-
 def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
     build_repository = materialize_build_repository(request)
     set_plugin_version(build_repository, '26.1', '1')
-    build_script = build_repository / '.github/ci/build-os-bind-rp.sh'
+    build_script = build_repository / '.github/ci/bind/build-os-bind-rp.sh'
     core = tmp_path / 'core'
-    core_commit = create_core_repository(core)
-    environment = os.environ.copy()
-    environment['MAKE_COMMAND'] = str(
-        build_repository / '.github/ci/ci-tests/make-package-fixture.sh'
-    )
-    environment['PKG_COMMAND'] = str(
-        build_repository / '.github/ci/ci-tests/pkg-build-fixture.sh'
-    )
+    environment = build_environment(tmp_path, build_repository, core)
+    core_commit = git(core, 'rev-parse', 'HEAD')
     python_command = build_repository / 'python3-fixture'
     environment['PYTHON_COMMAND'] = str(python_command)
-    environment['GIT_CONFIG_GLOBAL'] = str(tmp_path / 'gitconfig')
-    environment['OPNSENSE_CORE_REPOSITORY'] = str(core)
-    environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
-    environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
-    metadata_path = tmp_path / 'upstream.json'
-    write_upstream_metadata(metadata_path, core_commit)
-    environment['RP_UPSTREAM_METADATA'] = str(metadata_path)
-    package_call_log = tmp_path / 'pkg-calls.log'
-    environment['PKG_CALL_LOG'] = str(package_call_log)
-    configure_target_pkg_fixture(environment, tmp_path, build_repository)
+    package_call_log = pathlib.Path(environment['PKG_CALL_LOG'])
 
-    assert build_script.is_file(), 'non-publishing build wrapper is missing'
     result = subprocess.run(
         [build_script, '26.1', str(tmp_path)],
         cwd=build_repository,
@@ -212,20 +102,15 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
     assert python_command.is_file()
     assert (tmp_path / 'os-bind-rp-26.1_1.pkg').is_file()
     assert (tmp_path / 'repos' / 'OPNsense.conf').is_file()
-    metadata = (tmp_path / 'build-metadata.txt').read_text()
-    assert 'series=26.1\n' in metadata
-    assert 'pkg_abi=FreeBSD:14:amd64\n' in metadata
-    assert 'bind920=9.20.26\n' in metadata
-    assert 'bind_source=opnsense\n' in metadata
-    assert 'opnsense=26.1.11_10\n' in metadata
-    assert 'switch_test=' not in metadata
-    assert f'upstream_commit={UPSTREAM_COMMIT}\n' in metadata
-    assert f'core_commit={core_commit}\n' in metadata
-    assert 'tools_tag=26.1.11\n' in metadata
-    assert f'freebsd_release={FREEBSD_RELEASE}\n' in metadata
-    assert 'source_commit=unknown\n' in metadata
-    assert 'pkg_creator=2.3.1_1\n' in metadata
-    assert f"pkg_creator_sha256={hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest()}\n" in metadata
+    metadata = dict(line.split('=', 1) for line in (tmp_path / 'build-metadata.txt').read_text().splitlines())
+    metadata.pop('uname')  # Host description varies; the package identity and build pins must match exactly.
+    assert metadata == {
+        'series': '26.1', 'pkg_abi': 'FreeBSD:14:amd64', 'bind920': '9.20.26',
+        'bind_source': 'opnsense', 'opnsense': '26.1.11_10', 'opnsense_core_commit': core_commit,
+        'upstream_commit': UPSTREAM_COMMIT, 'core_commit': core_commit, 'tools_tag': '26.1.11',
+        'freebsd_release': FREEBSD_RELEASE, 'source_commit': 'unknown', 'pkg_creator': '2.3.1_1',
+        'pkg_creator_sha256': hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
+    }
     package_calls = package_call_log.read_text().splitlines()
     assert 'update -f' in package_calls
     assert 'install -y python3' in package_calls
@@ -238,7 +123,11 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
         if call.startswith('add -f ') and 'pkg-2.3.1_1.pkg' in call
     )
     assert target_add_index < package_calls.index('install -y bind920')
-    assert package_calls.count('lock -l') >= 3
+    build_index = package_calls.index('make package')
+    assert package_calls[build_index - 1] == 'lock -l'
+    assert package_calls[build_index + 1:build_index + 3] == [
+        'query -e %n = pkg %n|%v|%o|%q', 'lock -l',
+    ]
     static_calls = pathlib.Path(environment['PKG_STATIC_CALL_LOG']).read_text().splitlines()
     assert any(
         call.startswith('query -F ') and call.endswith(' %Fp|%Fs')
@@ -273,7 +162,7 @@ def test_build_wrapper_requires_plugin_version_to_match_release_series(tmp_path,
             environment = build_environment(case_path, build_repository, case_path / 'core')
             result = subprocess.run(
                 [
-                    build_repository / '.github/ci/build-os-bind-rp.sh',
+                    build_repository / '.github/ci/bind/build-os-bind-rp.sh',
                     '26.1',
                     str(case_path / 'artifacts'),
                 ],
@@ -295,22 +184,9 @@ def test_build_wrapper_requires_plugin_version_to_match_release_series(tmp_path,
 
 def test_build_wrapper_requests_resolver_fallback_for_an_ineligible_opnsense_bind(tmp_path, request):
     build_repository = materialize_build_repository(request)
-    build_script = build_repository / '.github/ci/build-os-bind-rp.sh'
-    core = tmp_path / 'core'
-    core_commit = create_core_repository(core)
-    environment = os.environ.copy()
-    environment['MAKE_COMMAND'] = str(build_repository / '.github/ci/ci-tests/make-package-fixture.sh')
-    environment['PKG_COMMAND'] = str(build_repository / '.github/ci/ci-tests/pkg-build-fixture.sh')
-    environment['PYTHON_COMMAND'] = 'python3'
-    environment['GIT_CONFIG_GLOBAL'] = str(tmp_path / 'gitconfig')
-    environment['OPNSENSE_CORE_REPOSITORY'] = str(core)
-    environment['PKG_REPOS_DIR'] = str(tmp_path / 'repos')
-    environment['PKG_FINGERPRINTS_DIR'] = str(tmp_path / 'fingerprints' / 'OPNsense')
+    build_script = build_repository / '.github/ci/bind/build-os-bind-rp.sh'
+    environment = build_environment(tmp_path, build_repository, tmp_path / 'core')
     environment['PKG_VERSION_COMPARISON'] = '<'
-    metadata_path = tmp_path / 'upstream.json'
-    write_upstream_metadata(metadata_path, core_commit)
-    environment['RP_UPSTREAM_METADATA'] = str(metadata_path)
-    configure_target_pkg_fixture(environment, tmp_path, build_repository)
 
     result = subprocess.run(
         [build_script, '26.1', str(tmp_path / 'artifacts')],

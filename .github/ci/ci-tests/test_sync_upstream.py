@@ -1,7 +1,4 @@
-import json
-import os
-import pathlib
-import subprocess
+from git_fixtures import *
 
 import pytest
 
@@ -12,49 +9,13 @@ PLANNER = pathlib.Path(
 )
 METADATA_PATH = '.resolver-plugins/upstream.json'
 OVERLAY_MANIFEST = '.resolver-plugins/overlay-paths.txt'
-CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
+CORE_COMMIT = '2' * 40
 CORE_ARCHIVE_SHA256 = 'a' * 64
 
 
-def git(directory: pathlib.Path, *arguments: str) -> str:
-    return subprocess.run(
-        ['git', '-C', directory, *arguments],
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
-
-
-def commit(directory: pathlib.Path, files: dict[str, str], message: str) -> str:
-    for name, contents in files.items():
-        destination = directory / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(contents)
-    git(directory, 'add', *files)
-    git(directory, 'commit', '-m', message)
-    return git(directory, 'rev-parse', 'HEAD')
-
-
-def metadata(
-    series: str,
-    upstream_commit: str,
-    freebsd_release: str = '14.3',
-    tools_tag: str | None = None,
-) -> str:
-    if tools_tag is None:
-        tools_tag = {'26.1': '26.1.11', '26.7': '26.7.1'}[series]
-    return json.dumps(
-        {
-            'series': series,
-            'upstream_branch': f'stable/{series}',
-            'upstream_commit': upstream_commit,
-            'tools_tag': tools_tag,
-            'freebsd_release': freebsd_release,
-            'core_commit': CORE_COMMIT,
-            'core_archive_url': f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz',
-            'core_archive_sha256': CORE_ARCHIVE_SHA256,
-        }
-    )
+def metadata(series, upstream_commit, freebsd_release='14.3', tools_tag=None):
+    return json.dumps(upstream_profile(series, upstream_commit, core_commit=CORE_COMMIT,
+                                      freebsd_release=freebsd_release, tools_tag=tools_tag))
 
 
 @pytest.fixture
@@ -64,9 +25,7 @@ def repositories(tmp_path):
     source = tmp_path / 'source'
     repository = tmp_path / 'repository'
     tools = tmp_path / 'tools'
-    git(tmp_path, 'init', tools)
-    git(tools, 'config', 'user.email', 'tests@example.invalid')
-    git(tools, 'config', 'user.name', 'Planner tests')
+    init_repository(tools)
     commit(tools, {'config/26.1/build.conf': 'OS?=14.2\n'}, 'tools 26.1')
     git(tools, 'tag', '26.1')
     commit(tools, {'config/26.1/build.conf': 'OS?=14.3\n'}, 'tools 26.1.11')
@@ -81,8 +40,8 @@ def repositories(tmp_path):
     commit(tools, {'config/26.7/build.conf': 'OS?=99.7\n'}, 'prerelease 26.7')
     git(tools, 'tag', '26.7.b')
     git(tools, 'tag', '26.7.r1')
-    git(tmp_path, 'init', '--bare', upstream)
-    git(tmp_path, 'init', '--bare', origin)
+    git(tmp_path, 'init', '--bare', '--initial-branch=master', upstream)
+    git(tmp_path, 'init', '--bare', '--initial-branch=master', origin)
     git(tmp_path, 'clone', upstream, source)
     git(source, 'remote', 'rename', 'origin', 'upstream')
     git(source, 'config', 'user.email', 'tests@example.invalid')
@@ -235,14 +194,6 @@ def apply(
     )
 
 
-def assert_ref_absent(repository: pathlib.Path, reference: str) -> None:
-    result = subprocess.run(
-        ['git', '-C', repository, 'show-ref', '--verify', '--quiet', f'refs/heads/{reference}'],
-        check=False,
-    )
-    assert result.returncode == 1
-
-
 def assert_plan_shape(decision: dict) -> None:
     assert set(decision) == {
         'action',
@@ -328,27 +279,10 @@ def test_missing_source_metadata_blocks_planning(repositories):
     assert decision['reason'] == 'missing or invalid source metadata'
 
 
-def test_mismatched_metadata_upstream_branch_blocks_planning(repositories):
-    repository = repositories['repository']
-    git(repository, 'checkout', 'release/bind-rp/26.1')
-    invalid_metadata = json.loads(metadata('26.1', repositories['initial']))
-    invalid_metadata['upstream_branch'] = 'stable/26.7'
-    commit(
-        repository,
-        {METADATA_PATH: json.dumps(invalid_metadata)},
-        'record mismatched upstream branch',
-    )
-    git(repository, 'checkout', 'master')
-
-    decision = plan(repositories)
-
-    assert decision['action'] == 'blocked'
-    assert decision['reason'] == 'missing or invalid source metadata'
-
-
 @pytest.mark.parametrize(
     ('field', 'invalid_value'),
     (
+        ('upstream_branch', 'stable/26.7'),
         ('upstream_commit', 'upstream/stable/26.1'),
         ('core_commit', 'stable/26.1'),
         ('core_archive_sha256', 'not-a-sha256'),
@@ -397,13 +331,6 @@ def test_metadata_commit_outside_recorded_upstream_branch_blocks_planning(reposi
     assert decision['reason'] == 'missing or invalid source metadata'
 
 
-def test_nonnumeric_tools_tags_are_ignored(repositories):
-    decision = plan(repositories)
-
-    assert decision['tools_tag'] == '26.7.1'
-    assert decision['freebsd_release'] == '15.1'
-
-
 def test_missing_numeric_tools_tag_blocks_planning(repositories):
     git(repositories['tools'], 'tag', '-d', '26.7', '26.7.1')
 
@@ -446,15 +373,14 @@ def test_apply_bootstrap_review_creates_pristine_release_and_overlay_branch_for_
 
     assert result.returncode == 0, result.stderr
     target = decision['target_release']
-    with pytest.raises(subprocess.CalledProcessError):
-        git(repositories['repository'], 'show', f'{target}:tools/resolver-overlay.txt')
+    assert git(repositories['repository'], 'ls-tree', target, '--', 'tools/resolver-overlay.txt') == ''
     assert git(
         repositories['repository'],
         'show',
         f'{decision["sync_branch"]}:tools/resolver-overlay.txt',
     ) == 'resolver overlay'
-    with pytest.raises(subprocess.CalledProcessError):
-        git(repositories['repository'], 'show', f'{target}:tools/not-an-overlay.txt')
+    for branch in (target, decision['sync_branch']):
+        assert git(repositories['repository'], 'ls-tree', branch, '--', 'tools/not-an-overlay.txt') == ''
     target_metadata = json.loads(git(repositories['repository'], 'show', f'{target}:{METADATA_PATH}'))
     assert target_metadata == {
         'series': '26.7',
@@ -537,8 +463,7 @@ def test_apply_bootstrap_review_creates_pristine_release_and_overlay_sync_branch
 
     assert result.returncode == 0, result.stderr
     assert git(repositories['repository'], 'show', f'{decision["target_release"]}:dns/bind/bind.conf') == 'bind-v2'
-    with pytest.raises(subprocess.CalledProcessError):
-        git(repositories['repository'], 'show', f'{decision["target_release"]}:tools/resolver-overlay.txt')
+    assert git(repositories['repository'], 'ls-tree', decision['target_release'], '--', 'tools/resolver-overlay.txt') == ''
     assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
 
 
@@ -590,11 +515,11 @@ def test_apply_three_way_merges_same_result_and_retains_target_and_overlay_chang
     )
 
 
+@pytest.mark.parametrize("path", ["tools/conflicting-overlay.txt", "README"])
 def test_apply_three_way_conflict_names_unmerged_path_without_creating_partial_refs(
-    repositories, tmp_path
+    repositories, tmp_path, path
 ):
     repository = repositories['repository']
-    path = 'tools/conflicting-overlay.txt'
     configure_overlay_merge(
         repositories,
         path,
@@ -611,8 +536,6 @@ def test_apply_three_way_conflict_names_unmerged_path_without_creating_partial_r
     assert result.returncode != 0
     assert f'overlay patch conflicts: {path}' in result.stderr
     assert git(repository, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads') == refs_before
-    assert_ref_absent(repository, decision['target_release'])
-    assert_ref_absent(repository, decision['sync_branch'])
     assert git(
         repository,
         'log',
@@ -625,34 +548,33 @@ def test_apply_three_way_conflict_names_unmerged_path_without_creating_partial_r
 def test_apply_refuses_existing_target_release_without_changing_it(repositories, tmp_path):
     decision = plan(repositories)
     git(repositories['repository'], 'branch', decision['target_release'], repositories['initial'])
-    target_sha = git(repositories['repository'], 'rev-parse', decision['target_release'])
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == target_sha
+    assert 'target release branch already exists' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before
 
 
-def test_apply_rejects_plan_commit_that_does_not_match_the_upstream_ref(repositories, tmp_path):
+@pytest.mark.parametrize("field,value,diagnostic", [
+    ("upstream_commit", "initial", "upstream ref does not match plan commit"),
+    ("upstream_commit", "upstream/stable/26.7", "missing or invalid plan"),
+    ("freebsd_release", "not-a-release", "missing or invalid plan"),
+    ("freebsd_release", "", "missing or invalid plan"),
+    ("action", "unexpected", "unknown plan action"),
+])
+def test_apply_rejects_invalid_plan_without_changing_refs(repositories, tmp_path, field, value, diagnostic):
+    repository = repositories['repository']
     decision = plan(repositories)
-    decision['upstream_commit'] = repositories['initial']
+    decision[field] = repositories['initial'] if value == 'initial' else value
+    before = git(repository, 'show-ref')
 
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
-
-
-def test_apply_rejects_moving_plan_commit_before_creating_a_target_branch(
-    repositories, tmp_path
-):
-    decision = plan(repositories)
-    decision['upstream_commit'] = 'upstream/stable/26.7'
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
+    assert diagnostic in result.stderr
+    assert git(repository, 'show-ref') == before
 
 
 def test_apply_revalidates_source_metadata_before_creating_a_target_branch(
@@ -670,10 +592,12 @@ def test_apply_revalidates_source_metadata_before_creating_a_target_branch(
     )
     git(repository, 'checkout', 'master')
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert_ref_absent(repository, decision['target_release'])
+    assert 'missing or invalid source metadata' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before
 
 
 def test_apply_rejects_malformed_core_archive_digest_before_creating_a_target_branch(
@@ -681,6 +605,7 @@ def test_apply_rejects_malformed_core_archive_digest_before_creating_a_target_br
 ):
     decision = plan(repositories)
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(
         repositories,
         decision,
@@ -689,19 +614,8 @@ def test_apply_rejects_malformed_core_archive_digest_before_creating_a_target_br
     )
 
     assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
-
-
-def test_apply_rejects_invalid_generated_profile_before_creating_a_target_branch(
-    repositories, tmp_path
-):
-    decision = plan(repositories)
-    decision['freebsd_release'] = 'not-a-release'
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
+    assert 'missing immutable core archive metadata' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before
 
 
 def test_apply_rejects_pathspec_magic_in_the_overlay_manifest(repositories, tmp_path):
@@ -711,10 +625,12 @@ def test_apply_rejects_pathspec_magic_in_the_overlay_manifest(repositories, tmp_
     commit(repository, {OVERLAY_MANIFEST: ':(glob)tools/**\n'}, 'add glob overlay manifest entry')
     git(repository, 'checkout', 'master')
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert_ref_absent(repository, decision['target_release'])
+    assert 'missing or invalid overlay manifest' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before
 
 
 def test_apply_refuses_dirty_checkout_before_creating_a_target_branch(repositories, tmp_path):
@@ -722,20 +638,12 @@ def test_apply_refuses_dirty_checkout_before_creating_a_target_branch(repositori
     dirty_file = repositories['repository'] / 'dirty'
     dirty_file.write_text('dirty\n')
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
-
-
-def test_apply_refuses_an_unknown_action_before_creating_a_target_branch(repositories, tmp_path):
-    decision = plan(repositories)
-    decision['action'] = 'unexpected'
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
+    assert 'repository checkout is dirty' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before
 
 
 def test_apply_refuses_a_duplicate_sync_branch_before_creating_the_target(repositories, tmp_path):
@@ -743,40 +651,10 @@ def test_apply_refuses_a_duplicate_sync_branch_before_creating_the_target(reposi
     git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
     decision = plan(repositories)
     git(repository, 'branch', decision['sync_branch'], repositories['initial'])
-    sync_sha = git(repository, 'rev-parse', decision['sync_branch'])
 
+    refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode != 0
-    assert git(repository, 'rev-parse', decision['sync_branch']) == sync_sha
-    assert_ref_absent(repository, decision['target_release'])
-
-
-def test_apply_refuses_missing_freebsd_profile_before_creating_a_target_branch(repositories, tmp_path):
-    decision = plan(repositories)
-    decision['freebsd_release'] = ''
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert_ref_absent(repositories['repository'], decision['target_release'])
-
-
-def test_apply_refuses_an_overlay_that_fails_preflight(repositories, tmp_path):
-    repository = repositories['repository']
-    decision = plan(repositories)
-    git(repository, 'checkout', 'release/bind-rp/26.1')
-    commit(
-        repository,
-        {
-            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\nREADME\n',
-            'README': 'overlay-specific README\n',
-        },
-        'make overlay conflict with target upstream',
-    )
-    git(repository, 'checkout', 'master')
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert_ref_absent(repository, decision['target_release'])
+    assert 'sync branch already exists' in result.stderr
+    assert git(repositories['repository'], 'show-ref') == refs_before

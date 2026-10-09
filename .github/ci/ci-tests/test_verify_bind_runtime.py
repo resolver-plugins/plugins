@@ -1,13 +1,10 @@
-import os
-from pathlib import Path
-import subprocess
-import textwrap
+from common_imports import *
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VERIFIER = ROOT / ".github" / "ci" / "verify-bind-runtime.sh"
+VERIFIER = ROOT / ".github" / "ci" / "bind/verify-bind-runtime.sh"
 
 
 FAKE_COMMANDS = r"""
@@ -31,6 +28,11 @@ mktemp() {
     mkdir "$FAKE_STATE/runtime"
     printf '%s\n' "$FAKE_STATE/runtime"
 }
+
+checkconf_fixture() {
+    log_command named-checkconf "$@"
+}
+alias named-checkconf=checkconf_fixture
 
 sysrc() {
     log_command sysrc "$@"
@@ -59,36 +61,13 @@ sysrc() {
     then
         case "${2-}" in
             named_enable)
-                if [ "$ORIGINAL_ENABLE_PRESENT" = yes ]
-                then
-                    if [ "$FAIL_ENABLE_READ" = yes ]
-                    then
-                        return 1
-                    fi
-                    printf '%s\n' "$ORIGINAL_ENABLE_VALUE"
-                else
-                    return 1
-                fi
-                ;;
+                present=$ORIGINAL_ENABLE_PRESENT; fail=$FAIL_ENABLE_READ; value=$ORIGINAL_ENABLE_VALUE;;
             named_conf)
-                if [ "$ORIGINAL_CONF_PRESENT" = yes ]
-                then
-                    if [ "$FAIL_CONF_READ" = yes ]
-                    then
-                        return 1
-                    fi
-                    printf '%s\n' "$ORIGINAL_CONF_VALUE"
-                else
-                    return 1
-                fi
-                ;;
-            named_flags)
-                return 97
-                ;;
-            *)
-                return 98
-                ;;
+                present=$ORIGINAL_CONF_PRESENT; fail=$FAIL_CONF_READ; value=$ORIGINAL_CONF_VALUE;;
+            *) return 98;;
         esac
+        [ "$present" = yes ] && [ "$fail" = no ] || return 1
+        printf '%s\n' "$value"
     elif [ "${1-}" = "named_conf=$ORIGINAL_CONF_VALUE" ] && \
         [ "$FAIL_CONF_RESTORE" = yes ]
     then
@@ -113,7 +92,7 @@ drill() {
     log_command drill "$@"
     if [ "$CANARY_SUCCESS" = yes ]
     then
-        printf 'canary.invalid. 60 IN A 192.0.2.53\n'
+        printf '%s\n' "$CANARY_ANSWER"
     else
         return 1
     fi
@@ -136,6 +115,7 @@ def run_verifier(
     *,
     original_conf_present,
     canary_success,
+    canary_answer="canary.invalid. 60 IN A 192.0.2.53",
     fail_conf_restore=False,
     fail_conf_read=False,
     fail_enable_read=False,
@@ -145,15 +125,14 @@ def run_verifier(
     original_enable_value="NO",
     partial_start_failure=False,
 ):
-    fake_bin = tmp_path / "bin"
+    assert VERIFIER.stat().st_mode & 0o111
     fake_state = tmp_path / "state"
-    fake_bin.mkdir()
     fake_state.mkdir()
-    (fake_bin / "named-checkconf").symlink_to("/bin/true")
 
     environment = os.environ.copy()
     environment.update(
         {
+            "CANARY_ANSWER": canary_answer,
             "CANARY_SUCCESS": "yes" if canary_success else "no",
             "FAIL_CONF_RESTORE": "yes" if fail_conf_restore else "no",
             "FAIL_CONF_READ": "yes" if fail_conf_read else "no",
@@ -165,7 +144,6 @@ def run_verifier(
             "ORIGINAL_ENABLE_PRESENT": "yes" if original_enable_present else "no",
             "ORIGINAL_ENABLE_VALUE": original_enable_value,
             "PARTIAL_START_FAILURE": "yes" if partial_start_failure else "no",
-            "PATH": f"{fake_bin}:{environment['PATH']}",
             "VERIFIER_PATH": str(VERIFIER),
         }
     )
@@ -180,18 +158,6 @@ def run_verifier(
     assert command_log.is_file(), result.stderr
     commands = command_log.read_text(encoding="utf-8").splitlines()
     return result, commands, fake_state
-
-
-def test_runtime_verifier_checks_config_restarts_managed_bind_and_answers_a_query():
-    assert VERIFIER.is_file()
-    assert VERIFIER.stat().st_mode & 0o111
-    text = VERIFIER.read_text(encoding="utf-8")
-    assert "named-checkconf" in text
-    assert "service named onerestart" in text
-    assert "drill" in text
-    assert "canary.invalid" in text
-    assert "192.0.2.53" in text
-    assert "trap" in text
 
 
 @pytest.mark.parametrize("original_conf_present", [True, False])
@@ -217,14 +183,12 @@ def test_runtime_verifier_restores_named_conf_on_every_exit(
         f"sysrc|-s|named|named_conf={fake_state / 'runtime' / 'named.conf'}"
     )
     start_index = commands.index("service|named|onestart")
-    assert enable_index < conf_index < start_index
+    check_index = commands.index(f"named-checkconf|{fake_state / 'runtime' / 'named.conf'}")
+    restart_index = commands.index("service|named|onerestart")
+    assert check_index < enable_index < conf_index < start_index < restart_index
+    assert "drill|-p|15353|canary.invalid|@127.0.0.1|A" in commands
     assert not (fake_state / "runtime").exists()
     assert all("named_flags" not in command for command in commands)
-    assert all(
-        command.startswith("sysrc|-s|named|")
-        for command in commands
-        if command.startswith("sysrc|")
-    )
 
 
 def test_runtime_verifier_reports_restore_failure_and_finishes_cleanup(tmp_path):
@@ -313,12 +277,19 @@ def test_runtime_verifier_fails_before_mutation_when_value_read_fails(
     )
 
     assert result.returncode != 0
-    assert commands[0] == "sysrc|-s|named|-N|-A"
-    assert f"sysrc|-s|named|-n|named_{failed_read}" in commands
-    assert all(not command.startswith("mktemp|") for command in commands)
-    assert all(not command.startswith("service|") for command in commands)
-    assert all(
-        "=" not in command and "|-x|" not in command
-        for command in commands
-        if command.startswith("sysrc|")
-    )
+    expected = ["sysrc|-s|named|-N|-A", "sysrc|-s|named|-n|named_enable"]
+    if failed_read == "conf":
+        expected.append("sysrc|-s|named|-n|named_conf")
+    assert commands == expected
+
+
+@pytest.mark.parametrize("answer", ["", "canary.invalid. 60 IN A 192.0.2.99"])
+def test_runtime_verifier_rejects_successful_queries_with_the_wrong_answer(tmp_path, answer):
+    result, commands, state = run_verifier(tmp_path, original_conf_present=True,
+                                           canary_success=True, canary_answer=answer)
+    assert result.returncode != 0
+    assert "did not answer the canary query" in result.stderr
+    assert "sysrc|-s|named|named_conf=/original/named.conf" in commands
+    assert "sysrc|-s|named|named_enable=NO" in commands
+    assert "service|named|onestop" in commands
+    assert not (state / 'runtime').exists()

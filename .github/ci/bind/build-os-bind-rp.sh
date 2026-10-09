@@ -17,7 +17,7 @@ then
 fi
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/../.." && pwd)
+repository_root=$(CDPATH= cd -- "$script_directory/../../.." && pwd)
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
 python_command=${PYTHON_COMMAND:-python3}
@@ -35,7 +35,7 @@ command -v "$python_command" >/dev/null 2>&1 || \
     fail 'python3 is not available after package setup'
 
 metadata_field() {
-    "$python_command" "$script_directory/metadata_profile.py" \
+    "$python_command" "$script_directory/../shared/metadata_profile.py" \
         "$RP_UPSTREAM_METADATA" "$series" "$1"
 }
 
@@ -53,13 +53,13 @@ expected_bind_tools=$("$python_command" "$script_directory/bind_compatibility.py
 "$pkg_command" update -f
 "$pkg_command" install -y git
 git config --global --add safe.directory "$repository_root"
-opnsense_core_commit=$("$script_directory/setup-opnsense-repository.sh" "$series")
-pkg_creator_record=$("$python_command" "$script_directory/target_pkg.py" install \
+opnsense_core_commit=$("$script_directory/../shared/setup-opnsense-repository.sh" "$series")
+pkg_creator_record=$("$python_command" "$script_directory/../shared/target_pkg.py" install \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static") || fail 'cannot select target package creator'
-pkg_creator=$("$python_command" "$script_directory/target_pkg.py" field \
+pkg_creator=$("$python_command" "$script_directory/../shared/target_pkg.py" field \
     "$target_pkg_metadata" "$series" version) || fail 'invalid target pkg metadata'
-pkg_creator_sha256=$("$python_command" "$script_directory/target_pkg.py" field \
+pkg_creator_sha256=$("$python_command" "$script_directory/../shared/target_pkg.py" field \
     "$target_pkg_metadata" "$series" sha256) || fail 'invalid target pkg metadata'
 [ -n "$pkg_creator_record" ] || fail 'target package creator record is empty'
 
@@ -106,7 +106,7 @@ case "$comparison" in
     '='|'>') ;;
     *) fail "OPNsense $opnsense_version is below the required 26.1.11_10" ;;
 esac
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 
@@ -120,11 +120,11 @@ make_plugin() {
 }
 
 rm -rf "$repository_root/dns/bind/work"
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 make_plugin package
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 
@@ -143,7 +143,7 @@ case "$plugin_version" in
         ;;
     *) fail "plugin version $plugin_version does not match release series $series" ;;
 esac
-"$python_command" "$script_directory/package_checksums.py" \
+"$python_command" "$script_directory/../shared/package_checksums.py" \
     --pkg-command "$pkg_static" "$package"
 
 mkdir -p "$artifact_directory"

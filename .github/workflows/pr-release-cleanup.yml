@@ -22,5 +22,5 @@ jobs:
           PULL_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          python3 .github/ci/release_channel.py cleanup-pull-request \
+          python3 .github/ci/shared/release_channel.py cleanup-pull-request \
             --repository "$GITHUB_REPOSITORY" --pull-number "$PULL_NUMBER"

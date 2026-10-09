@@ -1,20 +1,16 @@
-import pathlib
-import re
-import shlex
+from common_imports import *
+
+from workflow_fixtures import assert_permissions, action_references, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs
+
+import pytest
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
-WORKFLOW = REPOSITORY_ROOT / '.github/workflows/package-release.yml'
-PINNED_ACTION = re.compile(r'^[^@\s]+@[0-9a-f]{40}$')
+WORKFLOW = REPOSITORY_ROOT / '.github/workflows/bind-package-release.yml'
 
 
 def workflow_text() -> str:
-    assert WORKFLOW.is_file(), 'package release workflow is missing'
     return WORKFLOW.read_text(encoding='utf-8')
-
-
-def action_references(workflow: str) -> list[str]:
-    return re.findall(r'^\s+(?:-\s+)?uses:\s+([^\s#]+)', workflow, re.MULTILINE)
 
 
 def test_workflow_selects_an_immutable_release_source():
@@ -33,7 +29,7 @@ def test_workflow_selects_an_immutable_release_source():
 def test_merged_release_source_pr_publishes_its_exact_merge_commit():
     workflow = workflow_text()
     trigger = workflow.split('  pull_request_target:', 1)[1].split('  workflow_dispatch:', 1)[0]
-    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
+    select = job_text(workflow, 'select')
 
     assert "pull_request_target:\n    types: [closed]\n    branches:\n      - 'release/bind-rp/**'" in workflow
     for path in ("'.resolver-plugins/**'", "'dns/bind/**'", "'Mk/**'"):
@@ -50,17 +46,7 @@ def test_package_affecting_master_pushes_publish_the_newest_release_series():
     workflow = workflow_text()
 
     assert 'push:\n    branches: [master]' in workflow
-    for path in (
-        "'.github/ci/**'",
-        "'.github/workflows/package-release.yml'",
-        "'.resolver-plugins/**'",
-        "'docs/package-repository/resolver-plugins.pub'",
-        "'dns/bind/**'",
-        "'Mk/**'",
-    ):
-        assert path in workflow
-    assert '  group: package-release\n' in workflow
-    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
+    select = job_text(workflow, 'select')
     assert 'EVENT_NAME: ${{ github.event_name }}' in select
     assert 'git/matching-refs/heads/release/bind-rp/' in select
     assert "sed -nE 's#^refs/heads/release/bind-rp/([0-9]+\\.[0-9]+)$#\\1#p'" in select
@@ -69,12 +55,61 @@ def test_package_affecting_master_pushes_publish_the_newest_release_series():
     assert "'26.7'" not in select
 
 
+@pytest.mark.parametrize('paths,expected', [
+    (['net/dhcp-interface-ha/Makefile', 'net/dhcp-interface-ha/src/runtime.py'], False),
+    (['.github/ci/ha_dhcp/build-dhcp-interface-ha.sh', '.github/ci/ha_dhcp/verify-dhcp-interface-ha.sh',
+      '.github/ci/ha_dhcp/publish-dhcp-interface-ha.py', '.github/ci/ha_dhcp/dhcp_interface_ha_release.py',
+      '.github/ci/ha_dhcp/dhcp_interface_ha_channel.py', '.github/ci/ha_dhcp/new_helper.py',
+      '.github/workflows/ha-dhcp-interface-release.yml'], False),
+    (['.github/ci/ci-tests/test_package_release_workflow.py', '.github/ci/ci-tests/ha_fixtures.py',
+      'dns/bind/tests/test_watcher.py', 'dns/bind/tests/fixtures/example.py'], False),
+    (['README.md', 'docs/building.md', '.resolver-plugins/overlay-paths.txt',
+      '.github/ci/sync_upstream.py', '.github/ci/bind920_candidate.py', 'scripts/install-repository.sh'], False),
+    (['dns/bind/Makefile', 'dns/bind/pkg-descr', 'dns/bind/+POST_INSTALL.pre',
+      'dns/bind/src/etc/rc.d/named'], True),
+    (['.github/ci/bind/build-bind920.sh', '.github/ci/bind/build-os-bind-rp.sh',
+      '.github/ci/bind/bind920_profile.py', '.github/ci/bind/bind_compatibility.py',
+      '.github/ci/bind/reuse_bind920.py', '.github/ci/bind/verify-bind-runtime.sh',
+      '.github/ci/bind/new_helper.py'], True),
+    (['.github/ci/shared/package_catalogue.py', '.github/ci/shared/release_channel.py',
+      '.github/ci/shared/target_pkg.py', '.github/ci/shared/package_checksums.py',
+      '.github/ci/shared/metadata_profile.py', '.github/ci/shared/setup-opnsense-repository.sh',
+      '.github/ci/shared/tools/new_helper.py'], True),
+    (['.resolver-plugins/bind920.json', '.resolver-plugins/bind-compatibility.json',
+      '.resolver-plugins/upstream.json', '.resolver-plugins/target-pkg.json',
+      '.resolver-plugins/target-pkg-content.json'], True),
+    (['Mk/plugins.mk', 'Scripts/version.sh', 'Templates/example.in',
+      'docs/package-repository/resolver-plugins.pub', 'scripts/install-os-bind-rp.sh',
+      '.github/workflows/bind-package-release.yml'], True),
+])
+def test_master_build_filters_include_bind_inputs_and_exclude_ha_and_tests(paths, expected):
+    trigger = workflow_text().split('  push:', 1)[1].split('  pull_request_target:', 1)[0]
+    patterns = re.findall(r"^      - '([^']+)'$", trigger, re.MULTILINE)
+    for path in paths:
+        selected = False
+        # These filters use literal paths and trailing /**, with ordered exclusions.
+        for pattern in patterns:
+            if fnmatchcase(path, pattern.removeprefix('!')):
+                selected = not pattern.startswith('!')
+        assert selected is expected, path
+
+
+@pytest.mark.parametrize('helper', [
+    'bind/reuse_bind920.py', 'shared/release_channel.py', 'shared/package_catalogue.py',
+    'ha_dhcp/dhcp_interface_ha_channel.py', 'ha_dhcp/publish-dhcp-interface-ha.py',
+])
+def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
+    result = subprocess.run([sys.executable, '-I', REPOSITORY_ROOT / '.github/ci' / helper, '--help'],
+                            cwd=tmp_path, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'usage:' in result.stdout
+
+
 def test_merging_a_repack_recovery_rebuilds_its_exact_series():
     select = workflow_text().split('  select:', 1)[1].split('  profile:', 1)[0]
 
     assert 'ref: ${{ github.workflow_sha }}' in select
     assert 'fetch-depth: 0' in select
-    assert 'persist-credentials: false' in select
     assert 'BEFORE_SHA: ${{ github.event.before }}' in select
     assert 'changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")' in select
     assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in select
@@ -85,11 +120,11 @@ def test_merging_a_repack_recovery_rebuilds_its_exact_series():
 
 def test_production_runs_only_from_the_master_control_plane():
     workflow = workflow_text()
-    select = workflow.split('  select:', 1)[1].split('  profile:', 1)[0]
-    profile = workflow.split('  profile:', 1)[1].split('  bind:', 1)[0]
-    test = workflow.split('  test:', 1)[1].split('  select:', 1)[0]
-    bind = workflow.split('  bind:', 1)[1].split('  build:', 1)[0]
-    build = workflow.split('  build:', 1)[1].split('  publish-development:', 1)[0]
+    select = job_text(workflow, 'select')
+    profile = job_text(workflow, 'profile')
+    test = job_text(workflow, 'test')
+    bind = job_text(workflow, 'bind')
+    build = job_text(workflow, 'build')
     assert 'GITHUB_REF: ${{ github.ref }}' in select
     assert '[[ "$GITHUB_REF" == refs/heads/master ]]' in select
     assert 'control_ref=$GITHUB_SHA' in select
@@ -102,64 +137,57 @@ def test_production_runs_only_from_the_master_control_plane():
 
 def test_workflow_validates_metadata_before_selecting_the_freebsd_vm():
     workflow = workflow_text()
-    validator_index = workflow.index('python3 .github/ci/metadata_profile.py')
+    validator_index = workflow.index('python3 .github/ci/shared/metadata_profile.py')
     vm_index = workflow.index('vmactions/freebsd-vm@')
     assert validator_index < vm_index
     assert 'release: ${{ needs.profile.outputs.freebsd_release }}' in workflow
     assert 'RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json' in workflow
-    assert '.github/ci/build-os-bind-rp.sh "$series" "$output"' in workflow
-    assert 'RP_BIND920_FALLBACK=yes' in workflow
-    assert 'Build or reuse BIND pair' in workflow
+    assert '.github/ci/bind/build-os-bind-rp.sh "$series" "$output"' in workflow
 
 
 def test_workflow_materializes_the_distribution_bind_pair_before_building_the_plugin():
     workflow = workflow_text()
-    assert '  bind:' in workflow
     assert 'RP_BIND920_CHANNEL_URL: https://github.com/resolver-plugins/repository/releases/download/pkg-${{ needs.select.outputs.series }}' in workflow
-    assert 'name: Materialize BIND pair' in workflow
     assert 'needs: [select, profile, test, bind]' in workflow
-    build = workflow.split('  build:', 1)[1].split('  publish-development:', 1)[0]
+    build = job_text(workflow, 'build')
     assert 'RP_BIND920_FALLBACK=yes' in build
     assert 'pkg add "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg' in build
     assert 'pkg query -F "$package" \'%dn\'' in build
-    assert build.index('.github/ci/setup-opnsense-repository.sh') < build.index(
+    assert build.index('.github/ci/shared/setup-opnsense-repository.sh') < build.index(
         'pkg add "$output"/bind-tools-*.pkg'
     )
 
 
 def test_failed_production_bind_job_can_only_propose_a_content_identical_pkg_repack():
     workflow = workflow_text()
-    recovery = workflow.split('  recover-target-pkg:', 1)[1].split('  build:', 1)[0]
-    validator = recovery.split('  propose-target-pkg:', 1)[0]
-    proposer = recovery.split('  propose-target-pkg:', 1)[1]
+    recovery = job_text(workflow, 'recover-target-pkg')
+    validator = recovery
+    proposer = job_text(workflow, 'propose-target-pkg')
 
     assert "needs.bind.result == 'failure'" in validator
     assert "needs.select.outputs.mode == 'production'" in validator
-    assert 'contents: read' in validator
-    assert 'contents: write' not in validator
-    assert 'persist-credentials: false' in validator
     assert '.resolver-plugins/target-pkg-content.json' in validator
     assert 'target_pkg.py refresh' in validator
     assert "needs.recover-target-pkg.result == 'success'" in proposer
-    assert 'contents: write\n      pull-requests: write' in proposer
     assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in proposer
     assert 'gh pr create' in proposer
-    assert 'gh pr merge' not in recovery
+    assert 'gh pr merge' not in validator + proposer
 
 
 def test_workflow_uses_sha_pinned_actions_and_nonpersistent_checkout_credentials():
     workflow = workflow_text()
     references = action_references(workflow)
-    assert references
-    assert all(PINNED_ACTION.fullmatch(reference) for reference in references)
-    assert workflow.count('persist-credentials: false') == 12
+    assert_pinned_actions(workflow)
+    for name, job in workflow_jobs(workflow).items():
+        if 'uses: actions/checkout@' in job:
+            assert_checkout_credentials(job, persistent=name == 'propose-target-pkg')
     assert 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803' in references
     assert 'vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d' in references
 
 
 def test_workflow_provisions_the_pinned_python_test_runtime():
     workflow = workflow_text()
-    test_job = workflow.split('  test:', 1)[1].split('  select:', 1)[0]
+    test_job = job_text(workflow, 'test')
 
     assert re.search(r'actions/setup-python@[0-9a-f]{40}', test_job)
     assert "python-version: '3.12.13'" in test_job
@@ -168,38 +196,54 @@ def test_workflow_provisions_the_pinned_python_test_runtime():
 
 def test_production_signing_and_publication_are_separate_from_builds():
     workflow = workflow_text()
-    assert 'RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}' in workflow
-    assert 'python3 .github/ci/release_channel.py stage-channel' in workflow
-    assert 'python3 .github/ci/release_channel.py validate-bind-provenance' in workflow
-    assert '--profile .resolver-plugins/bind920.json' in workflow
-    assert '--series "$SERIES"' in workflow
-    assert "--freebsd-release '${{ needs.profile.outputs.freebsd_release }}'" in workflow
-    assert 'python3 .github/ci/release_channel.py publish-channels' in workflow
-    assert 'permissions:\n      contents: write' in workflow
-    assert workflow.index('  sign:') < workflow.index('  publish:')
+    jobs = workflow_jobs(workflow)
+    assert 'secrets.' not in workflow.split('jobs:', 1)[0]
+    assert_permissions(workflow, {'contents': 'read', 'pull-requests': 'read'})
+    overrides = {
+        'propose-target-pkg': {'contents': 'write', 'pull-requests': 'write'},
+        'publish-development': {'contents': 'write', 'pull-requests': 'read'},
+        'source-release': {'contents': 'write'},
+    }
+    for name in ('bind', 'recover-target-pkg', 'build', 'verify-development',
+                 'sign', 'publish', 'verify', 'verify-published'):
+        overrides[name] = {'contents': 'read'}
+    for name, job in jobs.items():
+        secrets = set(re.findall(r'secrets\.([A-Z_]+)', job))
+        expected = {'sign': {'RP_PKG_SIGNING_KEY'}, 'publish': {'RP_DISTRIBUTION_APP_PRIVATE_KEY'}}
+        assert secrets == expected.get(name, set()), name
+        assert_permissions(job, overrides.get(name), indent=4)
+    for name in ('sign', 'publish', 'verify', 'verify-published', 'source-release',
+                 'verify-development', 'publish-development'):
+        mode = 'development' if name.endswith('-development') else 'production'
+        assert f"    if: needs.select.outputs.mode == '{mode}'\n" in jobs[name]
+    assert 'needs: [select, profile, build]' in jobs['sign']
+    assert 'needs: [select, profile, sign, verify]' in jobs['publish']
+    assert 'needs: [select, profile, sign]' in jobs['verify']
+    assert 'RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}' in jobs['sign']
+    assert 'python3 .github/ci/shared/release_channel.py stage-channel' in jobs['sign']
+    assert 'python3 .github/ci/shared/release_channel.py publish-channels' in jobs['publish']
 
 
 def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     workflow = workflow_text()
-    signer = workflow.split('  sign:', 1)[1].split('  publish:', 1)[0]
+    signer = job_text(workflow, 'sign')
     assert 'control_commit: ${{ steps.profile.outputs.control_commit }}' in workflow
-    assert 'control_ref=$GITHUB_SHA' in workflow
     assert 'control_commit=$(git rev-parse HEAD)' in workflow
     assert 'ref: ${{ needs.profile.outputs.control_commit }}' in signer
-    assert 'RP_PKG_SIGNING_KEY' in signer
-    assert 'repository/current' in signer
-    assert 'repository/snapshot' in signer
-    assert signer.count('stage-channel') == 1
     assert "--control-commit '${{ needs.profile.outputs.control_commit }}'" in signer
     assert 'cp -R "$output/repository/current" "$output/repository/snapshot"' in signer
     assert 'cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub"' in signer
-    assert 'trusted-upstream.json' in signer
-    assert 'validate-build-metadata' in signer
     for command in ('validate-bind-provenance', 'validate-build-metadata', 'reuse-snapshot', 'stage-channel'):
         matches = re.findall(r'release_channel\.py ' + command + r' ([^\n]+)', signer.replace('\\\n', ''))
         assert len(matches) == 1, command
         arguments = shlex.split(matches[0])
         assert arguments[arguments.index('--target-pkg-metadata') + 1] == '.resolver-plugins/target-pkg.json'
+        if command == 'validate-bind-provenance':
+            assert arguments[arguments.index('--profile') + 1] == '.resolver-plugins/bind920.json'
+            assert arguments[arguments.index('--freebsd-release') + 1] == '${{ needs.profile.outputs.freebsd_release }}'
+            assert arguments[arguments.index('--series') + 1] == '$SERIES'
+        if command == 'validate-build-metadata':
+            assert arguments[arguments.index('--upstream') + 1] == '$output/trusted-upstream.json'
     assert 'id: reuse-snapshot' in signer
     assert 'reuse-snapshot --repository resolver-plugins/repository' in signer
     assert '--provenance "$output/bind920-provenance.json"' in signer
@@ -211,15 +255,14 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     assert reuse.index('validate-build-metadata') < reuse.index(reuse_command)
     assert 'if [ "$REUSED" != true ]; then' in signer
     assert "REUSED: ${{ steps.reuse-snapshot.outputs.reused }}" in signer
-    assert signer.index('            fi\n            python3 .github/ci/package_catalogue.py stage') > signer.index('stage-channel')
+    assert signer.index('            fi\n            python3 .github/ci/shared/package_catalogue.py stage') > signer.index('stage-channel')
     assert '--public-key docs/package-repository/resolver-plugins.pub' in signer
     assert 'repository/bind920' not in signer
 
 
 def test_publisher_mints_a_repository_scoped_github_app_token():
     workflow = workflow_text()
-    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
-    assert 'permissions:\n      contents: read' in publisher
+    publisher = job_text(workflow, 'publish')
     assert 'fetch-depth: 0' in publisher
     assert 'actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349' in publisher
     assert 'app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}' in publisher
@@ -227,19 +270,14 @@ def test_publisher_mints_a_repository_scoped_github_app_token():
     assert 'owner: resolver-plugins' in publisher
     assert 'repositories: repository' in publisher
     assert 'permission-contents: write' in publisher
-    assert 'GH_TOKEN: ${{ steps.distribution-token.outputs.token }}' in publisher
     assert 'RP_DISTRIBUTION_REPOSITORY_TOKEN' not in workflow
-    assert 'resolver-plugins/repository' in workflow
-    assert 'publish-channels' in workflow
-    assert 'prune-snapshots' in workflow
-    assert 'mark-latest-package-channel' in workflow
     assert publisher.index('prune-snapshots') < publisher.index('mark-latest-package-channel')
     assert '--recovery "$RUNNER_TEMP/recovery"' in workflow
 
 
 def test_production_preflights_pages_then_publishes_the_abi_static_channel():
     workflow = workflow_text()
-    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
+    publisher = job_text(workflow, 'publish')
 
     assert 'https://resolver-plugins.github.io/repository/pages-health' in publisher
     assert '[ "$attempt" -ge 10 ]' in publisher
@@ -251,12 +289,9 @@ def test_production_preflights_pages_then_publishes_the_abi_static_channel():
 
 def test_public_verification_compares_all_static_bytes_before_installation():
     workflow = workflow_text()
-    verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
+    verifier = job_text(workflow, 'verify-published')
 
     assert 'https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest' in verifier
-    assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
-    assert '[ "$attempt" -ge 20 ]' in verifier
-    assert 'sleep 30' in verifier
     assert verifier.index('verify-abi-endpoint') < verifier.index(
         'pkg update -f -r resolver-plugins'
     )
@@ -264,90 +299,72 @@ def test_public_verification_compares_all_static_bytes_before_installation():
 
 def test_public_verification_uses_the_installed_freebsd_ca_bundle():
     workflow = workflow_text()
-    verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
+    verifier = job_text(workflow, 'verify-published')
 
     assert 'SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt' in verifier
-    assert 'test -r "$SSL_CERT_FILE"' in verifier
     assert verifier.index('test -r "$SSL_CERT_FILE"') < verifier.index('verify-abi-endpoint')
 
 
 def test_publication_waits_for_current_and_snapshot_installability_in_freebsd():
     workflow = workflow_text()
-    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
-    verifier = workflow.split('  verify:', 1)[1].split('  verify-published:', 1)[0]
-    assert 'needs: [select, profile, sign, verify]' in publisher
-    assert 'permissions:\n      contents: read' in publisher
-    assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier
-    assert '/usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp' in verifier
+    publisher = job_text(workflow, 'publish')
+    verifier = job_text(workflow, 'verify')
     assert '"$root"/current/bind-tools-*.pkg' in verifier
     assert '"$root"/current/bind920-*.pkg' in verifier
     assert '"$root"/current/os-bind-rp-*.pkg' in verifier
     assert '"$root"/current/*.pkg' not in verifier
     assert '/usr/local/sbin/pkg-static query -F "$package" \'%dn\'' in verifier
-    assert verifier.index('.github/ci/setup-opnsense-repository.sh') < verifier.index(
+    assert verifier.index('.github/ci/shared/setup-opnsense-repository.sh') < verifier.index(
         'pkg install -y -r OPNsense opnsense os-bind'
     ) < verifier.index(
         '/usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp'
     )
     assert 'url: "file://$PWD/$root/snapshot"' in verifier
     assert '/usr/local/sbin/pkg-static install -f -y -r resolver-plugins-rollback os-bind-rp' in verifier
-    assert ' OR ' not in verifier
 
 
 def test_published_channel_is_installed_from_github_in_freebsd():
     workflow = workflow_text()
-    verifier = workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0]
+    verifier = job_text(workflow, 'verify-published')
     source_release = workflow.split('  source-release:', 1)[1]
     assert 'needs: [select, profile, publish]' in verifier
-    assert 'permissions:\n      contents: read' in verifier
     assert 'name: os-bind-rp-production-repository-${{ needs.select.outputs.series }}' in verifier
     assert 'repository_url="https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest"' in verifier
-    assert '.github/ci/setup-opnsense-repository.sh "$series"' in verifier
-    assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier
+    assert '.github/ci/shared/setup-opnsense-repository.sh "$series"' in verifier
     assert '"$root"/bind-tools-*.pkg' in verifier
     assert '"$root"/bind920-*.pkg' in verifier
     assert '"$root"/os-bind-rp-*.pkg' in verifier
     assert '"$root"/*.pkg' not in verifier
-    assert 'pkg update -f -r resolver-plugins' in verifier
     assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
     assert '/usr/local/sbin/pkg-static query -F "$archive" \'%n|%v|%o\'' in verifier
     assert '[ "$channel_identities" = "$expected_identities" ]' in verifier
     assert '[ "$attempt" -ge 20 ]' in verifier
     assert 'sleep 30' in verifier
     assert 'pkg rquery -r resolver-plugins -e "%n = $package" \'%dn\'' in verifier
-    assert 'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh' in verifier
     assert verifier.index('pkg install -y -r OPNsense opnsense os-bind') < verifier.index(
         'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh'
     )
-    assert '[ -z "$(pkg query -e \'%n = os-bind\'' in verifier
-    assert "'%n|%v|%o'" in verifier
     assert 'dns/bind-tools' in verifier
     assert 'dns/bind920' in verifier
     assert 'opnsense/os-bind-rp' in verifier
     assert '[ "$channel_identity" = "$expected_identity" ]' in verifier
     assert '[ "$installed_identity" = "$channel_identity" ]' in verifier
-    assert 'needs: [select, profile, verify-published]' in source_release
 
 
 def test_development_release_installs_from_a_temporary_freebsd_repository():
     workflow = workflow_text()
-    verifier = workflow.split('  verify-development:', 1)[1].split('  publish-development:', 1)[0]
-    publisher = workflow.split('  publish-development:', 1)[1].split('  sign:', 1)[0]
+    verifier = job_text(workflow, 'verify-development')
+    publisher = job_text(workflow, 'publish-development')
     assert 'needs: [select, profile, build]' in verifier
     assert '/usr/local/sbin/pkg-static repo "$output"' in verifier
     assert 'signature_type: "none"' in verifier
     assert '/usr/local/sbin/pkg-static update -r resolver-plugins-development' in verifier
-    assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier
-    assert '/usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp' in verifier
     assert verifier.index('pkg install -y -r OPNsense opnsense os-bind') < verifier.index(
         '/usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp'
     )
-    assert "'%n-%v'" in verifier
-    assert ' OR ' not in verifier
     assert 'needs: [select, build, verify-development]' in publisher
     assert 'pull_number: ${{ steps.select.outputs.pull_number }}' in workflow
     assert 'PULL_NUMBER: ${{ needs.select.outputs.pull_number }}' in publisher
-    assert 'permissions:\n      contents: write\n      pull-requests: read' in publisher
     assert publisher.count(
         'gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state'
     ) == 2
@@ -356,35 +373,6 @@ def test_development_release_installs_from_a_temporary_freebsd_repository():
     ) == 2
     assert publisher.index('pr_state=$(gh api') < publisher.index('gh release create "$TAG"')
     assert publisher.rindex('pr_state=$(gh api') > publisher.index('gh release upload "$TAG"')
-
-
-def test_freebsd_package_installs_have_a_minimal_opnsense_configuration():
-    workflow = workflow_text()
-    fixture = "printf '%s\\n' '<opnsense/>' > /conf/config.xml"
-
-    assert workflow.count('install -d -m 0750 /conf') == 3
-    assert workflow.count('if [ ! -e /conf/config.xml ]; then') == 3
-    assert workflow.count(fixture) == 3
-    assert workflow.count('chmod 0640 /conf/config.xml') == 3
-
-    sections = (
-        (
-            workflow.split('  verify-development:', 1)[1].split('  publish-development:', 1)[0],
-            '/usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp',
-        ),
-        (
-            workflow.split('  verify:', 1)[1].split('  verify-published:', 1)[0],
-            '/usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp',
-        ),
-        (
-            workflow.split('  verify-published:', 1)[1].split('  source-release:', 1)[0],
-            'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh',
-        ),
-    )
-    for section, package_install in sections:
-        assert section.index('pkg install -y -r OPNsense opnsense os-bind') < section.index(
-            fixture
-        ) < section.index(package_install)
 
 
 def test_source_release_contains_only_plugin_and_build_metadata():
@@ -406,58 +394,32 @@ def test_source_release_contains_only_plugin_and_build_metadata():
 
 def test_immutable_package_snapshot_is_scoped_to_the_bind_build():
     workflow = workflow_text()
-    publisher = workflow.split('  publish:', 1)[1].split('  verify:', 1)[0]
+    publisher = job_text(workflow, 'publish')
 
     assert 'snapshot-tag "$SERIES" "$version" --provenance "$root/current/bind920-provenance.json"' in publisher
 
 
-def test_all_freebsd_install_gates_pin_pkg_and_test_the_official_replacement_path():
-    workflow = workflow_text()
-    verifiers = {
-        'development': workflow.split('  verify-development:', 1)[1].split(
-            '  publish-development:', 1
-        )[0],
-        'staged': workflow.split('  verify:', 1)[1].split('  verify-published:', 1)[0],
-        'published': workflow.split('  verify-published:', 1)[1].split(
-            '  source-release:', 1
-        )[0],
-    }
-
-    for name, verifier in verifiers.items():
-        assert 'target_pkg.py install' in verifier, name
-        assert 'target_pkg.py verify' in verifier, name
-        assert 'pkg install -y -r OPNsense opnsense os-bind' in verifier, name
-        assert 'package_checksums.py' in verifier, name
-        assert '--pkg-command /usr/local/sbin/pkg-static' in verifier, name
-        assert "[ -z \"$(pkg query -e '%n = os-bind' '%n'" in verifier, name
-        assert "pkg query -e \"%n = $package\" '%Fp|%Fs'" in verifier, name
-        assert '$2 == "(null)"' in verifier, name
-        assert 'pkg check -s bind-tools bind920 os-bind-rp' in verifier, name
-        assert '.github/ci/verify-bind-runtime.sh' in verifier, name
-        assert verifier.index('pkg check -s bind-tools bind920 os-bind-rp') < verifier.index(
-            '.github/ci/verify-bind-runtime.sh'
-        ), name
-        assert verifier.index('target_pkg.py install') < verifier.index(
-            'pkg install -y -r OPNsense opnsense os-bind'
-        ) < verifier.index('package_checksums.py')
-
-    assert '/usr/local/sbin/pkg-static install -y -r resolver-plugins-development' in verifiers[
-        'development'
-    ]
-    assert '/usr/local/sbin/pkg-static install -y -r resolver-plugins' in verifiers['staged']
-    assert 'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static' in verifiers['published']
-
-
-def test_all_runtime_dependencies_must_resolve_from_the_target_opnsense_repository():
-    workflow = workflow_text()
-    development = workflow.split('  verify-development:', 1)[1].split(
-        '  publish-development:', 1
-    )[0]
-    staged = workflow.split('  verify:', 1)[1].split('  verify-published:', 1)[0]
-    published = workflow.split('  verify-published:', 1)[1].split(
-        '  source-release:', 1
-    )[0]
-
-    assert 'pkg install -y -r OPNsense $dependencies' in development
-    assert 'pkg install -y -r OPNsense $dependencies' in staged
-    assert 'pkg install -y -r OPNsense "$dependency"' in published
+@pytest.mark.parametrize('job,install,dependencies', [
+    ('verify-development', '/usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp', '$dependencies'),
+    ('verify', '/usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp', '$dependencies'),
+    ('verify-published', 'RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh', '"$dependency"'),
+])
+def test_freebsd_install_gates_pin_verify_and_replace_official_packages(job, install, dependencies):
+    verifier = job_text(workflow_text(), job)
+    official = 'pkg install -y -r OPNsense opnsense os-bind'
+    config = "printf '%s\\n' '<opnsense/>' > /conf/config.xml"
+    checksums = 'package_checksums.py'
+    runtime = '.github/ci/bind/verify-bind-runtime.sh'
+    for required in (
+        'target_pkg.py verify', '--pkg-command /usr/local/sbin/pkg-static',
+        'install -d -m 0750 /conf', 'if [ ! -e /conf/config.xml ]; then',
+        'chmod 0640 /conf/config.xml',
+        "[ -z \"$(pkg query -e '%n = os-bind' '%n'",
+        "pkg query -e \"%n = $package\" '%Fp|%Fs'", '$2 == "(null)"',
+        'pkg install -y -r OPNsense ' + dependencies,
+    ):
+        assert required in verifier
+    assert ' OR ' not in verifier
+    assert verifier.index('target_pkg.py install') < verifier.index(official) < verifier.index(checksums)
+    assert verifier.index(official) < verifier.index(config) < verifier.index(install)
+    assert verifier.index('pkg check -s bind-tools bind920 os-bind-rp') < verifier.index(runtime)

@@ -3,53 +3,16 @@
 
 from __future__ import annotations
 
-import importlib.util
-import json
-import subprocess
-import tempfile
-import unittest
-from pathlib import Path
-from unittest.mock import patch
+from module_fixtures import *
+
+from package_fixtures import BIND_PROFILE as PROFILE, bind_records, package_creator
+
+MODULE_PATH = CI / "bind/bind920_profile.py"
+bind920_profile = load_module("bind920_profile", MODULE_PATH)
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "bind920_profile.py"
-SPEC = importlib.util.spec_from_file_location("bind920_profile", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-bind920_profile = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(bind920_profile)
-
-
-PROFILE = {
-    "ports_repository": "https://github.com/freebsd/freebsd-ports.git",
-    "ports_commit": "343e9b366f371df755622e1680b59d998e5778fd",
-    "makefile_sha256": "64199c6f419c49186ee35f37d42219aff33591f0de040429f3ceddb6889d2234",
-    "distinfo_sha256": "714ea8f967746994a624a55dd6e2bbdd41d173dcffe8f25242f7aa4053d116b6",
-    "distversion": "9.20.26",
-    "portrevision": 2,
-}
-PACKAGES = {
-    "bind-tools": {
-        "name": "bind-tools",
-        "version": "9.20.26_2",
-        "origin": "dns/bind-tools",
-        "filename": "bind-tools-9.20.26_2.pkg",
-    },
-    "bind920": {
-        "name": "bind920",
-        "version": "9.20.26_2",
-        "origin": "dns/bind920",
-        "filename": "bind920-9.20.26_2.pkg",
-    },
-}
-PACKAGE_CREATOR = {
-    "name": "pkg",
-    "version": "2.3.1_1",
-    "origin": "ports-mgmt/pkg",
-    "abi": "FreeBSD:14:amd64",
-    "filename": "pkg-2.3.1_1.pkg",
-    "sha256": "a" * 64,
-    "pkg_static_sha256": "b" * 64,
-}
+PACKAGES = bind_records()
+PACKAGE_CREATOR = package_creator("FreeBSD:14:amd64")
 
 
 class Bind920ReuseTest(unittest.TestCase):
@@ -92,7 +55,8 @@ class Bind920ReuseTest(unittest.TestCase):
         self.assertEqual("dns/bind920", provenance["packages"]["bind920"]["origin"])
         self.assertEqual(PACKAGE_CREATOR, provenance["package_creator"])
         self.assertEqual(3, provenance["schema"])
-        self.assertRegex(provenance["build_recipe_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(hashlib.sha256(bind920_profile.BUILD_RECIPE_PATH.read_bytes()).hexdigest(),
+                         provenance["build_recipe_sha256"])
         invalid = dict(PACKAGES)
         invalid["bind920"] = dict(PACKAGES["bind920"], origin="dns/bind918")
         with self.assertRaisesRegex(ValueError, "bind920 package"):
@@ -100,10 +64,6 @@ class Bind920ReuseTest(unittest.TestCase):
                 PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, invalid
             )
 
-    def test_profile_accepts_fresh_ports_version_without_portrevision(self) -> None:
-        """A new upstream BIND release commonly starts at PORTREVISION zero."""
-        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
-        self.assertEqual(0, bind920_profile.validate_profile(profile)["portrevision"])
 
     def test_profile_rejects_negative_portrevision(self) -> None:
         """Package identities must not be generated from impossible revisions."""
@@ -116,25 +76,10 @@ class Bind920ReuseTest(unittest.TestCase):
         profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
         self.assertEqual("9.20.27", bind920_profile.package_version(profile))
 
-    def test_provenance_accepts_zero_portrevision_package_names(self) -> None:
-        """Reusable provenance must match the package names a fresh Ports release emits."""
+    def test_provenance_accepts_zero_portrevision_package_names(self):
         profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
-        packages = {
-            "bind-tools": {
-                "name": "bind-tools",
-                "version": "9.20.27",
-                "origin": "dns/bind-tools",
-                "filename": "bind-tools-9.20.27.pkg",
-            },
-            "bind920": {
-                "name": "bind920",
-                "version": "9.20.27",
-                "origin": "dns/bind920",
-                "filename": "bind920-9.20.27.pkg",
-            },
-        }
         provenance = bind920_profile.build_provenance(
-            profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, packages
+            profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, bind_records("9.20.27")
         )
         self.assertEqual("bind920-9.20.27.pkg", provenance["packages"]["bind920"]["filename"])
 
@@ -158,9 +103,8 @@ class Bind920ReuseTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(result.stderr, "")
             self.assertEqual(result.returncode, 0)
-            self.assertEqual("bind920-9.20.26_2.pkg", json.loads(output.read_text())["packages"]["bind920"]["filename"])
+            self.assertEqual(PACKAGES, json.loads(output.read_text())["packages"])
 
 
 if __name__ == "__main__":

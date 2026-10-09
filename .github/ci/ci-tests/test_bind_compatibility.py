@@ -3,18 +3,11 @@
 
 from __future__ import annotations
 
-import importlib.util
-import json
-import subprocess
-import unittest
-from pathlib import Path
+from module_fixtures import *
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "bind_compatibility.py"
-SPEC = importlib.util.spec_from_file_location("bind_compatibility", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-bind_compatibility = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(bind_compatibility)
+MODULE_PATH = CI / "bind/bind_compatibility.py"
+bind_compatibility = load_module("bind_compatibility", MODULE_PATH)
 
 
 POLICY = {
@@ -40,68 +33,43 @@ class BindCompatibilityTest(unittest.TestCase):
             bind_compatibility.freebsd_release(policy, "27.1")
 
     def test_only_eligible_opnsense_bind_is_preferred(self) -> None:
-        """Origin, tools, and minimum version are all mandatory for preference."""
         policy = bind_compatibility.validate_policy(POLICY)
-        compare = lambda candidate, minimum: {  # noqa: E731
-            ("9.20.26", "9.20.26"): "=",
-            ("9.20.27", "9.20.26"): ">",
-            ("9.20.25", "9.20.26"): "<",
-        }[(candidate, minimum)]
-
-        self.assertTrue(
-            bind_compatibility.is_eligible(
-                policy,
-                ("bind920", "9.20.26", "dns/bind920"),
-                ("bind-tools", "9.20.26", "dns/bind-tools"),
-                compare,
-            )
-        )
-        self.assertFalse(
-            bind_compatibility.is_eligible(
-                policy,
-                ("bind920", "9.20.26", "dns/bind920"),
-                ("bind-tools", "9.20.26", "dns/bind-tools-alt"),
-                compare,
-            )
-        )
-        self.assertFalse(
-            bind_compatibility.is_eligible(
-                policy,
-                ("bind920", "9.20.25", "dns/bind920"),
-                ("bind-tools", "9.20.26", "dns/bind-tools"),
-                compare,
-            )
-        )
+        bind = ('bind920', '9.20.26', 'dns/bind920')
+        tools = ('bind-tools', '9.20.26', 'dns/bind-tools')
+        comparisons = {'9.20.25': '<', '9.20.26': '=', '9.20.27': '>'}
+        def compare(candidate, minimum):
+            self.assertEqual('9.20.26', minimum)
+            return comparisons[candidate]
+        cases = [
+            (bind, tools, True),
+            (('bind920', '9.20.27', 'dns/bind920'), ('bind-tools', '9.20.27', 'dns/bind-tools'), True),
+            (bind, ('bind-tools', '9.20.26', 'dns/bind-tools-alt'), False),
+            (('bind920', '9.20.25', 'dns/bind920'), tools, False),
+            (bind, ('', '', ''), False),
+            (('bind920', '9.20.26', 'other/bind920'), tools, False),
+        ]
+        for installed_bind, installed_tools, expected in cases:
+            with self.subTest(bind=installed_bind, tools=installed_tools):
+                self.assertEqual(expected, bind_compatibility.is_eligible(
+                    policy, installed_bind, installed_tools, compare))
 
     def test_policy_file_is_committed_and_valid(self) -> None:
         """The build wrapper uses a reviewable, static compatibility contract."""
-        policy_path = MODULE_PATH.parents[2] / ".resolver-plugins/bind-compatibility.json"
+        policy_path = MODULE_PATH.parents[3] / ".resolver-plugins/bind-compatibility.json"
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
         self.assertEqual(POLICY, bind_compatibility.validate_policy(policy))
 
-    def test_profile_command_returns_the_minimum_version(self) -> None:
-        """Shell callers obtain the policy minimum through a validated interface."""
-        policy_path = MODULE_PATH.parents[2] / ".resolver-plugins/bind-compatibility.json"
-        result = subprocess.run(
-            ["python3", str(MODULE_PATH), "minimum-version", str(policy_path), "26.7"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("9.20.26\n", result.stdout)
-
-    def test_identity_command_returns_the_required_origin(self) -> None:
-        """The shell wrapper does not duplicate the policy's package identity."""
-        policy_path = MODULE_PATH.parents[2] / ".resolver-plugins/bind-compatibility.json"
-        result = subprocess.run(
-            ["python3", str(MODULE_PATH), "identity", str(policy_path), "26.1", "bind920"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("bind920\tdns/bind920\n", result.stdout)
+    def test_policy_commands_expose_minimum_version_and_required_identity(self) -> None:
+        policy_path = MODULE_PATH.parents[3] / '.resolver-plugins/bind-compatibility.json'
+        for command, series, arguments, expected in [
+            ('minimum-version', '26.7', [], '9.20.26\n'),
+            ('identity', '26.1', ['bind920'], 'bind920\tdns/bind920\n'),
+        ]:
+            with self.subTest(command=command):
+                result = subprocess.run(['python3', str(MODULE_PATH), command, str(policy_path), series, *arguments],
+                                        text=True, capture_output=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(expected, result.stdout)
 
 
 if __name__ == "__main__":

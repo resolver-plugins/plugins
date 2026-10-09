@@ -1,74 +1,29 @@
-import importlib.util
-import json
-import os
-import pathlib
-import subprocess
+from git_fixtures import *
 
 import pytest
+
+from module_fixtures import *
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PUBLISHER = pathlib.Path(
     os.environ.get('PUBLISH_UPSTREAM', REPOSITORY_ROOT / '.github/ci/publish_upstream.py')
 )
-CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
+CORE_COMMIT = '2' * 40
 
 
-def git(repository: pathlib.Path, *arguments: str) -> str:
-    return subprocess.run(
-        ['git', '-C', repository, *arguments],
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
-
-
-def commit(repository: pathlib.Path, files: dict[str, str], message: str) -> str:
-    for name, contents in files.items():
-        destination = repository / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(contents, encoding='utf-8')
-    git(repository, 'add', *files)
-    git(repository, 'commit', '-m', message)
-    return git(repository, 'rev-parse', 'HEAD')
-
-
-def metadata(
-    series: str,
-    upstream_commit: str,
-    core_commit: str = CORE_COMMIT,
-) -> str:
-    return json.dumps(
-        {
-            'series': series,
-            'upstream_branch': f'stable/{series}',
-            'upstream_commit': upstream_commit,
-            'tools_tag': {'26.1': '26.1.11', '26.7': '26.7.1'}[series],
-            'freebsd_release': '15.1',
-            'core_commit': core_commit,
-            'core_archive_url': (
-                f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz'
-            ),
-            'core_archive_sha256': 'a' * 64,
-        }
-    )
+def metadata(series, upstream_commit, core_commit=CORE_COMMIT):
+    return json.dumps(upstream_profile(series, upstream_commit, core_commit=core_commit))
 
 
 def publisher_module():
-    assert PUBLISHER.is_file(), 'GitHub API publisher is missing'
-    spec = importlib.util.spec_from_file_location('publish_upstream', PUBLISHER)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_module('publish_upstream', PUBLISHER.resolve())
 
 
 @pytest.fixture
 def publication_repository(tmp_path):
     repository = tmp_path / 'repository'
-    git(tmp_path, 'init', repository)
-    git(repository, 'config', 'user.name', 'Publisher tests')
-    git(repository, 'config', 'user.email', 'publisher@example.invalid')
+    init_repository(repository)
     initial = commit(repository, {'dns/bind/bind.conf': 'bind-v1\n'}, 'upstream 26.1')
     git(repository, 'checkout', '-b', 'release/bind-rp/26.1')
     source_release = commit(
@@ -174,6 +129,23 @@ class FakeGitHub:
             pull['assignees'].append(reviewer)
 
 
+def remote_github(repository, refs):
+    """Make fetched Git refs agree with the remote API fixture."""
+    for branch, sha in refs.items():
+        git(repository, 'update-ref', f'refs/remotes/origin/{branch}', sha)
+    return FakeGitHub(refs=refs)
+
+
+def bootstrap_pair(repository, plan, files, prefix):
+    git(repository, 'checkout', '-B', f'{prefix}-target', plan['upstream_commit'])
+    target = commit(repository, files, 'bootstrap resolver plugin release')
+    git(repository, 'checkout', '-B', f'{prefix}-sync')
+    sync = commit(repository, {'tools/resolver-overlay.txt': 'resolver overlay\n'},
+                  'bootstrap resolver plugin overlay')
+    git(repository, 'checkout', 'master')
+    return target, sync
+
+
 def test_review_preflights_assignability_before_publishing_refs(publication_repository):
     module = publisher_module()
     github = FakeGitHub(eligible=())
@@ -207,7 +179,9 @@ def test_bootstrap_review_creates_sync_ref_before_target_and_assigns_pr(
     assert github.refs[plan['target_release']] == publication_repository['target_commit']
     assert len(github.pulls) == 1
     assert github.pulls[0]['assignees'] == ['reviewer']
-    assert 'https://github.com/opnsense/plugins/compare/' in github.pulls[0]['body']
+    source = json.loads(git(publication_repository['repository'], 'show',
+                            f"{plan['source_release']}:.resolver-plugins/upstream.json"))['upstream_commit']
+    assert f"https://github.com/opnsense/plugins/compare/{source}...{plan['upstream_commit']}" in github.pulls[0]['body']
 
 
 def test_retry_accepts_exact_ref_and_creates_missing_pr(publication_repository):
@@ -297,24 +271,10 @@ def test_recovery_creates_missing_pr_before_planning_again(publication_repositor
     module = publisher_module()
     repository = publication_repository['repository']
     plan = publication_repository['plan']
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['target_release']}",
-        publication_repository['target_commit'],
-    )
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        publication_repository['sync_commit'],
-    )
-    github = FakeGitHub(
-        refs={
-            plan['sync_branch']: publication_repository['sync_commit'],
-            plan['target_release']: publication_repository['target_commit'],
-        }
-    )
+    github = remote_github(repository, {
+        plan['sync_branch']: publication_repository['sync_commit'],
+        plan['target_release']: publication_repository['target_commit'],
+    })
 
     handled = module.recover_pending_reviews(
         repository, 'owner/plugins', 'reviewer', github
@@ -333,36 +293,11 @@ def test_recovery_rejects_existing_refs_with_malformed_tools_metadata(
     module = publisher_module()
     repository = publication_repository['repository']
     plan = publication_repository['plan']
-    git(repository, 'checkout', '-B', plan['target_release'], plan['upstream_commit'])
     malformed = json.loads(metadata(plan['series'], plan['upstream_commit']))
     malformed['tools_tag'] = '26.7.r1'
-    target_commit = commit(
-        repository,
-        {'.resolver-plugins/upstream.json': json.dumps(malformed)},
-        'malformed bootstrap release',
-    )
-    git(repository, 'checkout', '-B', plan['sync_branch'], target_commit)
-    sync_commit = commit(
-        repository,
-        {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-        'bootstrap resolver plugin overlay',
-    )
-    git(repository, 'checkout', 'master')
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['target_release']}",
-        target_commit,
-    )
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        sync_commit,
-    )
-    github = FakeGitHub(
-        refs={plan['sync_branch']: sync_commit, plan['target_release']: target_commit}
-    )
+    target, sync = bootstrap_pair(repository, plan,
+        {'.resolver-plugins/upstream.json': json.dumps(malformed)}, 'malformed')
+    github = remote_github(repository, {plan['sync_branch']: sync, plan['target_release']: target})
 
     handled = module.recover_pending_reviews(
         repository, 'owner/plugins', 'reviewer', github
@@ -390,24 +325,9 @@ def test_recovery_completes_sync_only_bootstrap_after_core_changes(
     git(repository, 'branch', '-D', plan['sync_branch'])
     git(repository, 'branch', '-D', plan['target_release'])
 
-    changed_core = 'f' * 40
-    git(repository, 'checkout', '-b', 'retry-target', plan['upstream_commit'])
-    retry_target = commit(
-        repository,
-        {
-            '.resolver-plugins/upstream.json': metadata(
-                plan['series'], plan['upstream_commit'], changed_core
-            )
-        },
-        'bootstrap resolver plugin release',
-    )
-    git(repository, 'checkout', '-b', 'retry-sync')
-    retry_sync = commit(
-        repository,
-        {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-        'bootstrap resolver plugin overlay',
-    )
-    git(repository, 'checkout', 'master')
+    retry_target, retry_sync = bootstrap_pair(repository, plan, {
+        '.resolver-plugins/upstream.json': metadata(plan['series'], plan['upstream_commit'], 'f' * 40)
+    }, 'retry')
     assert retry_target != original_target
     assert retry_sync != original_sync
 
@@ -428,90 +348,28 @@ def test_recovery_completes_sync_only_bootstrap_after_core_changes(
     assert github.pulls[0]['assignees'] == ['reviewer']
 
 
-def test_recovery_rejects_sync_only_bootstrap_with_a_nonpristine_parent(
-    publication_repository,
-):
+@pytest.mark.parametrize("defect", ["nonpristine-parent", "invalid-core-metadata"])
+def test_recovery_rejects_sync_only_bootstrap_with_invalid_parent(publication_repository, defect):
     module = publisher_module()
     repository = publication_repository['repository']
     plan = publication_repository['plan']
-    git(repository, 'branch', '-D', plan['sync_branch'])
-    git(repository, 'branch', '-D', plan['target_release'])
-    git(repository, 'checkout', '-b', 'tampered-target', plan['upstream_commit'])
-    commit(
-        repository,
-        {
-            '.resolver-plugins/upstream.json': metadata(
-                plan['series'], plan['upstream_commit']
-            ),
-            'unexpected-release-file': 'not a pristine baseline\n',
-        },
-        'tampered bootstrap baseline',
-    )
-    git(repository, 'checkout', '-b', 'tampered-sync')
-    tampered_sync = commit(
-        repository,
-        {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-        'bootstrap resolver plugin overlay',
-    )
-    git(repository, 'checkout', 'master')
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        tampered_sync,
-    )
-    github = FakeGitHub(refs={plan['sync_branch']: tampered_sync})
+    git(repository, 'branch', '-D', plan['sync_branch'], plan['target_release'])
+    profile = json.loads(metadata(plan['series'], plan['upstream_commit']))
+    files = {}
+    if defect == 'nonpristine-parent':
+        files['unexpected-release-file'] = 'not a pristine baseline\n'
+    else:
+        profile['core_archive_url'] = 'https://github.com/opnsense/core/archive/' + '0' * 40 + '.tar.gz'
+    files['.resolver-plugins/upstream.json'] = json.dumps(profile)
+    _, sync = bootstrap_pair(repository, plan, files, 'invalid')
+    github = remote_github(repository, {plan['sync_branch']: sync})
 
-    handled = module.recover_pending_reviews(
-        repository, 'owner/plugins', 'reviewer', github
-    )
+    handled = module.recover_pending_reviews(repository, 'owner/plugins', 'reviewer', github)
 
     assert handled is False
-    assert plan['target_release'] not in github.refs
+    assert github.refs == {plan['sync_branch']: sync}
     assert github.created_refs == []
-    assert github.pulls == []
-
-
-def test_recovery_rejects_sync_only_bootstrap_with_invalid_core_metadata(
-    publication_repository,
-):
-    module = publisher_module()
-    repository = publication_repository['repository']
-    plan = publication_repository['plan']
-    git(repository, 'branch', '-D', plan['sync_branch'])
-    git(repository, 'branch', '-D', plan['target_release'])
-    invalid_metadata = json.loads(metadata(plan['series'], plan['upstream_commit']))
-    invalid_metadata['core_archive_url'] = (
-        'https://github.com/opnsense/core/archive/' + '0' * 40 + '.tar.gz'
-    )
-    git(repository, 'checkout', '-b', 'invalid-target', plan['upstream_commit'])
-    commit(
-        repository,
-        {'.resolver-plugins/upstream.json': json.dumps(invalid_metadata)},
-        'invalid bootstrap metadata',
-    )
-    git(repository, 'checkout', '-b', 'invalid-sync')
-    invalid_sync = commit(
-        repository,
-        {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-        'bootstrap resolver plugin overlay',
-    )
-    git(repository, 'checkout', 'master')
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        invalid_sync,
-    )
-    github = FakeGitHub(refs={plan['sync_branch']: invalid_sync})
-
-    handled = module.recover_pending_reviews(
-        repository, 'owner/plugins', 'reviewer', github
-    )
-
-    assert handled is False
-    assert plan['target_release'] not in github.refs
-    assert github.created_refs == []
+    assert github.published_commits == []
     assert github.pulls == []
 
 
@@ -544,6 +402,65 @@ def test_recovery_rejects_sync_only_bootstrap_outside_current_upstream_ref(
     )
 
     assert handled is False
-    assert plan['target_release'] not in github.refs
     assert github.created_refs == []
     assert github.pulls == []
+
+
+@pytest.mark.parametrize('mismatch', [None, 'blobs', 'trees', 'commits'])
+def test_github_reproduces_exact_local_objects_before_accepting_commit(tmp_path, monkeypatch, mismatch):
+    module = publisher_module()
+    date = '2026-01-02T03:04:05+00:00'
+    monkeypatch.setenv('GIT_AUTHOR_DATE', date)
+    monkeypatch.setenv('GIT_COMMITTER_DATE', date)
+    repository = init_repository(tmp_path / 'git')
+    parent = commit(repository, {'removed': 'old\n', 'updated': 'before\n'}, 'before')
+    git(repository, 'rm', 'removed')
+    files = {'added with trailing space ': 'added\n', 'updated': 'after\n'}
+    head = commit(repository, files, 'publish fixture')
+    blobs = {name: git(repository, 'rev-parse', f'{head}:{name}') for name in files}
+    entries = [{'path': name, 'mode': '100644', 'type': 'blob', 'sha': digest}
+               for name, digest in blobs.items()]
+    entries.insert(1, {'path': 'removed', 'sha': None})
+    tree = git(repository, 'rev-parse', f'{head}^{{tree}}')
+    identity = {'name': 'CI fixture', 'email': 'ci@example.invalid', 'date': date}
+    expected = [
+        ('blobs', {'content': base64.b64encode(content.encode()).decode(), 'encoding': 'base64'}, blobs[name])
+        for name, content in files.items()
+    ] + [
+        ('trees', {'base_tree': git(repository, 'rev-parse', f'{parent}^{{tree}}'), 'tree': entries}, tree),
+        ('commits', {'message': 'publish fixture\n', 'tree': tree, 'parents': [parent],
+                     'author': identity, 'committer': identity}, head),
+    ]
+    calls = []
+    def api(method, endpoint, payload):
+        kind, data, digest = expected[len(calls)]
+        calls.append(kind)
+        assert (method, endpoint, payload) == ('POST', f'repos/example/plugins/git/{kind}', data)
+        return {'sha': 'f' * 40 if kind == mismatch else digest}
+    client = module.GitHub()
+    monkeypatch.setattr(client, 'call', api)
+    if mismatch:
+        with pytest.raises(ValueError, match=f'reproduce (?:the )?local {mismatch[:-1]}'):
+            client.publish_commit(repository, 'example/plugins', head)
+        stop = next(i for i, item in enumerate(expected) if item[0] == mismatch) + 1
+    else:
+        client.publish_commit(repository, 'example/plugins', head)
+        stop = len(expected)
+    assert calls == [item[0] for item in expected[:stop]]
+
+
+@pytest.mark.parametrize('exact_matches', [0, 1, 2])
+def test_github_ref_lookup_requires_one_exact_branch(monkeypatch, exact_matches):
+    module = publisher_module()
+    branch = 'release/bind-rp/26.7'
+    exact = {'ref': f'refs/heads/{branch}', 'object': {'sha': 'a' * 40}}
+    response = [{'ref': f'refs/heads/{branch}-other', 'object': {'sha': 'b' * 40}}] + [exact] * exact_matches
+    client = module.GitHub()
+    call = Mock(return_value=response)
+    monkeypatch.setattr(client, 'call', call)
+    if exact_matches == 2:
+        with pytest.raises(ValueError, match='ambiguous reference'):
+            client.ref_sha('example/plugins', branch)
+    else:
+        assert client.ref_sha('example/plugins', branch) == ('a' * 40 if exact_matches else None)
+    call.assert_called_once_with('GET', f'repos/example/plugins/git/matching-refs/heads/{branch}')

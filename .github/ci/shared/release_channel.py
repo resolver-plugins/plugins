@@ -18,9 +18,9 @@ import urllib.request
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import bind920_profile
-import target_pkg
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from bind import bind920_profile
+from shared import target_pkg
 
 
 SERIES_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
@@ -666,7 +666,7 @@ def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
 def validate_static_channel(directory: Path) -> None:
     data = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
     if data.get("kind") == "combined":
-        import package_catalogue
+        from shared import package_catalogue
         package_catalogue.validate(directory)
     else:
         validate_channel_directory(directory)

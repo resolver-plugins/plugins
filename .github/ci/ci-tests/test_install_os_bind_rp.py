@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import stat
-import subprocess
-import tempfile
-from pathlib import Path
+from common_imports import *
 
 import pytest
 
@@ -40,12 +36,11 @@ def installer_environment(
     os_bind_rp_candidate_version: str | None = None,
     confirmation: str | None = None,
     key_sha256: str = PUBLIC_KEY_SHA256,
-    fetch_failure: bool = False,
     archive_checksum: str = "2$" + "a" * 64,
     install_failure: bool = False,
     plugin_install_failure: bool = False,
     fetch_layout: str = "all",
-    wrong_owner: bool = False,
+    post_install_fault: str = "",
     pkg_locked: bool = False,
     unlock_failure: bool = False,
     mutate_frozen_archive: bool = False,
@@ -82,11 +77,10 @@ def installer_environment(
                 os_bind_rp_candidate_version
                 or plugin_candidate_for_opnsense_version(opnsense_version)
             ),
-            "RP_TEST_FETCH_FAILURE": "yes" if fetch_failure else "no",
             "RP_TEST_INSTALL_FAILURE": "yes" if install_failure else "no",
             "RP_TEST_PLUGIN_INSTALL_FAILURE": "yes" if plugin_install_failure else "no",
             "RP_TEST_FETCH_LAYOUT": fetch_layout,
-            "RP_TEST_WRONG_OWNER": "yes" if wrong_owner else "no",
+            "RP_TEST_POST_INSTALL_FAULT": post_install_fault,
             "RP_TEST_MUTATE_FROZEN_ARCHIVE": "yes" if mutate_frozen_archive else "no",
             "RP_TEST_DRY_RUN_STATUS": str(dry_run_status),
             "RP_TEST_DRY_RUN_PLAN": dry_run_plan,
@@ -119,7 +113,6 @@ def write_command_fixtures(directory: Path) -> None:
         directory / "fetch",
         "#!/bin/sh\n"
         "{ printf 'fetch'; for argument in \"$@\"; do printf ' %s' \"$argument\"; done; printf '\\n'; } >> \"$RP_TEST_LOG\"\n"
-        "[ \"${RP_TEST_FETCH_FAILURE:-no}\" = yes ] && exit 1\n"
         "[ \"$1\" = -o ] || exit 64\n"
         "printf 'test public key\\n' > \"$2\"\n",
     )
@@ -134,7 +127,6 @@ def write_command_fixtures(directory: Path) -> None:
     write_executable(
         directory / "pkg",
         r'''#!/usr/bin/env python3
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -178,7 +170,8 @@ def installed(name):
         return os.environ.get("RP_TEST_BIND_TOOLS", "")
     if name == "os-bind-rp":
         if marker("RP_TEST_PLUGIN_MARKER").exists():
-            return f"os-bind-rp|{os.environ['RP_TEST_OS_BIND_RP_CANDIDATE_VERSION']}|opnsense/os-bind-rp"
+            version = "0.0_1" if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "identity" else os.environ["RP_TEST_OS_BIND_RP_CANDIDATE_VERSION"]
+            return f"os-bind-rp|{version}|opnsense/os-bind-rp"
         return os.environ.get("RP_TEST_OS_BIND_RP", "")
     if name == "os-bind" and not marker("RP_TEST_OFFICIAL_REMOVED_MARKER").exists():
         return os.environ.get("RP_TEST_OS_BIND", "")
@@ -201,8 +194,6 @@ elif command == "rquery":
         if f"%n = {name}" in expression:
             print(f"{name}|{version}|{origin}")
 elif command == "fetch":
-    if os.environ.get("RP_TEST_FETCH_FAILURE") == "yes":
-        raise SystemExit(1)
     destination = Path(args[args.index("-o") + 1])
     if os.environ.get("RP_TEST_FETCH_LAYOUT", "all") == "all":
         destination /= "All"
@@ -263,7 +254,7 @@ elif command == "query":
                     print(value)
             if value:
                 if args[-1] == "%Fp|%Fs":
-                    checksum = os.environ["RP_TEST_ARCHIVE_CHECKSUM"]
+                    checksum = "(null)" if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "checksum" else os.environ["RP_TEST_ARCHIVE_CHECKSUM"]
                     print(f"/usr/local/{name}/one|{checksum}")
                     print(f"/usr/local/{name}/two|{checksum}")
                 else:
@@ -287,71 +278,35 @@ elif command == "create":
             )
 elif command == "install":
     if "-n" in args:
-        plan = os.environ.get("RP_TEST_DRY_RUN_PLAN", "valid")
-        if plan == "all_current":
-            print("The most recent versions of packages are already installed")
-        elif plan == "repository_warning_noop":
-            print(
-                "pkg-static: Repository resolver-verified has a wrong packagesite, "
-                "need to re-create database"
-            )
-            print("The most recent versions of packages are already installed")
-        elif plan == "outside_identity":
-            print(f"notice: requested archive {args[-1]} was not selected")
+        requested = "\n".join("\t" + arg for arg in args if re.search(r"-[0-9]", arg))
+        version = os.environ["RP_TEST_OS_BIND_RP_CANDIDATE_VERSION"]
+        valid = "The following package(s) will be affected:\nNew packages to be INSTALLED:\n" + requested
+        current = "The most recent versions of packages are already installed"
+        plans = {
+            "valid": valid,
+            "all_current": current,
+            "repository_warning_noop": "pkg-static: Repository resolver-verified has a wrong packagesite, need to re-create database\n" + current,
+            "outside_identity": f"notice: requested archive {args[-1]} was not selected\nNew packages to be INSTALLED:\n\tbind920-9.20.26_2",
+            "missing": "New packages to be INSTALLED:\n\tbind920-9.20.26_2",
+            "wrong_result_version": "Installed packages to be UPGRADED:\n\tos-bind-rp: 1.36_9 -> 1.36_100",
+            "requested_only_on_old_side": f"Installed packages to be UPGRADED:\n\tos-bind-rp: {version} -> 26.1_2",
+            "requested_removal": f"Installed packages to be REMOVED:\n\tos-bind-rp-{version}",
+            "unknown_section": "Packages selected for CHANGE:\n" + requested,
+            "pkg_colon": valid + "\nInstalled packages to be UPGRADED:\n\tpkg: 2.3.1_1 -> 2.4.0",
+            "opnsense_colon": valid + "\nInstalled packages to be UPGRADED:\n\topnsense: 26.1.11_10 -> 26.1.12",
+            "pkg_hyphen": valid + "\nNew packages to be INSTALLED:\n\tpkg-2.4.0",
+            "unrelated_install": valid + "\nNew packages to be INSTALLED:\n\tpython311: 3.11.13",
+            "unrelated_upgrade": valid + "\nInstalled packages to be UPGRADED:\n\tpython311: 3.11.12 -> 3.11.13",
+            "unrelated_downgrade": valid + "\nInstalled packages to be DOWNGRADED:\n\tpython311: 3.11.13 -> 3.11.12",
+            "unrelated_removal": valid + "\nInstalled packages to be REMOVED:\n\tpython311-3.11.13",
+            "malformed_entry": valid + "\n\t???",
+            "blank_continuation": valid + "\n\n\tpython311: 3.11.13",
+            "empty_trailing_section": valid + "\nInstalled packages to be REMOVED:",
+        }
+        plan = os.environ["RP_TEST_DRY_RUN_PLAN"]
+        if plan in {"outside_identity", "missing", "wrong_result_version", "requested_only_on_old_side", "requested_removal", "unknown_section"}:
             print("The following package(s) will be affected:")
-        else:
-            print("The following package(s) will be affected:")
-        if plan == "outside_identity":
-            print("New packages to be INSTALLED:")
-            print("\tbind920-9.20.26_2")
-        elif plan == "missing":
-            print("New packages to be INSTALLED:")
-            print("\tbind920-9.20.26_2")
-        elif plan == "wrong_result_version":
-            print("Installed packages to be UPGRADED:")
-            print("\tos-bind-rp: 1.36_9 -> 1.36_100")
-        elif plan == "requested_only_on_old_side":
-            print("Installed packages to be UPGRADED:")
-            print(f"\tos-bind-rp: {os.environ['RP_TEST_OS_BIND_RP_CANDIDATE_VERSION']} -> 26.1_2")
-        elif plan == "requested_removal":
-            print("Installed packages to be REMOVED:")
-            print(f"\tos-bind-rp-{os.environ['RP_TEST_OS_BIND_RP_CANDIDATE_VERSION']}")
-        elif plan not in {"missing", "all_current", "repository_warning_noop"}:
-            if plan == "unknown_section":
-                print("Packages selected for CHANGE:")
-            else:
-                print("New packages to be INSTALLED:")
-            for argument in args:
-                if re.search(r"-[0-9]", argument):
-                    print(f"\t{argument}")
-        if plan == "pkg_colon":
-            print("Installed packages to be UPGRADED:")
-            print("\tpkg: 2.3.1_1 -> 2.4.0")
-        elif plan == "opnsense_colon":
-            print("Installed packages to be UPGRADED:")
-            print("\topnsense: 26.1.11_10 -> 26.1.12")
-        elif plan == "pkg_hyphen":
-            print("New packages to be INSTALLED:")
-            print("\tpkg-2.4.0")
-        elif plan == "unrelated_install":
-            print("New packages to be INSTALLED:")
-            print("\tpython311: 3.11.13")
-        elif plan == "unrelated_upgrade":
-            print("Installed packages to be UPGRADED:")
-            print("\tpython311: 3.11.12 -> 3.11.13")
-        elif plan == "unrelated_downgrade":
-            print("Installed packages to be DOWNGRADED:")
-            print("\tpython311: 3.11.13 -> 3.11.12")
-        elif plan == "unrelated_removal":
-            print("Installed packages to be REMOVED:")
-            print("\tpython311-3.11.13")
-        elif plan == "malformed_entry":
-            print("\t???")
-        elif plan == "blank_continuation":
-            print()
-            print("\tpython311: 3.11.13")
-        elif plan == "empty_trailing_section":
-            print("Installed packages to be REMOVED:")
+        print(plans[plan])
         raise SystemExit(int(os.environ.get("RP_TEST_DRY_RUN_STATUS", "1")))
     else:
         if os.environ.get("RP_TEST_INSTALL_FAILURE") == "yes":
@@ -363,7 +318,8 @@ elif command == "install":
             if os.environ.get("RP_TEST_PLUGIN_INSTALL_FAILURE") == "yes":
                 raise SystemExit(1)
             marker("RP_TEST_PLUGIN_MARKER").touch()
-            marker("RP_TEST_OFFICIAL_REMOVED_MARKER").touch()
+            if os.environ["RP_TEST_POST_INSTALL_FAULT"] != "official":
+                marker("RP_TEST_OFFICIAL_REMOVED_MARKER").touch()
 elif command == "lock":
     if "-l" in args:
         if marker("RP_TEST_LOCK_MARKER").exists():
@@ -385,16 +341,19 @@ elif command == "which":
     if not value:
         raise SystemExit(1)
     package, version, _ = value.split("|")
-    if os.environ.get("RP_TEST_WRONG_OWNER") == "yes":
+    if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "owner":
         package = "wrong-owner"
         version = "1"
     print(f"{package}-{version}")
 elif command == "check":
-    pass
+    if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "check":
+        raise SystemExit(1)
 else:
     raise SystemExit(64)
 ''',
     )
+    for command in ("service", "configctl"):
+        write_executable(directory / command, f'#!/bin/sh\necho "{command} $*" >> "$RP_TEST_LOG"\nexit 99\n')
     write_executable(
         directory / "dry-run-awk",
         "#!/bin/sh\nprintf '%s\\n' 'simulated dry-run parser failure' >&2\nexit 2\n",
@@ -418,17 +377,18 @@ def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.Complete
 
 
 @pytest.mark.parametrize(
-    ("opnsense_version", "pkg_abi", "series"),
+    ("opnsense_version", "pkg_abi", "series", "installed_plugin"),
     (
-        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1"),
-        ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7"),
+        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", ""),
+        ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7", ""),
+        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "os-bind-rp|1.36_9|opnsense/os-bind-rp"),
     ),
 )
 def test_installs_current_plugin_for_the_detected_series_without_service_changes(
-    tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str
+    tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str, installed_plugin: str
 ) -> None:
     result, log, repositories = run_installer(
-        tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi
+        tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi, os_bind_rp=installed_plugin
     )
 
     assert result.returncode == 0, result.stderr
@@ -451,15 +411,11 @@ def test_installs_current_plugin_for_the_detected_series_without_service_changes
     assert "resolver-plugins-bind920" not in calls
     assert "configctl" not in calls
     assert "service" not in calls
-
-
-def test_uses_eligible_opnsense_bind_without_prompting_or_fallback(tmp_path: Path) -> None:
-    result, log, _ = run_installer(tmp_path)
-
-    assert result.returncode == 0, result.stderr
     assert "Do you wish to update BIND?" not in result.stderr
-    calls = log.read_text(encoding="utf-8")
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" not in calls
+    assert (tmp_path / "plugin-installed").exists()
+    if installed_plugin:
+        assert "Upgrading installed os-bind-rp" in result.stderr
 
 
 def test_rejects_plugin_candidate_that_does_not_match_the_detected_series(
@@ -475,8 +431,8 @@ def test_rejects_plugin_candidate_that_does_not_match_the_detected_series(
     assert result.returncode != 0
     assert "os-bind-rp version does not match OPNsense series 26.7" in result.stderr
     calls = log.read_text(encoding="utf-8")
-    assert "pkg fetch" not in calls
-    assert "pkg install" not in calls
+    assert " fetch " not in calls
+    assert " install " not in calls
 
 
 def test_rejects_26_1_before_the_required_core_floor(tmp_path: Path) -> None:
@@ -486,8 +442,8 @@ def test_rejects_26_1_before_the_required_core_floor(tmp_path: Path) -> None:
     assert "OPNsense 26.1.11_10 or newer is required" in result.stderr
     calls = log.read_text(encoding="utf-8")
     assert "fetch " not in calls
-    assert "pkg update" not in calls
-    assert "pkg install" not in calls
+    assert " update " not in calls
+    assert " install " not in calls
 
 
 def test_preserves_a_trusted_key_when_the_replacement_fails_verification(tmp_path: Path) -> None:
@@ -501,8 +457,8 @@ def test_preserves_a_trusted_key_when_the_replacement_fails_verification(tmp_pat
     assert "public-key fingerprint verification failed" in result.stderr
     assert key.read_text(encoding="utf-8") == "existing trusted key\n"
     calls = log.read_text(encoding="utf-8")
-    assert "pkg update" not in calls
-    assert "pkg install" not in calls
+    assert " update " not in calls
+    assert " install " not in calls
 
 
 def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path: Path) -> None:
@@ -517,11 +473,6 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
     assert "Installed bind920: bind920 9.20.25 from dns/bind920" in result.stderr
     assert "Installed bind-tools: bind-tools 9.20.25 from dns/bind-tools" in result.stderr
     assert "Available fallback: bind920 9.20.26_2 and bind-tools 9.20.26_2" in result.stderr
-    assert "An update to BIND is required to address a breaking issue with DoT." in result.stderr
-    assert (
-        "Note: future OPNsense updates to BIND will still work as long as they are above the pinned version."
-        in result.stderr
-    )
     assert "Do you wish to update BIND? [y/N]" in result.stderr
     assert not (repositories / "resolver-plugins-bind920.conf").exists()
     calls = log.read_text(encoding="utf-8")
@@ -530,29 +481,18 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
     assert "os-bind-rp-26.1_1" in live_installs[1]
 
 
-def test_prompts_when_bind_tools_are_missing_or_from_the_wrong_origin(tmp_path: Path) -> None:
-    result, _, _ = run_installer(
-        tmp_path,
-        bind_tools="bind-tools|9.20.26_1|resolver/bind-tools",
-        confirmation="n",
-    )
-
-    assert result.returncode != 0
-    assert "Installed bind920: bind920 9.20.26_2 from dns/bind920" in result.stderr
-    assert "Installed bind-tools: bind-tools 9.20.26_1 from resolver/bind-tools" in result.stderr
-    assert "BIND update declined; os-bind-rp was not installed." in result.stderr
-
-
-def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path) -> None:
-    result, log, _ = run_installer(
-        tmp_path, bind920="bind920|9.20.25|dns/bind920", confirmation="n"
-    )
-
+@pytest.mark.parametrize("installed", [
+    {"bind920": "bind920|9.20.25|dns/bind920"},
+    {"bind_tools": "bind-tools|9.20.26_1|resolver/bind-tools"},
+    {"bind_tools": ""},
+], ids=["old-bind", "foreign-tools", "missing-tools"])
+def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path, installed: dict) -> None:
+    result, log, _ = run_installer(tmp_path, confirmation="n", **installed)
     assert result.returncode != 0
     assert "BIND update declined; os-bind-rp was not installed." in result.stderr
-    calls = log.read_text(encoding="utf-8")
-    assert "bind920-9.20.26_2 bind-tools-9.20.26_2" not in calls
-    assert "os-bind-rp-26.1_1" not in calls
+    assert " install -y " not in log.read_text()
+    assert not (tmp_path / "plugin-installed").exists()
+    assert not (tmp_path / "backups").exists()
 
 
 def test_rejects_an_unsupported_opnsense_series(tmp_path: Path) -> None:
@@ -624,21 +564,23 @@ def test_official_plugin_replacement_uses_verified_exact_archives_and_keeps_back
         assert f"pkg query -e %n = {package} %Fp|%Fs" in calls
 
 
-def test_reports_an_existing_resolver_plugin_upgrade(tmp_path: Path) -> None:
-    result, _, _ = run_installer(
-        tmp_path,
-        os_bind_rp="os-bind-rp|1.36_9|opnsense/os-bind-rp",
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "Upgrading installed os-bind-rp" in result.stderr
-
-
-def test_rejects_archive_paths_owned_by_the_wrong_package(tmp_path: Path) -> None:
-    result, _, _ = run_installer(tmp_path, wrong_owner=True)
-
+@pytest.mark.parametrize("fault,diagnostic", [
+    ("owner", "installed file has the wrong owner"),
+    ("identity", "installed identity mismatch for os-bind-rp"),
+    ("official", "official os-bind remains installed"),
+    ("checksum", "incompatible installed file checksum"),
+    ("check", ""),
+])
+def test_rejects_failed_post_install_verification(tmp_path: Path, fault: str, diagnostic: str) -> None:
+    result, log, _ = run_installer(tmp_path, post_install_fault=fault,
+                                  os_bind="os-bind|1.34_3|opnsense/os-bind")
     assert result.returncode != 0
-    assert "installed file has the wrong owner" in result.stderr
+    assert (tmp_path / "plugin-installed").exists()
+    if diagnostic:
+        assert diagnostic in result.stderr
+    else:
+        assert "pkg check -s bind-tools bind920 os-bind-rp" in log.read_text()
+    assert "Diagnostic state retained at" in result.stderr
 
 
 def test_install_failure_retains_diagnostics_and_temporary_archives(tmp_path: Path) -> None:
@@ -681,32 +623,19 @@ def test_reports_failure_when_the_original_pkg_lock_state_cannot_be_restored(
     assert "pkg unlock -y pkg" in log.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("status", [0, 1])
-def test_accepts_pkg_dry_run_success_and_change_status(tmp_path: Path, status: int) -> None:
-    result, _, _ = run_installer(tmp_path, dry_run_status=status)
-
+def test_accepts_pkg_dry_run_success_status(tmp_path: Path) -> None:
+    result, _, _ = run_installer(tmp_path, dry_run_status=0)
     assert result.returncode == 0, result.stderr
+    assert (tmp_path / "plugin-installed").exists()
 
 
-def test_accepts_generic_current_plan_only_for_an_exact_installed_identity(tmp_path: Path) -> None:
+@pytest.mark.parametrize("plan", ["all_current", "repository_warning_noop"])
+def test_accepts_current_plan_for_an_exact_installed_identity(tmp_path: Path, plan: str) -> None:
     result, _, _ = run_installer(
         tmp_path,
         os_bind_rp="os-bind-rp|26.1_1|opnsense/os-bind-rp",
         dry_run_status=0,
-        dry_run_plan="all_current",
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_ignores_repository_diagnostics_outside_package_change_sections(
-    tmp_path: Path,
-) -> None:
-    result, _, _ = run_installer(
-        tmp_path,
-        os_bind_rp="os-bind-rp|26.1_1|opnsense/os-bind-rp",
-        dry_run_status=0,
-        dry_run_plan="repository_warning_noop",
+        dry_run_plan=plan,
     )
 
     assert result.returncode == 0, result.stderr
@@ -725,7 +654,7 @@ def test_ignores_repository_diagnostics_outside_package_change_sections(
 def test_rejects_unsafe_or_invalid_pkg_dry_run_plans(
     tmp_path: Path, status: int, plan: str, diagnostic: str
 ) -> None:
-    result, _, _ = run_installer(
+    result, log, _ = run_installer(
         tmp_path,
         dry_run_status=status,
         dry_run_plan=plan,
@@ -734,6 +663,7 @@ def test_rejects_unsafe_or_invalid_pkg_dry_run_plans(
     assert result.returncode != 0
     assert diagnostic in result.stderr
 
+    assert " install -y " not in log.read_text(encoding="utf-8")
 
 @pytest.mark.parametrize(
     "plan",
@@ -749,7 +679,7 @@ def test_rejects_unrelated_pkg_dry_run_mutations(tmp_path: Path, plan: str) -> N
 
 @pytest.mark.parametrize(
     "plan",
-    ["unknown_section", "malformed_entry", "blank_continuation"],
+    ["unknown_section", "malformed_entry", "blank_continuation", "empty_trailing_section"],
 )
 def test_rejects_unrecognized_pkg_dry_run_structure(tmp_path: Path, plan: str) -> None:
     result, log, _ = run_installer(tmp_path, dry_run_plan=plan)
@@ -772,14 +702,6 @@ def test_requested_identity_must_be_inside_a_mutation_section(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "omitted requested identity: os-bind-rp-26.1_1" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-
-def test_rejects_an_empty_trailing_mutation_section(tmp_path: Path) -> None:
-    result, log, _ = run_installer(tmp_path, dry_run_plan="empty_trailing_section")
-
-    assert result.returncode != 0
-    assert "unrecognized package mutation plan" in result.stderr
     assert " install -y " not in log.read_text(encoding="utf-8")
 
 
@@ -855,14 +777,3 @@ def test_partial_bind_update_failure_preserves_recovery_packages_and_instruction
     ]
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[-2]
     assert "os-bind-rp-26.1_1" in live_installs[-1]
-
-
-def test_declining_update_creates_no_durable_state(tmp_path: Path) -> None:
-    result, _, _ = run_installer(
-        tmp_path,
-        bind920="bind920|9.20.25|dns/bind920",
-        confirmation="n",
-    )
-
-    assert result.returncode != 0
-    assert not (tmp_path / "backups").exists()

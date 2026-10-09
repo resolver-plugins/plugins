@@ -1,7 +1,7 @@
 """Synthetic HA component channels with real asset checksums."""
-import json
+from common_imports import *
 
-import dhcp_interface_ha_channel as channel
+from ha_dhcp import dhcp_interface_ha_channel as channel
 
 
 def make_ha_channel(directory, *, version='0.2_30', source='a' * 40, profile='b' * 40):

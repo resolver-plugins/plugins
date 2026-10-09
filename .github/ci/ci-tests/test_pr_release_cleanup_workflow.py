@@ -1,14 +1,13 @@
-import pathlib
-import re
+from common_imports import *
+
+from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/pr-release-cleanup.yml"
-PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
 def workflow_text() -> str:
-    assert WORKFLOW.is_file(), "pull request release cleanup workflow is missing"
     return WORKFLOW.read_text(encoding="utf-8")
 
 
@@ -23,11 +22,9 @@ def test_pull_request_release_cleanup_runs_on_every_close():
 
 def test_pull_request_release_cleanup_uses_only_trusted_code():
     workflow = workflow_text()
-    references = re.findall(r"^\s+(?:-\s+)?uses:\s+([^\s#]+)", workflow, re.MULTILINE)
-    assert references
-    assert all(PINNED_ACTION.fullmatch(reference) for reference in references)
+    assert_pinned_actions(workflow)
     assert "ref: ${{ github.workflow_sha }}" in workflow
-    assert "persist-credentials: false" in workflow
+    assert_checkout_credentials(job_text(workflow, "cleanup"))
     for untrusted_ref in (
         "pull_request.head",
         "github.head_ref",
@@ -38,7 +35,7 @@ def test_pull_request_release_cleanup_uses_only_trusted_code():
 
 def test_pull_request_release_cleanup_has_only_required_write_permission():
     workflow = workflow_text()
-    cleanup = workflow.split("  cleanup:", 1)[1]
-    assert "permissions: {}" in workflow.split("jobs:", 1)[0]
-    assert "permissions:\n      contents: write" in cleanup
+    cleanup = job_text(workflow, "cleanup")
+    assert_permissions(workflow, {})
+    assert_permissions(cleanup, {"contents": "write"}, indent=4)
     assert "GH_TOKEN: ${{ github.token }}" in cleanup

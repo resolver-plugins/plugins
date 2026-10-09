@@ -9,12 +9,21 @@ on:
   push:
     branches: [master]
     paths:
-      - '.github/ci/**'
-      - '.github/workflows/package-release.yml'
-      - '.resolver-plugins/**'
+      - '.github/ci/bind/**'
+      - '.github/ci/shared/**'
+      - '.github/workflows/bind-package-release.yml'
+      - '.resolver-plugins/bind920.json'
+      - '.resolver-plugins/bind-compatibility.json'
+      - '.resolver-plugins/target-pkg.json'
+      - '.resolver-plugins/target-pkg-content.json'
+      - '.resolver-plugins/upstream.json'
       - 'docs/package-repository/resolver-plugins.pub'
       - 'dns/bind/**'
+      - '!dns/bind/tests/**'
       - 'Mk/**'
+      - 'Scripts/**'
+      - 'Templates/**'
+      - 'scripts/install-os-bind-rp.sh'
   pull_request_target:
     types: [closed]
     branches:
@@ -110,7 +119,7 @@ jobs:
                 after=$(mktemp)
                 git show "$BEFORE_SHA:.resolver-plugins/target-pkg.json" > "$before"
                 git show "$GITHUB_SHA:.resolver-plugins/target-pkg.json" > "$after"
-                recovered_series=$(python3 .github/ci/target_pkg.py changed-series "$before" "$after")
+                recovered_series=$(python3 .github/ci/shared/target_pkg.py changed-series "$before" "$after")
                 if [ -n "$recovered_series" ]; then
                   series=$recovered_series
                 fi
@@ -187,7 +196,7 @@ jobs:
           git fetch --no-tags origin "$SOURCE_REF:refs/remotes/origin/package-source"
           source_commit=$(git rev-parse refs/remotes/origin/package-source)
           git show "$source_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
-          freebsd_release=$(python3 .github/ci/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
+          freebsd_release=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
           printf 'source_commit=%s\nfreebsd_release=%s\ncontrol_commit=%s\n' "$source_commit" "$freebsd_release" "$control_commit" >> "$GITHUB_OUTPUT"
 
   bind:
@@ -227,7 +236,7 @@ jobs:
             pkg install -y python3
             series='${{ needs.select.outputs.series }}'
             output="artifacts/$series"
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json SOURCE_COMMIT='${{ needs.profile.outputs.source_commit }}' .github/ci/build-bind920.sh "$series" "$output"
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json SOURCE_COMMIT='${{ needs.profile.outputs.source_commit }}' .github/ci/bind/build-bind920.sh "$series" "$output"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: os-bind-rp-bind920-${{ needs.select.outputs.series }}
@@ -268,9 +277,9 @@ jobs:
             pkg update -f
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py refresh \
+            python3 .github/ci/shared/target_pkg.py refresh \
               .resolver-plugins/target-pkg.json \
               .resolver-plugins/target-pkg-content.json \
               "$series" --output .resolver-plugins/target-pkg.json
@@ -377,7 +386,7 @@ jobs:
             series='${{ needs.select.outputs.series }}'
             mode='${{ needs.select.outputs.mode }}'
             output="artifacts/$series"
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
             dependencies=$(
               for package in "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg; do
@@ -393,7 +402,7 @@ jobs:
             else
               devel=
             fi
-            env $devel RP_BIND920_FALLBACK=yes RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json SOURCE_COMMIT='${{ needs.profile.outputs.source_commit }}' .github/ci/build-os-bind-rp.sh "$series" "$output"
+            env $devel RP_BIND920_FALLBACK=yes RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json SOURCE_COMMIT='${{ needs.profile.outputs.source_commit }}' .github/ci/bind/build-os-bind-rp.sh "$series" "$output"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: os-bind-rp-build-${{ needs.select.outputs.mode }}-${{ needs.select.outputs.series }}
@@ -438,16 +447,16 @@ jobs:
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
             output="artifacts/$series"
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             pkg install -y -r OPNsense opnsense os-bind
             install -d -m 0750 /conf
             if [ ! -e /conf/config.xml ]; then
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             dependencies=$(
               for package in "$output"/*.pkg; do
                 /usr/local/sbin/pkg-static query -F "$package" '%dn'
@@ -456,8 +465,8 @@ jobs:
             if [ -n "$dependencies" ]; then
               pkg install -y -r OPNsense $dependencies
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
-            python3 .github/ci/package_checksums.py \
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/package_checksums.py \
               --pkg-command /usr/local/sbin/pkg-static \
               "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg "$output"/os-bind-rp-*.pkg
             /usr/local/sbin/pkg-static repo "$output"
@@ -470,9 +479,9 @@ jobs:
             }
             EOF
             /usr/local/sbin/pkg-static update -r resolver-plugins-development
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             /usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
               pkg query -e "%n = $package" '%n-%v'
@@ -480,7 +489,7 @@ jobs:
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
             pkg check -s bind-tools bind920 os-bind-rp
-            .github/ci/verify-bind-runtime.sh
+            .github/ci/bind/verify-bind-runtime.sh
 
   publish-development:
     if: needs.select.outputs.mode == 'development'
@@ -505,14 +514,14 @@ jobs:
           set -euo pipefail
           pr_state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state)
           if [ "$pr_state" != open ]; then
-            python3 .github/ci/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
+            python3 .github/ci/shared/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
             exit 0
           fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "os-bind-rp development $TAG" --prerelease --notes "Development build for pull request testing." || true
           gh release upload "$TAG" "artifacts/$SERIES"/* --clobber --repo "$GITHUB_REPOSITORY"
           pr_state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state)
           if [ "$pr_state" != open ]; then
-            python3 .github/ci/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
+            python3 .github/ci/shared/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
           fi
 
   sign:
@@ -551,20 +560,20 @@ jobs:
           set -euo pipefail
           output="artifacts/$SERIES"
           grep -Fqx "source_commit=$SOURCE_COMMIT" "$output/build-metadata.txt"
-          python3 .github/ci/release_channel.py validate-bind-provenance --provenance "$output/bind920-provenance.json" --profile .resolver-plugins/bind920.json --series "$SERIES" --freebsd-release '${{ needs.profile.outputs.freebsd_release }}' --target-pkg-metadata .resolver-plugins/target-pkg.json
-          python3 .github/ci/release_channel.py validate-build-metadata --metadata "$output/build-metadata.txt" --upstream "$output/trusted-upstream.json" --provenance "$output/bind920-provenance.json" --series "$SERIES" --source-commit "$SOURCE_COMMIT" --target-pkg-metadata .resolver-plugins/target-pkg.json
+          python3 .github/ci/shared/release_channel.py validate-bind-provenance --provenance "$output/bind920-provenance.json" --profile .resolver-plugins/bind920.json --series "$SERIES" --freebsd-release '${{ needs.profile.outputs.freebsd_release }}' --target-pkg-metadata .resolver-plugins/target-pkg.json
+          python3 .github/ci/shared/release_channel.py validate-build-metadata --metadata "$output/build-metadata.txt" --upstream "$output/trusted-upstream.json" --provenance "$output/bind920-provenance.json" --series "$SERIES" --source-commit "$SOURCE_COMMIT" --target-pkg-metadata .resolver-plugins/target-pkg.json
           set -- "$output"/os-bind-rp-*.pkg
           [[ "$#" -eq 1 && -f "$1" ]]
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          reused=$(python3 .github/ci/release_channel.py reuse-snapshot --repository resolver-plugins/repository --series "$SERIES" --version "$version" --source-commit "$SOURCE_COMMIT" --output "$output/repository" --public-key docs/package-repository/resolver-plugins.pub --target-pkg-metadata .resolver-plugins/target-pkg.json --provenance "$output/bind920-provenance.json")
+          reused=$(python3 .github/ci/shared/release_channel.py reuse-snapshot --repository resolver-plugins/repository --series "$SERIES" --version "$version" --source-commit "$SOURCE_COMMIT" --output "$output/repository" --public-key docs/package-repository/resolver-plugins.pub --target-pkg-metadata .resolver-plugins/target-pkg.json --provenance "$output/bind920-provenance.json")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
       - name: Fetch current HA DHCP component
         env:
           GH_TOKEN: ${{ github.token }}
           SERIES: ${{ needs.select.outputs.series }}
         run: |
-          python3 .github/ci/package_catalogue.py fetch --component dhcp --series "$SERIES" --output "artifacts/$SERIES/dhcp-current"
+          python3 .github/ci/shared/package_catalogue.py fetch --component dhcp --series "$SERIES" --output "artifacts/$SERIES/dhcp-current"
       - name: Sign package repository
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -584,12 +593,12 @@ jobs:
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
             if [ "$series" = 26.7 ]; then
-              RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/dhcp_interface_ha_release.py snapshot --series "$series")
+              RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py snapshot --series "$series")
               export RP_OPNSENSE_SNAPSHOT
             fi
-            RP_UPSTREAM_METADATA="artifacts/$series/trusted-upstream.json" .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA="artifacts/$series/trusted-upstream.json" .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             umask 077
             key=.rp-pkg-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
@@ -597,7 +606,7 @@ jobs:
             output="artifacts/${{ needs.select.outputs.series }}"
             mkdir -p "$output/repository"
             if [ "$REUSED" != true ]; then
-              python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json --control-commit '${{ needs.profile.outputs.control_commit }}'
+              python3 .github/ci/shared/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json --control-commit '${{ needs.profile.outputs.control_commit }}'
               cp -R "$output/repository/current" "$output/repository/snapshot"
               openssl pkey -in "$key" -pubout -out "$output/resolver-plugins.pub"
               cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub" || {
@@ -608,7 +617,7 @@ jobs:
                 cp "$output/resolver-plugins.pub" "$repository/"
               done
             fi
-            python3 .github/ci/package_catalogue.py stage \
+            python3 .github/ci/shared/package_catalogue.py stage \
               --bind-channel "$output/repository/current" --dhcp-channel "$output/dhcp-current" \
               --output "$output/repository/combined" --series "$series" --key "$key"
             rm -f "$key"
@@ -667,13 +676,13 @@ jobs:
           set -- "$root"/snapshot/os-bind-rp-*.pkg
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          snapshot_tag=$(python3 .github/ci/release_channel.py snapshot-tag "$SERIES" "$version" --provenance "$root/current/bind920-provenance.json")
+          snapshot_tag=$(python3 .github/ci/shared/release_channel.py snapshot-tag "$SERIES" "$version" --provenance "$root/current/bind920-provenance.json")
           channels=(--channel "$snapshot_tag=$root/snapshot")
           channels+=(--channel "pkg-$SERIES=$root/current")
-          python3 .github/ci/release_channel.py publish-channels --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" "${channels[@]}"
-          python3 .github/ci/package_catalogue.py publish --repository resolver-plugins/repository --directory "$root/combined" --recovery "$RUNNER_TEMP/recovery"
-          python3 .github/ci/release_channel.py prune-snapshots --repository resolver-plugins/repository --series "$SERIES" --keep 5
-          python3 .github/ci/release_channel.py mark-latest-package-channel --repository resolver-plugins/repository
+          python3 .github/ci/shared/release_channel.py publish-channels --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" "${channels[@]}"
+          python3 .github/ci/shared/package_catalogue.py publish --repository resolver-plugins/repository --directory "$root/combined" --recovery "$RUNNER_TEMP/recovery"
+          python3 .github/ci/shared/release_channel.py prune-snapshots --repository resolver-plugins/repository --series "$SERIES" --keep 5
+          python3 .github/ci/shared/release_channel.py mark-latest-package-channel --repository resolver-plugins/repository
 
   verify:
     if: needs.select.outputs.mode == 'production'
@@ -713,16 +722,16 @@ jobs:
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
             root="artifacts/$series/repository"
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             pkg install -y -r OPNsense opnsense os-bind
             install -d -m 0750 /conf
             if [ ! -e /conf/config.xml ]; then
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             dependencies=$(
               for package in \
                 "$root"/current/bind-tools-*.pkg \
@@ -735,13 +744,13 @@ jobs:
             if [ -n "$dependencies" ]; then
               pkg install -y -r OPNsense $dependencies
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
-            python3 .github/ci/package_checksums.py \
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/package_checksums.py \
               --pkg-command /usr/local/sbin/pkg-static \
               "$root"/current/bind-tools-*.pkg "$root"/current/bind920-*.pkg \
               "$root"/current/os-bind-rp-*.pkg "$root"/snapshot/bind-tools-*.pkg \
               "$root"/snapshot/bind920-*.pkg "$root"/snapshot/os-bind-rp-*.pkg
-            python3 .github/ci/package_catalogue.py verify --directory "$root/combined" --url "file://$PWD/$root/combined"
+            python3 .github/ci/shared/package_catalogue.py verify --directory "$root/combined" --url "file://$PWD/$root/combined"
             install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
             install -m 0644 "$root/current/resolver-plugins.pub" /usr/local/etc/pkg/keys/resolver-plugins.pub
             cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
@@ -757,9 +766,9 @@ jobs:
             for package in bind-tools bind920 os-bind-rp; do
               pkg rquery -r resolver-plugins -e "%n = $package" '%n-%v'
             done
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             /usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
               pkg query -e "%n = $package" '%n-%v'
@@ -767,7 +776,7 @@ jobs:
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
             pkg check -s bind-tools bind920 os-bind-rp
-            .github/ci/verify-bind-runtime.sh
+            .github/ci/bind/verify-bind-runtime.sh
             cat > /usr/local/etc/pkg/repos/resolver-plugins-rollback.conf <<EOF
             resolver-plugins-rollback: {
               url: "file://$PWD/$root/snapshot",
@@ -782,7 +791,7 @@ jobs:
               pkg rquery -r resolver-plugins-rollback -e "%n = $package" '%n-%v'
             done
             /usr/local/sbin/pkg-static install -f -y -r resolver-plugins-rollback os-bind-rp
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             pkg query -e '%n = os-bind-rp' '%n-%v'
 
   verify-published:
@@ -826,9 +835,9 @@ jobs:
             package_abi=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["package_abi"])' "$root/channel.json")
             channel_url="https://resolver-plugins.github.io/repository/pkg/$package_abi/$series/latest"
             repository_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
-            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             pkg install -y -r OPNsense opnsense os-bind
             SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
             export SSL_CERT_FILE
@@ -838,7 +847,7 @@ jobs:
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             expected_identities=$(
               for archive in \
                 "$root"/bind-tools-*.pkg \
@@ -848,13 +857,13 @@ jobs:
                 /usr/local/sbin/pkg-static query -F "$archive" '%n|%v|%o'
               done | sort
             )
-            python3 .github/ci/package_checksums.py \
+            python3 .github/ci/shared/package_checksums.py \
               --pkg-command /usr/local/sbin/pkg-static \
               "$root"/bind-tools-*.pkg "$root"/bind920-*.pkg "$root"/os-bind-rp-*.pkg
             install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
             install -m 0644 docs/package-repository/resolver-plugins.pub /usr/local/etc/pkg/keys/resolver-plugins.pub
             attempt=1
-            while ! python3 .github/ci/release_channel.py verify-abi-endpoint --url "$channel_url" --expected-channel "$root"; do
+            while ! python3 .github/ci/shared/release_channel.py verify-abi-endpoint --url "$channel_url" --expected-channel "$root"; do
               if [ "$attempt" -ge 20 ]; then
                 echo 'published Resolver Plugins static channel did not match staged bytes' >&2
                 exit 1
@@ -862,7 +871,7 @@ jobs:
               sleep 30
               attempt=$((attempt + 1))
             done
-            python3 .github/ci/package_catalogue.py verify --directory "$root" --url "$channel_url"
+            python3 .github/ci/shared/package_catalogue.py verify --directory "$root" --url "$channel_url"
             cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
             resolver-plugins: {
               url: "$repository_url",
@@ -889,7 +898,7 @@ jobs:
                 pkg install -y -r OPNsense "$dependency"
               done
             fi
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             shim="$PWD/.published-channel-bin"
             approval="$PWD/.published-channel-approval"
             install -d -m 0755 "$shim"
@@ -905,7 +914,7 @@ jobs:
             printf 'yes\n' > "$approval"
             PATH="$shim:$PATH" RP_TTY_PATH="$approval" \
               RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh
-            python3 .github/ci/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
+            python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
               case "$package" in
@@ -927,7 +936,7 @@ jobs:
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
             pkg check -s bind-tools bind920 os-bind-rp
-            .github/ci/verify-bind-runtime.sh
+            .github/ci/bind/verify-bind-runtime.sh
 
   source-release:
     if: needs.select.outputs.mode == 'production'
@@ -956,9 +965,9 @@ jobs:
           [ "$#" -eq 1 ] && [ -f "$1" ]
           version=${1##*/os-bind-rp-}
           version=${version%.pkg}
-          tag=$(python3 .github/ci/release_channel.py source-release-tag "$SERIES" "$version" --provenance "$output/bind920-provenance.json")
+          tag=$(python3 .github/ci/shared/release_channel.py source-release-tag "$SERIES" "$version" --provenance "$output/bind920-provenance.json")
           source_output="$RUNNER_TEMP/source-release"
           mkdir "$source_output"
           cp "$1" "$output/build-metadata.txt" "$source_output/"
-          python3 .github/ci/release_channel.py publish-immutable --repository "$GITHUB_REPOSITORY" \
+          python3 .github/ci/shared/release_channel.py publish-immutable --repository "$GITHUB_REPOSITORY" \
             --tag "$tag" --directory "$source_output" --title "os-bind-rp $SERIES $version"
