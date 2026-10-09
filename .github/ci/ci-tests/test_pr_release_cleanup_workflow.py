@@ -31,11 +31,7 @@ def test_pull_request_release_cleanup_uses_only_trusted_code():
         "refs/pull/",
     ):
         assert untrusted_ref not in workflow
-
-
-def test_pull_request_release_cleanup_has_only_required_write_permission():
-    workflow = workflow_text()
-    cleanup = job_text(workflow, "cleanup")
+    cleanup = job_text(workflow, 'cleanup')
     assert_permissions(workflow, {})
-    assert_permissions(cleanup, {"contents": "write"}, indent=4)
-    assert "GH_TOKEN: ${{ github.token }}" in cleanup
+    assert_permissions(cleanup, {'contents': 'write'}, indent=4)
+    assert 'GH_TOKEN: ${{ github.token }}' in cleanup

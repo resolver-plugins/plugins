@@ -47,28 +47,18 @@ class ReuseBind920Test(unittest.TestCase):
         self.assertEqual(PACKAGES, reuse_bind920.select_candidate(
             PROVENANCE, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR))
 
-    def test_different_fingerprint_is_an_ordinary_cache_miss(self) -> None:
-        """A changed BIND profile must rebuild instead of reusing old BIND."""
-        provenance = dict(PROVENANCE, fingerprint="0" * 64)
-        with self.assertRaisesRegex(reuse_bind920.CacheMiss, "fingerprint differs"):
-            reuse_bind920.select_candidate(
-                provenance, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-            )
-
-    def test_different_creator_provenance_is_a_cache_miss(self) -> None:
-        changed = dict(PROVENANCE, package_creator=dict(PACKAGE_CREATOR, sha256="c" * 64))
-        with self.assertRaisesRegex(reuse_bind920.CacheMiss, "creator differs"):
-            reuse_bind920.select_candidate(
-                changed, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-            )
-
-    def test_schema_two_provenance_is_a_cache_miss_after_build_recipe_versioning(self) -> None:
-        legacy = dict(PROVENANCE, schema=2)
-
-        with self.assertRaisesRegex(reuse_bind920.CacheMiss, "schema differs"):
-            reuse_bind920.select_candidate(
-                legacy, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-            )
+    def test_compatibility_drift_is_an_ordinary_cache_miss(self) -> None:
+        """Compatibility drift selects a fresh build rather than an old BIND pair."""
+        for changes, diagnostic in [
+            ({'fingerprint': '0' * 64}, 'fingerprint differs'),
+            ({'package_creator': dict(PACKAGE_CREATOR, sha256='c' * 64)}, 'creator differs'),
+            ({'schema': 2}, 'schema differs'),
+        ]:
+            with self.subTest(diagnostic=diagnostic):
+                with self.assertRaisesRegex(reuse_bind920.CacheMiss, diagnostic):
+                    reuse_bind920.select_candidate(
+                        dict(PROVENANCE, **changes), PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR
+                    )
 
     def test_invalid_package_identity_is_rejected(self) -> None:
         """Malformed matching metadata must not silently become a cache miss."""

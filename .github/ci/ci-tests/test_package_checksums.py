@@ -42,7 +42,8 @@ def test_accepts_complete_target_readable_file_checksums(tmp_path: Path, prefix:
 
 @pytest.mark.parametrize(
     "output",
-    ["", "/usr/local/sbin/named|(null)\n", "/usr/local/sbin/named|\n"],
+    ["", "/usr/local/sbin/named|(null)\n",
+     "/usr/local/first|" + "a" * 64 + "\n/usr/local/sbin/named|\n"],
 )
 def test_rejects_missing_or_null_file_checksums(tmp_path: Path, output: str) -> None:
     archive = tmp_path / "bind920.pkg"

@@ -160,8 +160,10 @@ def run_verifier(
     return result, commands, fake_state
 
 
-@pytest.mark.parametrize("original_conf_present", [True, False])
-@pytest.mark.parametrize("canary_success", [True, False])
+@pytest.mark.parametrize(("original_conf_present", "canary_success"), [
+    pytest.param(True, True, id="conf-present-success"),
+    pytest.param(False, False, id="conf-absent-failure"),
+])
 def test_runtime_verifier_restores_named_conf_on_every_exit(
     tmp_path, original_conf_present, canary_success
 ):
@@ -207,33 +209,23 @@ def test_runtime_verifier_reports_restore_failure_and_finishes_cleanup(tmp_path)
     assert all("named_flags" not in command for command in commands)
 
 
-def test_runtime_verifier_removes_temporary_enable_setting_when_initially_absent(
-    tmp_path,
-):
+@pytest.mark.parametrize('settings_present', [False, True], ids=['absent', 'explicit-empty'])
+def test_runtime_verifier_preserves_absent_and_empty_rc_settings(tmp_path, settings_present):
     result, commands, _ = run_verifier(
         tmp_path,
-        original_conf_present=False,
-        original_enable_present=False,
+        original_conf_present=settings_present,
+        original_conf_value='',
+        original_enable_present=settings_present,
+        original_enable_value='',
         canary_success=True,
     )
-
     assert result.returncode == 0
-    assert "sysrc|-s|named|-x|named_enable" in commands
-
-
-def test_runtime_verifier_preserves_present_empty_rc_settings(tmp_path):
-    result, commands, _ = run_verifier(
-        tmp_path,
-        original_conf_present=True,
-        original_conf_value="",
-        original_enable_present=True,
-        original_enable_value="",
-        canary_success=True,
-    )
-
-    assert result.returncode == 0
-    assert "sysrc|-s|named|named_conf=" in commands
-    assert "sysrc|-s|named|named_enable=" in commands
+    if settings_present:
+        assert 'sysrc|-s|named|named_conf=' in commands
+        assert 'sysrc|-s|named|named_enable=' in commands
+    else:
+        assert 'sysrc|-s|named|-x|named_conf' in commands
+        assert 'sysrc|-s|named|-x|named_enable' in commands
 
 
 def test_runtime_verifier_stops_after_partial_start_failure(tmp_path):

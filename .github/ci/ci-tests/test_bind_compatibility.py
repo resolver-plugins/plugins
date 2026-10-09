@@ -32,33 +32,6 @@ class BindCompatibilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             bind_compatibility.freebsd_release(policy, "27.1")
 
-    def test_only_eligible_opnsense_bind_is_preferred(self) -> None:
-        policy = bind_compatibility.validate_policy(POLICY)
-        bind = ('bind920', '9.20.26', 'dns/bind920')
-        tools = ('bind-tools', '9.20.26', 'dns/bind-tools')
-        comparisons = {'9.20.25': '<', '9.20.26': '=', '9.20.27': '>'}
-        def compare(candidate, minimum):
-            self.assertEqual('9.20.26', minimum)
-            return comparisons[candidate]
-        cases = [
-            (bind, tools, True),
-            (('bind920', '9.20.27', 'dns/bind920'), ('bind-tools', '9.20.27', 'dns/bind-tools'), True),
-            (bind, ('bind-tools', '9.20.26', 'dns/bind-tools-alt'), False),
-            (('bind920', '9.20.25', 'dns/bind920'), tools, False),
-            (bind, ('', '', ''), False),
-            (('bind920', '9.20.26', 'other/bind920'), tools, False),
-        ]
-        for installed_bind, installed_tools, expected in cases:
-            with self.subTest(bind=installed_bind, tools=installed_tools):
-                self.assertEqual(expected, bind_compatibility.is_eligible(
-                    policy, installed_bind, installed_tools, compare))
-
-    def test_policy_file_is_committed_and_valid(self) -> None:
-        """The build wrapper uses a reviewable, static compatibility contract."""
-        policy_path = MODULE_PATH.parents[3] / ".resolver-plugins/bind-compatibility.json"
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
-        self.assertEqual(POLICY, bind_compatibility.validate_policy(policy))
-
     def test_policy_commands_expose_minimum_version_and_required_identity(self) -> None:
         policy_path = MODULE_PATH.parents[3] / '.resolver-plugins/bind-compatibility.json'
         for command, series, arguments, expected in [

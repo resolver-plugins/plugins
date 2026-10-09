@@ -912,8 +912,38 @@ jobs:
             EOF
             chmod 0755 "$shim/opnsense-version"
             printf 'yes\n' > "$approval"
-            PATH="$shim:$PATH" RP_TTY_PATH="$approval" \
-              RP_PKG_STATIC_COMMAND=/usr/local/sbin/pkg-static scripts/install-os-bind-rp.sh
+            state_directory="$PWD/.published-channel-state"
+            transaction_directory="$PWD/.published-channel-transaction"
+            pkg_log="$PWD/.published-channel-pkg.log"
+            config_sha256=$(sha256 -q /conf/config.xml)
+            config_mode=$(stat -f %Lp /conf/config.xml)
+            cat > "$shim/observe-pkg-static" <<'EOF'
+            #!/bin/sh
+            printf '%s\n' "$*" >> "${RP_PUBLISHED_PKG_LOG:?}"
+            exec /usr/local/sbin/pkg-static "$@"
+            EOF
+            chmod 0755 "$shim/observe-pkg-static"
+            RP_STATE_DIRECTORY="$state_directory" RP_TEMPORARY_DIRECTORY="$transaction_directory" \
+              RP_PUBLISHED_PKG_LOG="$pkg_log" \
+              PATH="$shim:$PATH" RP_TTY_PATH="$approval" \
+              RP_PKG_STATIC_COMMAND="$shim/observe-pkg-static" scripts/install-os-bind-rp.sh
+            test "$(stat -f %Lp "$state_directory")" = 700
+            test "$(sha256 -q "$state_directory/config.xml.bak")" = "$config_sha256"
+            test "$(stat -f %Lp "$state_directory/config.xml.bak")" = "$config_mode"
+            test -s "$state_directory/pkg-install.dry-run.txt"
+            test -s "$state_directory/candidate-sha256.txt"
+            while IFS='|' read -r identity digest archive; do
+              case "$archive" in "$transaction_directory"/verified-repository/*) ;; *) exit 1 ;; esac
+              [ "$(sha256 -q "$archive")" = "$digest" ]
+              [ "$(sha256 -q "$root/$identity.pkg")" = "$digest" ]
+            done < "$state_directory/candidate-sha256.txt"
+            awk -v prefix="-o REPOS_DIR=$transaction_directory/isolated-repos " '
+              index($0, prefix "install -n -r resolver-verified ") == 1 { planned = NR }
+              /(^| )install -y / {
+                if (!planned || index($0, prefix "install -y -r resolver-verified ") != 1) exit 1
+                if (index($0, " os-bind-rp-")) installed = 1
+              }
+              END { if (!planned || !installed) exit 1 }' "$pkg_log"
             python3 .github/ci/shared/target_pkg.py verify .resolver-plugins/target-pkg.json "$series"
             [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do

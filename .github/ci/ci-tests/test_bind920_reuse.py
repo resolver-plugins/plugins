@@ -16,9 +16,6 @@ PACKAGE_CREATOR = package_creator("FreeBSD:14:amd64")
 
 
 class Bind920ReuseTest(unittest.TestCase):
-    def test_package_version_uses_positive_portrevision_suffix(self) -> None:
-        self.assertEqual("9.20.26_2", bind920_profile.package_version(PROFILE))
-
     def test_fingerprint_rejects_different_compatibility_inputs(self) -> None:
         """Changing any compatibility input must prevent package reuse."""
         baseline = bind920_profile.compatibility_fingerprint(
@@ -48,20 +45,12 @@ class Bind920ReuseTest(unittest.TestCase):
         self.assertNotEqual(baseline, corrected)
 
     def test_provenance_requires_exact_bind_package_identities(self) -> None:
-        """A cache candidate must identify both BIND package archives exactly."""
-        provenance = bind920_profile.build_provenance(
-            PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, PACKAGES
-        )
-        self.assertEqual("dns/bind920", provenance["packages"]["bind920"]["origin"])
-        self.assertEqual(PACKAGE_CREATOR, provenance["package_creator"])
-        self.assertEqual(3, provenance["schema"])
-        self.assertEqual(hashlib.sha256(bind920_profile.BUILD_RECIPE_PATH.read_bytes()).hexdigest(),
-                         provenance["build_recipe_sha256"])
+        """A matching version with the wrong BIND origin is not reusable."""
         invalid = dict(PACKAGES)
-        invalid["bind920"] = dict(PACKAGES["bind920"], origin="dns/bind918")
-        with self.assertRaisesRegex(ValueError, "bind920 package"):
+        invalid['bind920'] = dict(PACKAGES['bind920'], origin='dns/bind918')
+        with self.assertRaisesRegex(ValueError, 'bind920 package'):
             bind920_profile.build_provenance(
-                PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, invalid
+                PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR, invalid
             )
 
 
@@ -71,40 +60,30 @@ class Bind920ReuseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "portrevision"):
             bind920_profile.validate_profile(profile)
 
-    def test_package_version_omits_zero_portrevision(self) -> None:
-        """Fresh Ports releases must use normal pkg versions without a _0 suffix."""
-        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
-        self.assertEqual("9.20.27", bind920_profile.package_version(profile))
-
-    def test_provenance_accepts_zero_portrevision_package_names(self):
-        profile = dict(PROFILE, distversion="9.20.27", portrevision=0)
-        provenance = bind920_profile.build_provenance(
-            profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, bind_records("9.20.27")
-        )
-        self.assertEqual("bind920-9.20.27.pkg", provenance["packages"]["bind920"]["filename"])
-
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
-        """The shell build wrapper must be able to write reusable provenance."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            profile = directory / "bind920.json"
-            bind_tools = directory / "bind-tools-9.20.26_2.pkg"
-            bind920 = directory / "bind920-9.20.26_2.pkg"
-            output = directory / "bind920-provenance.json"
-            profile.write_text(json.dumps(PROFILE), encoding="utf-8")
-            bind_tools.touch()
-            bind920.touch()
-            result = subprocess.run(
-                [
-                    "python3", str(MODULE_PATH), str(profile), "provenance", "26.1", "14.3",
-                    "--package-creator", json.dumps(PACKAGE_CREATOR),
-                    "--bind-tools", str(bind_tools), "--bind920", str(bind920), "--output", str(output),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(PACKAGES, json.loads(output.read_text())["packages"])
+        """The shell wrapper writes complete provenance for both package version forms."""
+        for version, revision, package_version in [('9.20.26', 2, '9.20.26_2'), ('9.20.27', 0, '9.20.27')]:
+            with self.subTest(version=version, revision=revision), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                profile = directory / 'bind920.json'
+                bind_tools = directory / f'bind-tools-{package_version}.pkg'
+                bind920 = directory / f'bind920-{package_version}.pkg'
+                output = directory / 'bind920-provenance.json'
+                profile.write_text(json.dumps(dict(PROFILE, distversion=version, portrevision=revision)))
+                bind_tools.touch()
+                bind920.touch()
+                result = subprocess.run([
+                    sys.executable, str(MODULE_PATH), str(profile), 'provenance', '26.1', '14.3',
+                    '--package-creator', json.dumps(PACKAGE_CREATOR),
+                    '--bind-tools', str(bind_tools), '--bind920', str(bind920), '--output', str(output),
+                ], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                provenance = json.loads(output.read_text())
+                self.assertEqual(bind_records(package_version), provenance['packages'])
+                self.assertEqual(3, provenance['schema'])
+                self.assertEqual(PACKAGE_CREATOR, provenance['package_creator'])
+                self.assertEqual(hashlib.sha256(bind920_profile.BUILD_RECIPE_PATH.read_bytes()).hexdigest(),
+                                 provenance['build_recipe_sha256'])
 
 
 if __name__ == "__main__":

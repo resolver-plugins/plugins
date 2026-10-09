@@ -183,52 +183,22 @@ def test_bootstrap_review_creates_sync_ref_before_target_and_assigns_pr(
                             f"{plan['source_release']}:.resolver-plugins/upstream.json"))['upstream_commit']
     assert f"https://github.com/opnsense/plugins/compare/{source}...{plan['upstream_commit']}" in github.pulls[0]['body']
 
-
-def test_retry_accepts_exact_ref_and_creates_missing_pr(publication_repository):
-    module = publisher_module()
-    plan = publication_repository['plan']
-    github = FakeGitHub(
-        refs={
-            plan['sync_branch']: publication_repository['sync_commit'],
-            plan['target_release']: publication_repository['target_commit'],
-        }
-    )
-
-    module.publish_plan(
-        publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github
-    )
-
+    expected_refs = dict(github.refs)
+    github.pulls.clear()
+    github.created_refs.clear()
+    module.publish_plan(publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github)
     assert github.created_refs == []
+    assert github.refs == expected_refs
     assert len(github.pulls) == 1
     assert github.pulls[0]['assignees'] == ['reviewer']
 
-
-def test_retry_assigns_existing_open_pr_without_creating_a_duplicate(
-    publication_repository,
-):
-    module = publisher_module()
-    plan = publication_repository['plan']
-    existing_pull = {
-        'number': 41,
-        'head': plan['sync_branch'],
-        'base': plan['target_release'],
-        'state': 'open',
-        'assignees': [],
-    }
-    github = FakeGitHub(
-        refs={
-            plan['sync_branch']: publication_repository['sync_commit'],
-            plan['target_release']: publication_repository['target_commit'],
-        },
-        pulls=[existing_pull],
-    )
-
-    module.publish_plan(
-        publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github
-    )
-
+    existing_pull = github.pulls[0]
+    existing_pull['assignees'] = []
+    module.publish_plan(publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github)
     assert github.pulls == [existing_pull]
     assert existing_pull['assignees'] == ['reviewer']
+    assert github.created_refs == []
+    assert github.refs == expected_refs
 
 
 def test_retry_refuses_to_replace_a_different_existing_ref(publication_repository):

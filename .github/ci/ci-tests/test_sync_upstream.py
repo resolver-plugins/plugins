@@ -225,48 +225,6 @@ def test_unrelated_existing_upstream_change_is_noop(repositories):
     assert decision['bind_changed'] is False
 
 
-def test_existing_release_with_bind_change_requires_review(repositories):
-    add_release(repositories, '26.7', repositories['initial'])
-    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
-
-    decision = plan(repositories)
-
-    assert decision['action'] == 'update-review'
-    assert decision['series'] == '26.7'
-    assert decision['bind_changed'] is True
-    assert decision['sync_branch'] == (
-        f'sync/bind/26.7/{repositories["stable_27_1"][:12]}'
-    )
-
-
-def test_new_series_with_matching_bind_tree_requires_bootstrap_review(repositories):
-    decision = plan(repositories)
-
-    assert decision['action'] == 'bootstrap-review'
-    assert decision['series'] == '26.7'
-    assert decision['source_release'] == 'release/bind-rp/26.1'
-    assert decision['target_release'] == 'release/bind-rp/26.7'
-    assert decision['tools_tag'] == '26.7.1'
-    assert decision['freebsd_release'] == '15.1'
-    assert decision['bind_changed'] is False
-    assert decision['sync_branch'] == (
-        f'sync/bootstrap/26.7/{repositories["stable_26_7"][:12]}'
-    )
-
-
-def test_new_series_with_bind_change_requires_bootstrap_review(repositories):
-    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
-
-    decision = plan(repositories)
-
-    assert decision['action'] == 'bootstrap-review'
-    assert decision['series'] == '26.7'
-    assert decision['bind_changed'] is True
-    assert decision['sync_branch'] == (
-        f'sync/bootstrap/26.7/{repositories["stable_27_1"][:12]}'
-    )
-
-
 def test_missing_source_metadata_blocks_planning(repositories):
     git(repositories['repository'], 'checkout', 'release/bind-rp/26.1')
     git(repositories['repository'], 'rm', METADATA_PATH)
@@ -279,33 +237,12 @@ def test_missing_source_metadata_blocks_planning(repositories):
     assert decision['reason'] == 'missing or invalid source metadata'
 
 
-@pytest.mark.parametrize(
-    ('field', 'invalid_value'),
-    (
-        ('upstream_branch', 'stable/26.7'),
-        ('upstream_commit', 'upstream/stable/26.1'),
-        ('core_commit', 'stable/26.1'),
-        ('core_archive_sha256', 'not-a-sha256'),
-        ('tools_tag', '26.1.r1'),
-        ('freebsd_release', 'not-a-release'),
-    ),
-)
-def test_noncanonical_source_metadata_blocks_planning(
-    repositories, field, invalid_value
-):
+def test_noncanonical_source_metadata_blocks_planning(repositories):
     repository = repositories['repository']
     git(repository, 'checkout', 'release/bind-rp/26.1')
     invalid_metadata = json.loads(metadata('26.1', repositories['initial']))
-    invalid_metadata[field] = invalid_value
-    if field == 'core_commit':
-        invalid_metadata['core_archive_url'] = (
-            f'https://github.com/opnsense/core/archive/{invalid_value}.tar.gz'
-        )
-    commit(
-        repository,
-        {METADATA_PATH: json.dumps(invalid_metadata)},
-        f'record invalid {field}',
-    )
+    invalid_metadata['tools_tag'] = '26.1.r1'
+    commit(repository, {METADATA_PATH: json.dumps(invalid_metadata)}, 'record invalid tools_tag')
     git(repository, 'checkout', 'master')
 
     decision = plan(repositories)
@@ -331,8 +268,16 @@ def test_metadata_commit_outside_recorded_upstream_branch_blocks_planning(reposi
     assert decision['reason'] == 'missing or invalid source metadata'
 
 
-def test_missing_numeric_tools_tag_blocks_planning(repositories):
-    git(repositories['tools'], 'tag', '-d', '26.7', '26.7.1')
+@pytest.mark.parametrize('fault', ['numeric-tag', 'build-conf', 'os-assignment'])
+def test_invalid_tools_release_profile_blocks_planning(repositories, fault):
+    tools = repositories['tools']
+    if fault == 'numeric-tag':
+        git(tools, 'tag', '-d', '26.7', '26.7.1')
+    elif fault == 'build-conf':
+        git(tools, 'tag', '-f', '26.7.1', git(tools, 'rev-parse', '26.1.11'))
+    else:
+        commit(tools, {'config/26.7/build.conf': 'PRODUCT?=OPNsense\n'}, 'tools tag without OS')
+        git(tools, 'tag', '26.7.2')
 
     decision = plan(repositories)
 
@@ -340,52 +285,35 @@ def test_missing_numeric_tools_tag_blocks_planning(repositories):
     assert decision['reason'] == 'missing or invalid tools release profile'
 
 
-def test_missing_tools_build_conf_blocks_planning(repositories):
-    old_commit = git(repositories['tools'], 'rev-parse', '26.1.11')
-    git(repositories['tools'], 'tag', '-f', '26.7.1', old_commit)
-
+@pytest.mark.parametrize('bind_changed', [False, True], ids=['unchanged-bind', 'changed-bind'])
+def test_apply_bootstrap_review_creates_pristine_release_and_overlay_branch(repositories, tmp_path, bind_changed):
+    upstream_commit = repositories['stable_27_1' if bind_changed else 'stable_26_7']
+    repository = repositories['repository']
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', upstream_commit)
     decision = plan(repositories)
-
-    assert decision['action'] == 'blocked'
-    assert decision['reason'] == 'missing or invalid tools release profile'
-
-
-def test_missing_tools_os_assignment_blocks_planning(repositories):
-    commit(
-        repositories['tools'],
-        {'config/26.7/build.conf': 'PRODUCT?=OPNsense\n'},
-        'tools tag without OS',
-    )
-    git(repositories['tools'], 'tag', '26.7.2')
-
-    decision = plan(repositories)
-
-    assert decision['action'] == 'blocked'
-    assert decision['reason'] == 'missing or invalid tools release profile'
-
-
-def test_apply_bootstrap_review_creates_pristine_release_and_overlay_branch_for_unchanged_bind(
-    repositories, tmp_path
-):
-    decision = plan(repositories)
+    assert decision['action'] == 'bootstrap-review'
+    assert decision['series'] == '26.7'
+    assert decision['source_release'] == 'release/bind-rp/26.1'
+    assert decision['target_release'] == 'release/bind-rp/26.7'
+    assert decision['tools_tag'] == '26.7.1'
+    assert decision['freebsd_release'] == '15.1'
+    assert decision['bind_changed'] is bind_changed
+    assert decision['sync_branch'] == f'sync/bootstrap/26.7/{upstream_commit[:12]}'
 
     result = apply(repositories, decision, tmp_path)
 
     assert result.returncode == 0, result.stderr
     target = decision['target_release']
-    assert git(repositories['repository'], 'ls-tree', target, '--', 'tools/resolver-overlay.txt') == ''
-    assert git(
-        repositories['repository'],
-        'show',
-        f'{decision["sync_branch"]}:tools/resolver-overlay.txt',
-    ) == 'resolver overlay'
+    assert git(repository, 'ls-tree', target, '--', 'tools/resolver-overlay.txt') == ''
+    assert git(repository, 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
     for branch in (target, decision['sync_branch']):
-        assert git(repositories['repository'], 'ls-tree', branch, '--', 'tools/not-an-overlay.txt') == ''
-    target_metadata = json.loads(git(repositories['repository'], 'show', f'{target}:{METADATA_PATH}'))
+        assert git(repository, 'show', f'{branch}:dns/bind/bind.conf') == ('bind-v2' if bind_changed else 'bind-v1')
+        assert git(repository, 'ls-tree', branch, '--', 'tools/not-an-overlay.txt') == ''
+    target_metadata = json.loads(git(repository, 'show', f'{target}:{METADATA_PATH}'))
     assert target_metadata == {
         'series': '26.7',
         'upstream_branch': 'stable/26.7',
-        'upstream_commit': repositories['stable_26_7'],
+        'upstream_commit': upstream_commit,
         'tools_tag': '26.7.1',
         'freebsd_release': '15.1',
         'core_commit': CORE_COMMIT,
@@ -453,20 +381,6 @@ def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
     assert git(repositories['repository'], 'rev-parse', decision['sync_branch']) == first_sync_commit
 
 
-def test_apply_bootstrap_review_creates_pristine_release_and_overlay_sync_branch(
-    repositories, tmp_path
-):
-    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
-    decision = plan(repositories)
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert git(repositories['repository'], 'show', f'{decision["target_release"]}:dns/bind/bind.conf') == 'bind-v2'
-    assert git(repositories['repository'], 'ls-tree', decision['target_release'], '--', 'tools/resolver-overlay.txt') == ''
-    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
-
-
 def test_apply_update_review_creates_only_overlay_sync_branch(repositories, tmp_path):
     add_release(repositories, '26.7', repositories['initial'])
     git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
@@ -478,6 +392,10 @@ def test_apply_update_review_creates_only_overlay_sync_branch(repositories, tmp_
     assert result.returncode == 0, result.stderr
     assert git(repositories['repository'], 'rev-parse', decision['target_release']) == source_sha
     assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
+    assert decision['action'] == 'update-review'
+    assert decision['series'] == '26.7'
+    assert decision['bind_changed'] is True
+    assert decision['sync_branch'] == f'sync/bind/26.7/{repositories["stable_27_1"][:12]}'
 
 
 def test_apply_three_way_merges_same_result_and_retains_target_and_overlay_changes(

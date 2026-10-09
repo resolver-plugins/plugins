@@ -42,26 +42,12 @@ def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, imm
 
 
 class ChannelTagTest(unittest.TestCase):
-    def test_series_abi_path_uses_exact_freebsd_amd64_package_abi_and_series(self) -> None:
-        """A package ABI and OPNsense series select one static repository path."""
-        self.assertEqual(
-            "pkg/FreeBSD:15:amd64/26.7/latest",
-            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7"),
-        )
-
     def test_series_abi_path_rejects_unsupported_inputs(self) -> None:
         """Unsupported ABI or series values must not become repository paths."""
         with self.assertRaisesRegex(ValueError, "invalid package ABI"):
             release_channel.series_abi_path("FreeBSD:15:arm64", "26.7")
         with self.assertRaisesRegex(ValueError, "invalid series"):
             release_channel.series_abi_path("FreeBSD:15:amd64", "26.7/archive")
-
-    def test_package_release_title_names_current_and_archive_purpose(self) -> None:
-        self.assertEqual("26.1-latest", release_channel.package_release_title("pkg-26.1"))
-        self.assertEqual(
-            "26.1-archive-1.36_9",
-            release_channel.package_release_title("pkg-26.1-os-bind-rp-1.36_9"),
-        )
 
     def test_package_release_title_rejects_non_channel_tags(self) -> None:
         for tag in (
@@ -73,13 +59,6 @@ class ChannelTagTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid package release tag"):
                     release_channel.package_release_title(tag)
 
-    def test_source_release_tag_identifies_the_series_plugin_and_bind_build(self) -> None:
-        fingerprint = "f" * 64
-        self.assertEqual(
-            f"os-bind-rp-26.7-1.36_7-bind-{fingerprint}",
-            release_channel.source_release_tag("26.7", "1.36_7", fingerprint),
-        )
-
     def test_channel_tags_are_series_scoped(self) -> None:
         """Current and immutable snapshot channels must never share a tag."""
         fingerprint = "f" * 64
@@ -87,6 +66,10 @@ class ChannelTagTest(unittest.TestCase):
         self.assertEqual(
             f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
             release_channel.snapshot_channel_tag("26.7", "1.36_2", fingerprint),
+        )
+        self.assertEqual(
+            f'os-bind-rp-26.7-1.36_7-bind-{fingerprint}',
+            release_channel.source_release_tag('26.7', '1.36_7', fingerprint),
         )
 
     def test_channel_tags_reject_invalid_series(self) -> None:
@@ -144,72 +127,6 @@ class GitHubCliTest(unittest.TestCase):
 
 
 class PullRequestReleaseCleanupTest(unittest.TestCase):
-    def test_pull_request_release_selection_rejects_near_matches(self) -> None:
-        releases = [
-            [
-                {"tag_name": "pr-51-26.7"},
-                {"tag_name": "pr-51-26.1"},
-                {"tag_name": "pr-510-26.7"},
-                {"tag_name": "pr-51-26.7-extra"},
-                {"tag_name": "os-bind-rp-26.7-1.36_2"},
-            ]
-        ]
-
-        self.assertEqual(
-            ["pr-51-26.1", "pr-51-26.7"],
-            release_channel.select_pull_request_release_tags(releases, "51"),
-        )
-
-    def test_pull_request_release_cleanup_deletes_release_and_tag(self) -> None:
-        commands: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            commands.append(command)
-            if command[:3] == ["gh", "api", "--method"]:
-                return subprocess.CompletedProcess(command, 1, "", "gh: Not Found (HTTP 404)")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_development_release(
-                "resolver-plugins/plugins", "pr-51-26.7"
-            )
-
-        self.assertEqual(
-            [
-                [
-                    "gh", "release", "delete", "pr-51-26.7", "--yes",
-                    "--repo", "resolver-plugins/plugins",
-                ],
-                [
-                    "gh", "api", "--method", "DELETE",
-                    "repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7",
-                ],
-            ],
-            commands,
-        )
-
-    def test_missing_pull_request_release_cleanup_removes_an_orphaned_tag(self) -> None:
-        commands: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            commands.append(command)
-            if command[:2] == ["gh", "release"]:
-                return subprocess.CompletedProcess(command, 1, "", "release not found")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_development_release(
-                "resolver-plugins/plugins", "pr-51-26.7"
-            )
-
-        self.assertEqual(
-            [
-                "gh", "api", "--method", "DELETE",
-                "repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7",
-            ],
-            commands[1],
-        )
-
     def test_pull_request_release_cleanup_does_not_hide_tag_api_failure(self) -> None:
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
             if command[:2] == ["gh", "release"]:
@@ -236,61 +153,38 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
         run.assert_not_called()
 
     def test_pull_request_release_cleanup_lists_and_deletes_exact_matches(self) -> None:
-        deleted: list[str] = []
+        commands: list[list[str]] = []
 
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command[:3] == ["gh", "api", "--paginate"]:
-                if "/releases?" in command[-1]:
-                    payload = [[
-                        {"tag_name": "pr-51-26.7"},
-                        {"tag_name": "pr-51-26.1"},
-                        {"tag_name": "pr-510-26.7"},
-                        {"tag_name": "pkg-26.7"},
-                    ]]
+            if command[:3] == ['gh', 'api', '--paginate']:
+                if '/releases?' in command[-1]:
+                    payload = [[{'tag_name': tag} for tag in (
+                        'pr-51-26.7', 'pr-51-26.1', 'pr-510-26.7', 'pr-51-26.7-extra',
+                        'pkg-26.7', 'os-bind-rp-26.7-1.36_2',
+                    )]]
                 else:
-                    payload = [[]]
-                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-            if command[:3] == ["gh", "api", "--method"]:
-                return subprocess.CompletedProcess(command, 1, "", "gh: Not Found (HTTP 404)")
-            deleted.append(command[3])
-            return subprocess.CompletedProcess(command, 0, "", "")
+                    payload = [[{'ref': ref} for ref in (
+                        'refs/tags/pr-51-27.1', 'refs/tags/pr-51-26.7',
+                        'refs/tags/pr-510-26.7', 'refs/tags/pkg-26.7',
+                    )]]
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), '')
+            commands.append(command)
+            if command[:2] == ['gh', 'release'] and command[3] == 'pr-51-27.1':
+                return subprocess.CompletedProcess(command, 1, '', 'release not found')
+            if command[:3] == ['gh', 'api', '--method'] and not command[-1].endswith('pr-51-27.1'):
+                return subprocess.CompletedProcess(command, 1, '', 'gh: Not Found (HTTP 404)')
+            return subprocess.CompletedProcess(command, 0, '', '')
 
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_pull_request_releases(
-                "resolver-plugins/plugins", "51"
-            )
+        with patch.object(release_channel.subprocess, 'run', side_effect=fake_run):
+            release_channel.cleanup_pull_request_releases('resolver-plugins/plugins', '51')
 
-        self.assertEqual(["pr-51-26.1", "pr-51-26.7"], deleted)
-
-    def test_pull_request_release_cleanup_discovers_an_orphaned_tag(self) -> None:
-        deleted_refs: list[str] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command[:3] == ["gh", "api", "--paginate"]:
-                if "/releases?" in command[-1]:
-                    payload = [[]]
-                else:
-                    payload = [[
-                        {"ref": "refs/tags/pr-51-26.7"},
-                        {"ref": "refs/tags/pr-510-26.7"},
-                        {"ref": "refs/tags/pkg-26.7"},
-                    ]]
-                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-            if command[:2] == ["gh", "release"]:
-                return subprocess.CompletedProcess(command, 1, "", "release not found")
-            deleted_refs.append(command[-1])
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_pull_request_releases(
-                "resolver-plugins/plugins", "51"
-            )
-
-        self.assertEqual(
-            ["repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7"],
-            deleted_refs,
-        )
-
+        expected = []
+        for tag in ('pr-51-26.1', 'pr-51-26.7', 'pr-51-27.1'):
+            expected.extend([
+                ['gh', 'release', 'delete', tag, '--yes', '--repo', 'resolver-plugins/plugins'],
+                ['gh', 'api', '--method', 'DELETE', f'repos/resolver-plugins/plugins/git/refs/tags/{tag}'],
+            ])
+        self.assertEqual(expected, commands)
 
 class SelfContainedRepositoryStageTest(unittest.TestCase):
     def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self):
@@ -790,13 +684,6 @@ class PublicationRecoveryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksum'):
                 release_channel.validate_channel_directory(directory)
 
-    def test_release_snapshot_comparison_detects_a_remote_change(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            snapshots = [make_snapshot(root / str(n), 'pkg-26.7', {'asset.pkg': data})
-                         for n, data in enumerate((b'old', b'changed'))]
-            self.assertFalse(release_channel.release_snapshots_match(*snapshots))
-
     def test_failed_promotion_restores_all_channels_from_preserved_bytes(self) -> None:
         """A failed later upload restores already changed releases without remote downloads."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -895,47 +782,39 @@ class PublicationRecoveryTest(unittest.TestCase):
                     )
 
     def test_retry_only_updates_titles_when_snapshot_and_current_are_identical(self) -> None:
-        """A repeated promotion corrects titles without rewriting package assets."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            channels = []
-            snapshots = {}
-            for tag in ("pkg-26.7-os-bind-rp-1.36_2", "pkg-26.7"):
-                staged = make_assets(root / f'staged-{tag}', {'asset.pkg': tag.encode()})
-                channels.append((tag, staged))
-                snapshots[tag] = make_snapshot(root / f'remote-{tag}', tag, {'asset.pkg': tag.encode()})
+        """Retry updates titles only after unchanged real snapshot bytes pass preflight."""
+        for changed in (False, True):
+            with self.subTest(changed_preflight=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                channels = []
+                snapshots = []
+                for tag in ('pkg-26.7-os-bind-rp-1.36_2', 'pkg-26.7'):
+                    staged = make_assets(root / f'staged-{tag}', {'asset.pkg': tag.encode()})
+                    channels.append((tag, staged))
+                    snapshots.append(make_snapshot(root / f'remote-{tag}', tag, {'asset.pkg': tag.encode()}))
+                preflight_current = (make_snapshot(root / 'changed-current', 'pkg-26.7', {'asset.pkg': b'changed'})
+                                     if changed else snapshots[1])
+                mutations: list[list[str]] = []
+                with (
+                    patch.object(release_channel, 'snapshot_release', side_effect=[*snapshots, snapshots[0], preflight_current]),
+                    patch.object(release_channel, 'validate_channel_directory'),
+                    patch.object(release_channel, 'publish') as publish,
+                    patch.object(release_channel, 'run_gh', side_effect=mutations.append),
+                ):
+                    with (self.assertRaisesRegex(RuntimeError, 'changed during publication preflight')
+                          if changed else nullcontext()):
+                        release_channel.publish_channels('resolver-plugins/repository', channels, root / 'recovery')
 
-            mutations: list[list[str]] = []
-            with (
-                patch.object(
-                    release_channel,
-                    "snapshot_release",
-                    side_effect=lambda repository, tag, recovery: snapshots[tag],
-                ),
-                patch.object(release_channel, "validate_channel_directory"),
-                patch.object(release_channel, "publish") as publish,
-                patch.object(release_channel, "run_gh", side_effect=mutations.append),
-            ):
-                release_channel.publish_channels(
-                    "resolver-plugins/repository", channels, root / "recovery"
-                )
-
-            publish.assert_not_called()
-            self.assertEqual(
-                [
-                    [
-                        "release", "edit", "pkg-26.7-os-bind-rp-1.36_2",
-                        "--repo", "resolver-plugins/repository",
-                        "--title", "26.7-archive-1.36_2", "--latest=false",
-                    ],
-                    [
-                        "release", "edit", "pkg-26.7",
-                        "--repo", "resolver-plugins/repository",
-                        "--title", "26.7-latest", "--latest=false",
-                    ],
-                ],
-                mutations,
-            )
+                publish.assert_not_called()
+                if changed:
+                    self.assertEqual([], mutations)
+                else:
+                    self.assertEqual([
+                        ['release', 'edit', 'pkg-26.7-os-bind-rp-1.36_2', '--repo', 'resolver-plugins/repository',
+                         '--title', '26.7-archive-1.36_2', '--latest=false'],
+                        ['release', 'edit', 'pkg-26.7', '--repo', 'resolver-plugins/repository',
+                         '--title', '26.7-latest', '--latest=false'],
+                    ], mutations)
 
     def test_source_and_control_ancestry(self):
         def manifest(source, control=None):

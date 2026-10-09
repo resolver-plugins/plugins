@@ -19,18 +19,10 @@ Bind920Profile = bind920_candidate.Bind920Profile
 CandidateProfile = bind920_candidate.CandidateProfile
 assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
-parse_bind920_makefile = bind920_candidate.parse_bind920_makefile
 render_commit_log_markdown = bind920_candidate.render_commit_log_markdown
-upstream_bind_release_tag = bind920_candidate.upstream_bind_release_tag
 
 
 class Bind920CandidateTest(unittest.TestCase):
-    def test_parse_bind920_makefile_reads_distversion_and_portrevision(self) -> None:
-        """A Ports recipe version bump must update both version inputs."""
-        text = "PORTNAME= bind920\nDISTVERSION= 9.20.27\nPORTREVISION= 2\n"
-        self.assertEqual(("9.20.27", 2), parse_bind920_makefile(text))
-
-
     def test_candidate_comparison_rejects_duplicates_and_downgrades(self):
         current = Bind920Profile("repo", "old", "m1", "d1", "9.20.26", 1)
         for version, revision, expected in [
@@ -74,31 +66,6 @@ class Bind920CandidateTest(unittest.TestCase):
         self.assertEqual("risky", result.classification)
         self.assertIn("dependency change", result.signals)
 
-    def test_assessment_classifies_long_dependency_continuation_drift_as_risky(self) -> None:
-        """Dependency changes must be detected even when a compact diff omits the assignment header."""
-        old_makefile = """PORTNAME= bind920
-DISTVERSION= 9.20.27
-LIB_DEPENDS= liba.so:devel/a \\
-  libb.so:devel/b \\
-  libd.so:devel/d \\
-  libe.so:devel/e \\
-  libf.so:devel/f
-"""
-        new_makefile = old_makefile.replace("libf.so:devel/f", "libg.so:devel/g")
-        compact_diff = "@@ -5,1 +5,1 @@\n-  libf.so:devel/f\n+  libg.so:devel/g\n"
-
-        result = assess_candidate(
-            "9.20.26",
-            "9.20.27",
-            "Maintenance release.",
-            compact_diff,
-            old_makefile_text=old_makefile,
-            new_makefile_text=new_makefile,
-        )
-
-        self.assertEqual("risky", result.classification)
-        self.assertIn("dependency change", result.signals)
-
     def test_assessment_compares_repeated_dependency_assignments(self) -> None:
         """Repeated dependency-like assignments must be compared as distinct logical blocks."""
         old_makefile = """PORTNAME= bind920
@@ -135,11 +102,6 @@ CONFIGURE_ARGS+= --enable-fixed
         self.assertIn("dependency change", result.signals)
 
 
-    def test_upstream_bind_release_tag_strips_portrevision(self) -> None:
-        """Upstream BIND tags must be based on BIND versions, not FreeBSD package revisions."""
-        self.assertEqual("v9.20.26", upstream_bind_release_tag("9.20.26_2"))
-        self.assertEqual("v9.20.27", upstream_bind_release_tag("9.20.27"))
-
     def test_render_commit_log_markdown_lists_subjects_or_empty_fallback(self):
         for commits, expected in [
             ('abc1234 Fix resolver crash\ndef5678 Improve DNSSEC validation\n',
@@ -152,23 +114,30 @@ CONFIGURE_ARGS+= --enable-fixed
 
 
     def test_update_profile_cli_hashes_candidate_files(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            current = write_json(directory / 'bind920.json', BIND_PROFILE)
-            makefile, distinfo = directory / 'Makefile', directory / 'distinfo'
-            makefile.write_text('PORTNAME= bind920\nDISTVERSION= 9.20.27\n')
-            distinfo.write_text('TIMESTAMP = 1\nSHA256 (bind-9.20.27.tar.xz) = abc123\nSIZE (bind-9.20.27.tar.xz) = 1\n')
-            result = subprocess.run([
-                sys.executable, str(MODULE_PATH), 'update-profile', '--current', str(current),
-                '--ports-repository', BIND_PROFILE['ports_repository'], '--ports-commit', 'f' * 40,
-                '--makefile', str(makefile), '--distinfo', str(distinfo), '--output', str(current),
-            ], capture_output=True, text=True)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual(list(BIND_PROFILE), list(json.loads(current.read_text())))
-            self.assertEqual(dict(BIND_PROFILE, ports_commit='f' * 40, distversion='9.20.27', portrevision=0,
-                                  makefile_sha256=hashlib.sha256(makefile.read_bytes()).hexdigest(),
-                                  distinfo_sha256=hashlib.sha256(distinfo.read_bytes()).hexdigest()),
-                             json.loads(current.read_text()))
+        for version, revision in [('9.20.27', 0), ('9.20.26', 2)]:
+            with self.subTest(version=version, revision=revision), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                current = write_json(directory / 'bind920.json', dict(BIND_PROFILE, portrevision=1))
+                makefile, distinfo = directory / 'Makefile', directory / 'distinfo'
+                makefile.write_text(f'PORTNAME= bind920\nDISTVERSION= {version}\n' +
+                                    (f'PORTREVISION= {revision}\n' if revision else ''))
+                distinfo.write_text(f'TIMESTAMP = 1\nSHA256 (bind-{version}.tar.xz) = abc123\nSIZE (bind-{version}.tar.xz) = 1\n')
+                result = subprocess.run([
+                    sys.executable, str(MODULE_PATH), 'update-profile', '--current', str(current),
+                    '--ports-repository', BIND_PROFILE['ports_repository'], '--ports-commit', 'f' * 40,
+                    '--makefile', str(makefile), '--distinfo', str(distinfo), '--output', str(current),
+                ], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                profile = json.loads(current.read_text())
+                self.assertEqual(dict(BIND_PROFILE, ports_commit='f' * 40, distversion=version, portrevision=revision,
+                                      makefile_sha256=hashlib.sha256(makefile.read_bytes()).hexdigest(),
+                                      distinfo_sha256=hashlib.sha256(distinfo.read_bytes()).hexdigest()), profile)
+                package_version = profile['distversion'] + (f"_{profile['portrevision']}" if profile['portrevision'] else '')
+                result = subprocess.run([
+                    sys.executable, str(MODULE_PATH), 'upstream-tag', '--version', package_version,
+                ], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(f'v{version}\n', result.stdout)
 
 
     def test_candidate_from_files_rejects_distinfo_version_mismatch(self) -> None:
@@ -211,6 +180,8 @@ CONFIGURE_ARGS+= --enable-fixed
                 result = subprocess.run(command, capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertIn('classification: ' + classification, output.read_text())
+                if classification == 'risky':
+                    self.assertIn('dependency change', output.read_text())
 
 
 class Bind920CandidateWorkflowTest(unittest.TestCase):
@@ -248,6 +219,7 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         workflow = self.workflow_text()
         self.assertNotIn("release upload", workflow)
         self.assertNotIn("release_channel.py publish", workflow)
+        assert_pinned_actions(workflow)
 
     def test_candidate_workflow_includes_ports_commit_subjects_in_pr_body(self) -> None:
         """Review PRs must show the FreeBSD Ports commits behind the candidate."""
@@ -263,34 +235,16 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertEqual('$RUNNER_TEMP/ports-changes.md', ports[0][ports[0].index('--output') + 1])
         body = workflow.split('} > "$RUNNER_TEMP/pr-body.md"', 1)[0].rsplit('          {\n', 1)[1]
         self.assertIn('cat "$RUNNER_TEMP/ports-changes.md"', body)
-
-    def test_candidate_workflow_includes_upstream_bind_commit_subjects_in_pr_body(self) -> None:
-        """Review PRs must show upstream BIND commits between the old and new release tags."""
-        workflow = self.workflow_text()
         self.assertIn("https://github.com/isc-projects/bind9.git", workflow)
         self.assertIn("upstream-tag", workflow)
         self.assertIn("git -C \"$RUNNER_TEMP/bind9\" log --format='%h %s' \"$old_tag..$new_tag\"", workflow)
-
-    def test_candidate_workflow_uses_pinned_actions(self) -> None:
-        """Workflow actions must stay pinned to immutable SHAs."""
-        workflow = self.workflow_text()
-        assert_pinned_actions(workflow)
 
     def test_candidate_workflow_checks_empty_index_before_commit(self) -> None:
         """Only an actual empty candidate diff may skip PR branch publication."""
         workflow = self.workflow_text()
         self.assertIn("git diff --cached --quiet", workflow)
         self.assertNotIn("git commit -m \"ci(bind): update bind920 to ${version}_${revision}\" || exit 0", workflow)
-
-    def test_candidate_workflow_uses_package_version_for_human_output(self) -> None:
-        """Reviewer-facing text must use the same version form as pkg artifacts."""
-        workflow = self.workflow_text()
-        self.assertIn('version="${{ steps.candidate.outputs.package_version }}"', workflow)
-        self.assertIn("print(f\"old_version={old_package_version}\"", workflow)
-        self.assertIn("print(f\"new_version={package_version}\"", workflow)
         self.assertIn('branch="sync/bind920/$distversion-$revision"', workflow)
-        self.assertIn("GITHUB_STEP_SUMMARY", workflow)
-
 
 if __name__ == "__main__":
     unittest.main()

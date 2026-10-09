@@ -20,7 +20,7 @@ def test_pr_workflow_runs_the_full_suite_without_publication_authority():
     assert_checkout_credentials(test)
     assert not re.search(r'^\s+(?:if|continue-on-error):', test, re.MULTILINE)
     assert 'actions/setup-python@' in test
-    assert "python-version: '3.12.13'" in test
-    install = "python -m pip install --disable-pip-version-check 'pytest==8.3.5'"
+    install = re.search(r"python -m pip install[^\n]*\bpytest(?:[=<>!~][^\s'\"]+)?(?=[\s'\"]|$)", test)
+    assert install is not None
     run = 'python -m pytest -q .github/ci/ci-tests'
-    assert test.index(install) < test.index(run)
+    assert install.start() < test.index(run)

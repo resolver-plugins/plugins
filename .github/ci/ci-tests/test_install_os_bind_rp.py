@@ -377,18 +377,23 @@ def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.Complete
 
 
 @pytest.mark.parametrize(
-    ("opnsense_version", "pkg_abi", "series", "installed_plugin"),
+    ("opnsense_version", "pkg_abi", "series", "installed_plugin", "checksum", "layout", "dry_run_status"),
     (
-        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", ""),
-        ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7", ""),
-        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "os-bind-rp|1.36_9|opnsense/os-bind-rp"),
+        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "",
+         "1$" + "b" * 64, "direct", 0),
+        ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7", "",
+         "2$" + "c" * 64, "all", 1),
+        ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "os-bind-rp|1.36_9|opnsense/os-bind-rp",
+         "2$" + "c" * 64, "all", 1),
     ),
 )
 def test_installs_current_plugin_for_the_detected_series_without_service_changes(
-    tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str, installed_plugin: str
+    tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str, installed_plugin: str,
+    checksum: str, layout: str, dry_run_status: int
 ) -> None:
     result, log, repositories = run_installer(
-        tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi, os_bind_rp=installed_plugin
+        tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi, os_bind_rp=installed_plugin,
+        archive_checksum=checksum, fetch_layout=layout, dry_run_status=dry_run_status
     )
 
     assert result.returncode == 0, result.stderr
@@ -511,20 +516,6 @@ def test_rejects_null_archive_checksums_before_any_package_install(tmp_path: Pat
     assert not (tmp_path / "backups").exists()
 
 
-def test_accepts_sha256_and_blake_checksum_prefixes_from_either_fetch_layout(
-    tmp_path: Path,
-) -> None:
-    for index, (checksum, layout) in enumerate(
-        (("1$" + "b" * 64, "direct"), ("2$" + "c" * 64, "all"))
-    ):
-        case_directory = tmp_path / str(index)
-        case_directory.mkdir()
-        result, _, _ = run_installer(
-            case_directory, archive_checksum=checksum, fetch_layout=layout
-        )
-        assert result.returncode == 0, result.stderr
-
-
 def test_rejects_a_frozen_archive_change_before_state_or_install(tmp_path: Path) -> None:
     result, log, _ = run_installer(tmp_path, mutate_frozen_archive=True)
 
@@ -621,12 +612,6 @@ def test_reports_failure_when_the_original_pkg_lock_state_cannot_be_restored(
     assert "Diagnostic state retained at" in result.stderr
     assert (tmp_path / "pkg-locked").exists()
     assert "pkg unlock -y pkg" in log.read_text(encoding="utf-8")
-
-
-def test_accepts_pkg_dry_run_success_status(tmp_path: Path) -> None:
-    result, _, _ = run_installer(tmp_path, dry_run_status=0)
-    assert result.returncode == 0, result.stderr
-    assert (tmp_path / "plugin-installed").exists()
 
 
 @pytest.mark.parametrize("plan", ["all_current", "repository_warning_noop"])

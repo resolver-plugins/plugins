@@ -375,6 +375,15 @@ managed service script, and querying an authoritative canary name. This catches
 broken executables, linked libraries, service integration, and basic DNS
 response failures before promotion.
 
+The published installation gate also checks the installer's mode-0700 durable
+state directory and the configuration backup's original bytes and mode. It keeps
+the caller-owned temporary archives, compares their recorded hashes with both
+the fetched and staged packages, and observes the isolated repository dry run
+before the installer's live transaction. It checks every installed package's file checksums.
+These observations qualify only the selected series in a successful native run;
+both 26.1 and 26.7 need successful runs before retiring the corresponding local
+official-replacement regression test.
+
 If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
 the replacement public key, and republish every channel for every supported
 series. Announce the new fingerprint; existing clients must update their key

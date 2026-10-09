@@ -119,23 +119,22 @@ def test_release_targets_exact_commit_and_verifies_draft_before_publication(rele
     assert names == ['snapshot_release', 'run_gh', 'upload_release_assets',
                      'snapshot_release', 'snapshot_matches_directory', 'run_gh']
 
+    calls.reset_mock()
+    calls.snapshot_release.side_effect = None
+    calls.snapshot_release.return_value = SimpleNamespace(existed=True)
+    publisher.publish('example/plugins', directory, '26.7', COMMIT)
+    calls.run_gh.assert_called_once_with(promote)
+    calls.upload_release_assets.assert_not_called()
 
-@pytest.mark.parametrize("matching", [True, False])
-def test_existing_release_accepts_only_identical_bytes(release, matching):
+
+def test_existing_release_accepts_only_identical_bytes(release):
     directory, calls = release
     calls.snapshot_release.side_effect = None
     calls.snapshot_release.return_value = SimpleNamespace(existed=True)
-    calls.snapshot_matches_directory.return_value = matching
-    if matching:
-        publisher.publish("example/plugins", directory, "26.7", COMMIT)
-        # A completed draft can be promoted on retry without uploading again.
-        calls.run_gh.assert_called_once_with(
-            ['release', 'edit', 'dhcp-interface-ha-26.7-0.2_30', '--repo', 'example/plugins',
-             '--draft=false', '--latest=false'])
-    else:
-        with pytest.raises(RuntimeError, match="different bytes"):
-            publisher.publish("example/plugins", directory, "26.7", COMMIT)
-        calls.run_gh.assert_not_called()
+    calls.snapshot_matches_directory.return_value = False
+    with pytest.raises(RuntimeError, match='different bytes'):
+        publisher.publish('example/plugins', directory, '26.7', COMMIT)
+    calls.run_gh.assert_not_called()
     calls.upload_release_assets.assert_not_called()
 
 
