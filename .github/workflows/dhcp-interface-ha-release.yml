@@ -1,0 +1,320 @@
+name: Publish HA DHCP Interface package release
+
+on:
+  push:
+    branches: [master]
+    paths: ['net/dhcp-interface-ha/Makefile']
+  workflow_dispatch:
+    inputs:
+      series:
+        description: OPNsense series with an existing reviewed release profile
+        type: choice
+        options: ['26.7']
+        default: '26.7'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    needs: profile
+    if: needs.profile.outputs.release == 'true'
+    uses: ./.github/workflows/dhcp-interface-ha-tests.yml
+
+  profile:
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.select.outputs.release }}
+      series: ${{ steps.select.outputs.series }}
+      source_commit: ${{ steps.select.outputs.source_commit }}
+      profile_commit: ${{ steps.profile.outputs.profile_commit }}
+      freebsd_release: ${{ steps.profile.outputs.freebsd_release }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select new version or manual retry
+        id: select
+        env:
+          SERIES: ${{ inputs.series || '26.7' }}
+        run: python3 .github/ci/dhcp_interface_ha_release.py select --series "$SERIES" >> "$GITHUB_OUTPUT"
+      - id: profile
+        if: steps.select.outputs.release == 'true'
+        env:
+          SERIES: ${{ steps.select.outputs.series }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = refs/heads/master
+          test "$SERIES" = 26.7
+          git fetch --no-tags origin "refs/heads/release/bind-rp/$SERIES:refs/remotes/origin/ha-build-profile"
+          profile_commit=$(git rev-parse refs/remotes/origin/ha-build-profile)
+          git show "$profile_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
+          freebsd_release=$(python3 .github/ci/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
+          python3 .github/ci/target_pkg.py field .resolver-plugins/target-pkg.json "$SERIES" version
+          printf 'profile_commit=%s\nfreebsd_release=%s\n' "$profile_commit" "$freebsd_release" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [profile, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          persist-credentials: false
+      - name: Materialize pinned compatibility profile
+        env:
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$PROFILE_COMMIT"
+          mkdir -p artifacts/profile
+          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/profile/upstream.json
+      - name: Build and verify in FreeBSD
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        with:
+          release: ${{ needs.profile.outputs.freebsd_release }}
+          arch: x86_64
+          envs: SERIES SOURCE_COMMIT PROFILE_COMMIT
+          usesh: true
+          disable-cache: true
+          copyback: true
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+            git config --global --add safe.directory "$PWD"
+            RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dhcp-interface-ha-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: [profile, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dhcp-interface-ha-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}
+      - name: Materialize trusted profile
+        env:
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$PROFILE_COMMIT"
+          mkdir -p artifacts/trusted
+          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
+      - name: Reuse immutable signed snapshot
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        run: |
+          set -eu
+          (cd "artifacts/$SERIES" && sha256sum --check SHA256SUMS)
+          reused=$(python3 .github/ci/dhcp_interface_ha_channel.py reuse \
+            --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
+            --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT")
+          printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
+      - name: Fetch current BIND component
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          python3 .github/ci/package_catalogue.py fetch --component bind --series "$SERIES" --output "artifacts/$SERIES/bind-current"
+      - name: Sign isolated plugin and shared catalogues
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        env:
+          RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+          REUSED: ${{ steps.reuse.outputs.reused }}
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        with:
+          release: ${{ needs.profile.outputs.freebsd_release }}
+          arch: x86_64
+          envs: RP_PKG_SIGNING_KEY REUSED SERIES SOURCE_COMMIT PROFILE_COMMIT
+          usesh: true
+          disable-cache: true
+          copyback: true
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+            git config --global --add safe.directory "$PWD"
+            RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/dhcp_interface_ha_release.py snapshot --series "$SERIES")
+            export RP_OPNSENSE_SNAPSHOT
+            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/setup-opnsense-repository.sh "$SERIES" >/dev/null
+            pkg update -f
+            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$SERIES"
+            umask 077
+            key=.rp-dhcpha-signing-key.pem
+            trap 'rm -f "$key"' EXIT HUP INT TERM
+            printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
+            if [ "$REUSED" != true ]; then
+              python3 .github/ci/dhcp_interface_ha_channel.py stage \
+                --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
+                --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" \
+                --trusted-upstream artifacts/trusted/upstream.json --key "$key"
+            fi
+            python3 .github/ci/package_catalogue.py stage \
+              --bind-channel "artifacts/$SERIES/bind-current" --dhcp-channel "artifacts/$SERIES/repository/current" \
+              --output "artifacts/$SERIES/repository/combined" --series "$SERIES" --key "$key"
+            rm -f "$key"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}/repository
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    needs: [profile, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Verify signed installation
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        with:
+          release: ${{ needs.profile.outputs.freebsd_release }}
+          arch: x86_64
+          envs: SERIES
+          usesh: true
+          disable-cache: true
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+            expected="artifacts/$SERIES/repository/current"
+            combined="artifacts/$SERIES/repository/combined"
+            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/verify-dhcp-interface-ha.sh \
+              "$SERIES" "$expected" "file://$PWD/$combined" "$combined"
+
+  publish:
+    needs: [profile, sign, verify]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Mint distribution repository token
+        id: distribution-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: repository
+          permission-contents: write
+      - name: Publish signed current and immutable rollback channels
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+        run: |
+          set -eu
+          python3 .github/ci/dhcp_interface_ha_channel.py promote \
+            --directory "artifacts/$SERIES/repository/current" --recovery "$RUNNER_TEMP/dhcpha-recovery"
+          python3 .github/ci/package_catalogue.py publish \
+            --directory "artifacts/$SERIES/repository/combined" --recovery "$RUNNER_TEMP/catalogue-recovery"
+
+  verify-published:
+    needs: [profile, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Verify installation from public signed channel
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        with:
+          release: ${{ needs.profile.outputs.freebsd_release }}
+          arch: x86_64
+          envs: SERIES
+          usesh: true
+          disable-cache: true
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+            expected="artifacts/$SERIES/repository/current"
+            combined="artifacts/$SERIES/repository/combined"
+            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/verify-dhcp-interface-ha.sh \
+              "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/$SERIES/latest" "$combined"
+
+  source-release:
+    needs: [profile, verify-published]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.profile.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Publish verified source prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+        run: |
+          set -eu
+          source_output="$RUNNER_TEMP/dhcpha-source"
+          mkdir "$source_output"
+          cp "artifacts/$SERIES/repository/current/"os-dhcp-interface-ha-*.pkg "artifacts/$SERIES/repository/current/build-metadata.txt" "artifacts/$SERIES/repository/current/upstream.json" "$source_output/"
+          (cd "$source_output" && sha256sum ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)
+          python3 .github/ci/publish-dhcp-interface-ha.py \
+            --repository "$GITHUB_REPOSITORY" --directory "$source_output" \
+            --series "$SERIES" --source-commit "$SOURCE_COMMIT"

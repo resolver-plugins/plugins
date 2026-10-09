@@ -1,0 +1,20 @@
+<model>
+    <mount>//OPNsense/DhcpInterfaceHaShared</mount>
+    <version>1.1.0</version>
+    <description>HA DHCP Interface shared settings</description>
+    <items>
+        <enabled type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </enabled>
+        <shared_mac type="MacAddressField">
+            <Required>N</Required>
+        </shared_mac>
+        <failback_delay type="IntegerField">
+            <Default>0</Default>
+            <Required>Y</Required>
+            <MinimumValue>0</MinimumValue>
+            <MaximumValue>86400</MaximumValue>
+        </failback_delay>
+    </items>
+</model>

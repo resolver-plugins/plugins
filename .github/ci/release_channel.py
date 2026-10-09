@@ -104,6 +104,10 @@ def series_abi_path(abi: str, series: str) -> str:
 
 def package_release_title(tag: str) -> str:
     """Return the purpose-first display title for one package channel tag."""
+    ha_channel = re.fullmatch(r"pkg-dhcp-interface-ha-(\d+\.\d+)(?:-([0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?))?", tag)
+    if ha_channel:
+        series, version = ha_channel.groups()
+        return f"HA DHCP Interface {series} — {version or 'latest'}"
     value = tag.removeprefix("pkg-")
     if value == tag:
         raise ValueError("invalid package release tag")
@@ -552,7 +556,7 @@ def _object_sha(payload: object, *path: str) -> str:
 
 def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> None:
     """Replace one ABI subtree and compare-and-advance the gh-pages branch."""
-    validate_channel_directory(directory)
+    validate_static_channel(directory)
     try:
         channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
         target = series_abi_path(channel["package_abi"], channel["series"])
@@ -576,6 +580,13 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
         raise RuntimeError("cannot read the gh-pages tree")
 
     prefix = target + "/"
+    # A missing component release must never silently remove it from the feed.
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("path") == prefix + "channel.json":
+            blob = gh_api(f"repos/{repository}/git/blobs/{entry['sha']}")
+            prior = json.loads(base64.b64decode(blob["content"]))
+            if prior.get("kind") == "combined" and not set(prior["components"]).issubset(channel.get("components", {})):
+                raise RuntimeError("static publication would remove an existing component")
     replacement_paths = {prefix + asset.name for asset in assets}
     changes: list[dict[str, object]] = []
     for entry in entries:
@@ -636,7 +647,7 @@ def publish_abi_channel(repository: str, directory: Path, recovery: Path) -> Non
 
 def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
     """Require every expected static channel asset to match its public bytes."""
-    validate_channel_directory(expected_channel)
+    validate_static_channel(expected_channel)
     assets = sorted(expected_channel.iterdir(), key=lambda path: path.name)
     if not assets or any(not path.is_file() for path in assets):
         raise ValueError("static channel must contain only flat assets")
@@ -650,6 +661,15 @@ def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
             raise RuntimeError(f"cannot fetch static channel asset: {asset.name}") from error
         if published != asset.read_bytes():
             raise RuntimeError(f"static channel asset has unexpected bytes: {asset.name}")
+
+
+def validate_static_channel(directory: Path) -> None:
+    data = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
+    if data.get("kind") == "combined":
+        import package_catalogue
+        package_catalogue.validate(directory)
+    else:
+        validate_channel_directory(directory)
 
 
 def validate_channel_directory(directory: Path) -> None:
