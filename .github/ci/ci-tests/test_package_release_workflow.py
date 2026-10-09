@@ -1,5 +1,6 @@
 import pathlib
 import re
+import shlex
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -194,7 +195,11 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     assert 'cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub"' in signer
     assert 'trusted-upstream.json' in signer
     assert 'validate-build-metadata' in signer
-    assert signer.count('--target-pkg-metadata .resolver-plugins/target-pkg.json') == 4
+    for command in ('validate-bind-provenance', 'validate-build-metadata', 'reuse-snapshot', 'stage-channel'):
+        matches = re.findall(r'release_channel\.py ' + command + r' ([^\n]+)', signer.replace('\\\n', ''))
+        assert len(matches) == 1, command
+        arguments = shlex.split(matches[0])
+        assert arguments[arguments.index('--target-pkg-metadata') + 1] == '.resolver-plugins/target-pkg.json'
     assert 'id: reuse-snapshot' in signer
     assert 'reuse-snapshot --repository resolver-plugins/repository' in signer
     assert '--provenance "$output/bind920-provenance.json"' in signer
@@ -204,7 +209,9 @@ def test_signer_uses_master_control_plane_and_self_contained_channel_layout():
     reuse_command = 'release_channel.py reuse-snapshot'
     assert reuse.index('validate-bind-provenance') < reuse.index(reuse_command)
     assert reuse.index('validate-build-metadata') < reuse.index(reuse_command)
-    assert "if: steps.reuse-snapshot.outputs.reused != 'true'" in signer
+    assert 'if [ "$REUSED" != true ]; then' in signer
+    assert "REUSED: ${{ steps.reuse-snapshot.outputs.reused }}" in signer
+    assert signer.index('            fi\n            python3 .github/ci/package_catalogue.py stage') > signer.index('stage-channel')
     assert '--public-key docs/package-repository/resolver-plugins.pub' in signer
     assert 'repository/bind920' not in signer
 
@@ -237,8 +244,8 @@ def test_production_preflights_pages_then_publishes_the_abi_static_channel():
     assert 'https://resolver-plugins.github.io/repository/pages-health' in publisher
     assert '[ "$attempt" -ge 10 ]' in publisher
     assert 'sleep 15' in publisher
-    assert 'publish-abi-channel --repository resolver-plugins/repository' in publisher
-    assert publisher.index('publish-channels') < publisher.index('publish-abi-channel')
+    assert 'package_catalogue.py publish --repository resolver-plugins/repository --directory "$root/combined"' in publisher
+    assert publisher.index('publish-channels') < publisher.index('package_catalogue.py publish')
     assert 'GH_TOKEN: ${{ steps.distribution-token.outputs.token }}' in publisher
 
 

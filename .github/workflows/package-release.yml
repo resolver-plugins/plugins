@@ -559,15 +559,21 @@ jobs:
           version=${version%.pkg}
           reused=$(python3 .github/ci/release_channel.py reuse-snapshot --repository resolver-plugins/repository --series "$SERIES" --version "$version" --source-commit "$SOURCE_COMMIT" --output "$output/repository" --public-key docs/package-repository/resolver-plugins.pub --target-pkg-metadata .resolver-plugins/target-pkg.json --provenance "$output/bind920-provenance.json")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
+      - name: Fetch current HA DHCP component
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ needs.select.outputs.series }}
+        run: |
+          python3 .github/ci/package_catalogue.py fetch --component dhcp --series "$SERIES" --output "artifacts/$SERIES/dhcp-current"
       - name: Sign package repository
-        if: steps.reuse-snapshot.outputs.reused != 'true'
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
           RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+          REUSED: ${{ steps.reuse-snapshot.outputs.reused }}
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: RP_PKG_SIGNING_KEY
+          envs: RP_PKG_SIGNING_KEY REUSED
           usesh: true
           disable-cache: true
           copyback: true
@@ -575,23 +581,36 @@ jobs:
             set -eu
             export IGNORE_OSVERSION=yes
             pkg update -f
-            pkg install -y python3
+            pkg install -y python3 git
+            series='${{ needs.select.outputs.series }}'
+            if [ "$series" = 26.7 ]; then
+              RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/dhcp_interface_ha_release.py snapshot --series "$series")
+              export RP_OPNSENSE_SNAPSHOT
+            fi
+            RP_UPSTREAM_METADATA="artifacts/$series/trusted-upstream.json" .github/ci/setup-opnsense-repository.sh "$series" >/dev/null
+            pkg update -f
+            python3 .github/ci/target_pkg.py install .resolver-plugins/target-pkg.json "$series"
             umask 077
             key=.rp-pkg-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
             printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
             output="artifacts/${{ needs.select.outputs.series }}"
             mkdir -p "$output/repository"
-            python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json --control-commit '${{ needs.profile.outputs.control_commit }}'
-            cp -R "$output/repository/current" "$output/repository/snapshot"
-            openssl pkey -in "$key" -pubout -out "$output/resolver-plugins.pub"
-            cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub" || {
-              echo 'signing key does not match the committed Resolver Plugins public key' >&2
-              exit 1
-            }
-            for repository in "$output"/repository/*; do
-              cp "$output/resolver-plugins.pub" "$repository/"
-            done
+            if [ "$REUSED" != true ]; then
+              python3 .github/ci/release_channel.py stage-channel --packages-directory "$output" --output "$output/repository/current" --private-key "$key" --target-pkg-metadata .resolver-plugins/target-pkg.json --control-commit '${{ needs.profile.outputs.control_commit }}'
+              cp -R "$output/repository/current" "$output/repository/snapshot"
+              openssl pkey -in "$key" -pubout -out "$output/resolver-plugins.pub"
+              cmp -s docs/package-repository/resolver-plugins.pub "$output/resolver-plugins.pub" || {
+                echo 'signing key does not match the committed Resolver Plugins public key' >&2
+                exit 1
+              }
+              for repository in "$output"/repository/*; do
+                cp "$output/resolver-plugins.pub" "$repository/"
+              done
+            fi
+            python3 .github/ci/package_catalogue.py stage \
+              --bind-channel "$output/repository/current" --dhcp-channel "$output/dhcp-current" \
+              --output "$output/repository/combined" --series "$series" --key "$key"
             rm -f "$key"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -652,7 +671,7 @@ jobs:
           channels=(--channel "$snapshot_tag=$root/snapshot")
           channels+=(--channel "pkg-$SERIES=$root/current")
           python3 .github/ci/release_channel.py publish-channels --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" "${channels[@]}"
-          python3 .github/ci/release_channel.py publish-abi-channel --repository resolver-plugins/repository --directory "$root/current" --recovery "$RUNNER_TEMP/recovery"
+          python3 .github/ci/package_catalogue.py publish --repository resolver-plugins/repository --directory "$root/combined" --recovery "$RUNNER_TEMP/recovery"
           python3 .github/ci/release_channel.py prune-snapshots --repository resolver-plugins/repository --series "$SERIES" --keep 5
           python3 .github/ci/release_channel.py mark-latest-package-channel --repository resolver-plugins/repository
 
@@ -722,11 +741,12 @@ jobs:
               "$root"/current/bind-tools-*.pkg "$root"/current/bind920-*.pkg \
               "$root"/current/os-bind-rp-*.pkg "$root"/snapshot/bind-tools-*.pkg \
               "$root"/snapshot/bind920-*.pkg "$root"/snapshot/os-bind-rp-*.pkg
+            python3 .github/ci/package_catalogue.py verify --directory "$root/combined" --url "file://$PWD/$root/combined"
             install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
             install -m 0644 "$root/current/resolver-plugins.pub" /usr/local/etc/pkg/keys/resolver-plugins.pub
             cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
             resolver-plugins: {
-              url: "file://$PWD/$root/current",
+              url: "file://$PWD/$root/combined",
               mirror_type: "none",
               signature_type: "pubkey",
               pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
@@ -802,7 +822,7 @@ jobs:
             pkg update -f
             pkg install -y python3 git
             series='${{ needs.select.outputs.series }}'
-            root="artifacts/$series/repository/current"
+            root="artifacts/$series/repository/combined"
             package_abi=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["package_abi"])' "$root/channel.json")
             channel_url="https://resolver-plugins.github.io/repository/pkg/$package_abi/$series/latest"
             repository_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
@@ -842,6 +862,7 @@ jobs:
               sleep 30
               attempt=$((attempt + 1))
             done
+            python3 .github/ci/package_catalogue.py verify --directory "$root" --url "$channel_url"
             cat > /usr/local/etc/pkg/repos/resolver-plugins.conf <<EOF
             resolver-plugins: {
               url: "$repository_url",

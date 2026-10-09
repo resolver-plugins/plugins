@@ -6,6 +6,13 @@ Separate human-facing `os-bind-rp` releases from operational `pkg`
 repositories while keeping every supported OPNsense series easy to install
 and able to roll back five plugin versions.
 
+The shared current feed also supports independently released HA DHCP Interface on
+26.7. The BIND component's build and rollback rules below remain applicable; its
+current component and HA DHCP's current component are combined into one client
+catalogue. The [package repository guide](package-repository.md#ha-dhcp-interface)
+describes its publication trigger; the [maintainer guide](dhcp-interface-ha.md)
+records its experimental qualification.
+
 This is the approved target design. It supersedes the current convention of
 using source-repository GitHub Releases as the per-series package channels.
 
@@ -22,6 +29,10 @@ using source-repository GitHub Releases as the per-series package channels.
   `pkg/FreeBSD:15:amd64/26.7/latest`. It also has up to five immutable,
   self-contained rollback snapshots named
   `pkg-<series>-os-bind-rp-<version>`.
+- Both production workflows publish that same client catalogue. The 26.7 feed
+  contains the BIND trio plus `os-dhcp-interface-ha` after the latter's first
+  release. The 26.1 feed contains BIND only. Each plugin's signed component releases
+  and immutable rollback snapshots remain separate.
 - Source-repository GitHub Releases are ordinary, immutable, human-facing
   `os-bind-rp` version releases. Their assets are limited to the plugin
   package and small release metadata; they never contain a `pkg` catalogue,
@@ -42,7 +53,8 @@ package-repository release assets.
 
 The source repository owns the trusted publication workflow. Its build job
 selects a release source but cannot read the signing key. A separate trusted
-signing job receives only built artifacts, generates the signed repository,
+signing job receives built artifacts and the other plugin's published component,
+verifies both inputs, generates the signed repository,
 and publishes it to the distribution repository. The source repository also
 creates an immutable human-facing release record for the newly published
 `os-bind-rp` version.
@@ -66,7 +78,7 @@ in a catalogue. Every current or snapshot channel is fully self-contained.
 
 ## Channel contents
 
-For example, the current `pkg-26.7` channel contains:
+For example, the BIND component `pkg-26.7` contains:
 
 ```text
 os-bind-rp-26.7_1.pkg
@@ -85,6 +97,15 @@ the series, plugin version, each package's SHA-256, selected release-source
 commit, BIND compatibility fingerprint, and upstream/tools/FreeBSD/core
 provenance identity. It is supplementary information: the signed `pkg`
 catalogue and package manifests remain the installation authority.
+
+The shared Pages feed is assembled by `package_catalogue.py` from the selected
+BIND component and, on 26.7, the selected HA DHCP component. It contains their
+unchanged package archives and a freshly signed aggregate catalogue. Its separate
+`channel.json` format (`kind=combined`, schema 1) records component tags, complete
+input asset hashes, selected package hashes and output asset hashes. Prefixed
+component metadata sidecars preserve both provenance records without filename
+collisions. Input signatures, package manifests, ABIs, pinned package creators,
+file-checksum completeness and archive bytes are verified before aggregate signing.
 
 Normal package operations use the current channel. An administrator rolls
 back by temporarily changing the configured URL to a retained immutable
@@ -139,7 +160,10 @@ baseline.
    one; this permits BIND-only updates without allowing stale workflow retries
    to roll the channel back.
 5. It verifies that the generated catalogue, public key, manifest checksums,
-   and package dependency graph exactly match the intended set.
+   and package dependency graph exactly match the intended set. Both workflows
+   also assemble and verify the shared catalogue while retaining the other
+   plugin's published package set. Immutable component snapshots are reused on
+   retry; the aggregate is regenerated against the current companion component.
 6. A final distribution job writes the staged assets to
    `resolver-plugins/repository` under the ABI-plus-series current path and
    snapshot tags using a
@@ -156,6 +180,15 @@ baseline.
    requires official-package removal, non-null installed checksums, exact
    identities, file ownership, and `pkg check -s`. The source release waits
    for this exact installation.
+
+Both workflows use the same `package-release` concurrency group. Shared-feed
+publication checks that component Release assets still match the staged inputs,
+then uses the existing compare-and-advance Git Data publication for the selected
+ABI/series subtree. A missing published component cannot silently remove it from
+the shared feed. Component publication can succeed before a shared-feed failure;
+the source release remains withheld until the aggregate is published and verified.
+Recovery rebuilds the aggregate from current components, retaining the original
+component archives and leaving other series and rollback snapshots intact.
 
 An HA canary adds operational recovery boundaries to those disposable gates:
 capture a configuration backup and target-created rollback packages, prove the

@@ -2,9 +2,10 @@
 
 `os-bind-rp` is published at an ABI-plus-OPNsense-series GitHub Pages path
 backed by verified, signed channel bytes from `resolver-plugins/repository`.
-The distribution repository also retains GitHub Release channels for
-transition and rollback; source releases contain only the plugin archive and
-build metadata.
+The same feed also offers experimental HA DHCP Interface on OPNsense 26.7 after
+its first publication. The distribution repository retains independent signed
+component Releases for BIND and HA DHCP, plus each plugin's rollback snapshots;
+source releases contain the plugin archive and build metadata.
 
 ## Channels
 
@@ -20,9 +21,25 @@ For example, OPNsense 26.7 on FreeBSD 15 uses:
 https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/26.7/latest
 ```
 
-Every channel includes `meta.conf`, catalogue data, `resolver-plugins.pub`,
-`bind920-provenance.json`, the pinned `bind-tools`/`bind920` package pair,
-and the current `os-bind-rp-*.pkg`.
+Every current feed includes `meta.conf`, signed catalogue data, `resolver-plugins.pub`,
+the pinned `bind-tools`/`bind920` package pair, and the current `os-bind-rp-*.pkg`.
+After HA DHCP publication, the 26.7 feed also contains `os-dhcp-interface-ha`.
+OPNsense 26.1 continues to offer BIND only. Existing client URLs and trust keys stay
+the same; the additional plugin is installed only when explicitly selected.
+
+Both production workflows assemble the feed with `.github/ci/package_catalogue.py`.
+Each release retains the other plugin's exact published archives, verifies input
+catalogue signatures, package identities, ABI, provenance and checksums, then signs
+one combined catalogue. Both publishers share the `package-release` concurrency
+group and recheck their component inputs before the atomic `gh-pages` update.
+Once a component is present, a missing Release cannot silently remove it from
+the feed. A stale staged aggregate must be rebuilt against current components.
+
+The shared `channel.json` uses `kind=combined`, schema 1, and records the component
+tags, original asset hashes, selected package hashes and aggregate asset hashes.
+Component metadata is preserved as `bind-*` and `dhcp-*` sidecars. Independent
+Release channels retain their existing manifest formats and immutable rollback
+identity. See [HA DHCP Interface](#ha-dhcp-interface) for its publication workflow.
 
 `pkg` expands `${ABI}` to select `FreeBSD:14:amd64` for OPNsense 26.1 or
 `FreeBSD:15:amd64` for OPNsense 26.7. The explicit series segment prevents a
@@ -41,7 +58,7 @@ Display titles are concise labels only. GitHub requires one repository-wide
 for the highest numeric OPNsense series. Archive releases never receive it.
 These series-specific Release URLs are not used by new client configuration.
 
-The current channel and every rollback snapshot contain exactly one
+The BIND component channel and every BIND rollback snapshot contain exactly one
 series-versioned plugin package such as `os-bind-rp-26.1_1` or
 `os-bind-rp-26.7_1`, the matching `bind920`/`bind-tools` pair, BIND
 provenance, `channel.json`, and the signed catalogue. `pkg` catalogues expose
@@ -67,7 +84,18 @@ replacement.
 
 ## Host operation
 
-Configure the ABI-aware current plugin channel:
+From an OPNsense root shell, configure the shared signed repository:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-repository.sh | sh
+```
+
+The repository installer detects the OPNsense series and package ABI, verifies
+the public-key fingerprint before replacing any repository files, and refreshes
+the signed catalogue. Package installation is a separate step; choose a plugin
+from the [installation instructions](../README.md#install-a-plugin).
+
+Alternatively, configure the ABI-aware current channel manually:
 
 ```sh
 series="$(opnsense-version -a)"
@@ -87,10 +115,9 @@ resolver-plugins: {
 }
 EOF
 pkg update -r resolver-plugins
-scripts/install-os-bind-rp.sh
 ```
 
-The package installs `ResolverPlugins.sh`, an OPNsense firmware repository
+The BIND package installs `ResolverPlugins.sh`, an OPNsense firmware repository
 provider. It migrates only exact managed Resolver repository shapes: legacy
 GitHub Release URLs, the older ABI-only URL, or a prior ABI-plus-series URL.
 It reads `opnsense-version -a`, writes the literal `${ABI}` URL for that
@@ -349,3 +376,18 @@ If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
 the replacement public key, and republish every channel for every supported
 series. Announce the new fingerprint; existing clients must update their key
 before they can verify the replacement catalogues.
+
+## HA DHCP Interface
+
+The experimental HA DHCP Interface plugin joins the shared 26.7 feed after its
+first publication. It uses the same signing key and publisher App, while retaining
+independent signed current and rollback Release channels in the distribution
+repository. Each component release rebuilds the shared catalogue with the other
+component's published packages. Existing Resolver Plugins clients keep the same
+feed URL and public key.
+
+The [HA DHCP release workflow](../.github/workflows/dhcp-interface-ha-release.yml)
+runs automatically when the plugin's package version increases on `master`;
+manual dispatch from `master` supports recovery. It publishes experimental
+`os-dhcp-interface-ha` packages for 26.7 / amd64 after staged and public
+installation checks. Publication does not deploy to appliances.

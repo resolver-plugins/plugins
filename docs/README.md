@@ -12,3 +12,4 @@ Read the guide matching the work you are about to do:
   workflow, review PRs, and temporary artifacts.
 - [Package repository](package-repository.md) describes the signed GitHub
   Release channels, publication workflow, and key rotation responsibilities.
+- [HA DHCP Interface maintainer guide](dhcp-interface-ha.md) describes the implemented controller, setup and standby routing boundaries, current verification evidence, and remaining native qualification.

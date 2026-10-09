@@ -15,13 +15,25 @@ then
     fail 'RP_UPSTREAM_METADATA is required'
 fi
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 metadata_field() {
     python3 "$script_directory/metadata_profile.py" \
         "$RP_UPSTREAM_METADATA" "$series" "$1"
 }
 
 core_commit=$(metadata_field core_commit) || fail 'invalid upstream metadata'
+
+# Optional reviewed snapshot; ordinary callers retain the series' latest feed.
+repository_series=$series
+if [ -n "${RP_OPNSENSE_SNAPSHOT:-}" ]
+then
+    snapshot_patch=${RP_OPNSENSE_SNAPSHOT#"$series".}
+    [ "$snapshot_patch" != "$RP_OPNSENSE_SNAPSHOT" ] || fail 'snapshot must belong to the selected series'
+    case "$snapshot_patch" in
+        ''|*[!0-9]*) fail 'snapshot must have a numeric patch version' ;;
+    esac
+    repository_series="$series/MINT/$RP_OPNSENSE_SNAPSHOT"
+fi
 
 repository_directory=${PKG_REPOS_DIR:-/usr/local/etc/pkg/repos}
 fingerprint_directory=${PKG_FINGERPRINTS_DIR:-/usr/local/etc/pkg/fingerprints/OPNsense}
@@ -48,9 +60,9 @@ fingerprints_source="$core_directory/src/etc/pkg/fingerprints/OPNsense"
 repository_source="$temporary_directory/OPNsense.conf"
 sed \
     -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|g' \
-    -e "s|%%CORE_ABI%%|$series|g" \
+    -e "s|%%CORE_ABI%%|$repository_series|g" \
     "$repository_template" > "$repository_source"
-grep -Fq "https://pkg.opnsense.org/\${ABI}/$series/latest" "$repository_source" || \
+grep -Fq "https://pkg.opnsense.org/\${ABI}/$repository_series/latest" "$repository_source" || \
     fail "OPNsense repository configuration does not target $series"
 grep -Fq 'signature_type: "fingerprints"' "$repository_source" || \
     fail 'OPNsense repository configuration does not require fingerprints'
