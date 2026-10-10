@@ -34,6 +34,9 @@ jobs:
       source_commit: ${{ steps.select.outputs.source_commit }}
       profile_commit: ${{ steps.profile.outputs.profile_commit }}
       freebsd_release: ${{ steps.profile.outputs.freebsd_release }}
+      target_artifact_id: ${{ steps.pkg-targets.outputs.artifact-id }}
+      creator_target_sha256: ${{ steps.profile.outputs.creator_target_sha256 }}
+      reader_target_sha256: ${{ steps.profile.outputs.reader_target_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -56,13 +59,28 @@ jobs:
           profile_commit=$(git rev-parse refs/remotes/origin/ha-build-profile)
           git show "$profile_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
           freebsd_release=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
-          python3 .github/ci/shared/target_pkg.py field .resolver-plugins/target-pkg.json "$SERIES" version
           printf 'profile_commit=%s\nfreebsd_release=%s\n' "$profile_commit" "$freebsd_release" >> "$GITHUB_OUTPUT"
+
+          python3 .github/ci/shared/target_pkg.py resolve --upstream "$RUNNER_TEMP/upstream.json" --series "$SERIES" --architecture x86_64 --output-directory artifacts/trusted
+          printf 'creator_target_sha256=%s\nreader_target_sha256=%s\n' "$(sha256sum artifacts/trusted/creator-target.json | cut -d ' ' -f1)" "$(sha256sum artifacts/trusted/reader-target.json | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+      - id: pkg-targets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.select.outputs.release == 'true'
+        with:
+          name: pkg-targets-dhcp-${{ steps.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/trusted/creator-target.json
+            artifacts/trusted/reader-target.json
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     needs: [profile, test]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
+      RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -76,6 +94,23 @@ jobs:
           git fetch --no-tags origin "$PROFILE_COMMIT"
           mkdir -p artifacts/profile
           git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/profile/upstream.json
+      - name: Require resolved pkg target artifact
+        run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
+      - name: Download resolved pkg targets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
+      - name: Validate resolved pkg targets
+        shell: bash
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role creator
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role reader
       - name: Build and verify in FreeBSD
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -85,7 +120,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES SOURCE_COMMIT PROFILE_COMMIT
+          envs: SERIES SOURCE_COMMIT PROFILE_COMMIT RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           copyback: true
@@ -107,6 +142,9 @@ jobs:
     needs: [profile, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
+      RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -124,6 +162,23 @@ jobs:
           git fetch --no-tags origin "$PROFILE_COMMIT"
           mkdir -p artifacts/trusted
           git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
+      - name: Require resolved pkg target artifact
+        run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
+      - name: Download resolved pkg targets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
+      - name: Validate resolved pkg targets
+        shell: bash
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
       - name: Reuse immutable signed snapshot
         id: reuse
         env:
@@ -136,7 +191,7 @@ jobs:
           (cd "artifacts/$SERIES" && sha256sum --check SHA256SUMS)
           reused=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py reuse \
             --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
-            --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT")
+            --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" --trusted-upstream artifacts/trusted/upstream.json --target-pkg-metadata "$RP_TARGET_PKG_METADATA")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
       - name: Fetch current BIND component
         env:
@@ -155,7 +210,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: RP_PKG_SIGNING_KEY REUSED SERIES SOURCE_COMMIT PROFILE_COMMIT
+          envs: RP_PKG_SIGNING_KEY REUSED SERIES SOURCE_COMMIT PROFILE_COMMIT RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           copyback: true
@@ -169,7 +224,7 @@ jobs:
             export RP_OPNSENSE_SNAPSHOT
             RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$SERIES" >/dev/null
             pkg update -f
-            python3 .github/ci/shared/target_pkg.py install .resolver-plugins/target-pkg.json "$SERIES"
+            python3 .github/ci/shared/target_pkg.py install "$RP_TARGET_PKG_METADATA" "$SERIES" --upstream artifacts/trusted/upstream.json --role creator
             umask 077
             key=.rp-dhcpha-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
@@ -178,11 +233,11 @@ jobs:
               python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py stage \
                 --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
                 --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" \
-                --trusted-upstream artifacts/trusted/upstream.json --key "$key"
+                --trusted-upstream artifacts/trusted/upstream.json --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA"
             fi
             python3 .github/ci/shared/package_catalogue.py stage \
               --bind-channel "artifacts/$SERIES/bind-current" --dhcp-channel "artifacts/$SERIES/repository/current" \
-              --output "artifacts/$SERIES/repository/combined" --series "$SERIES" --key "$key"
+              --output "artifacts/$SERIES/repository/combined" --series "$SERIES" --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --upstream artifacts/trusted/upstream.json
             rm -f "$key"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -195,6 +250,9 @@ jobs:
     needs: [profile, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
+      RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -204,6 +262,31 @@ jobs:
         with:
           name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Materialize trusted profile
+        env:
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$PROFILE_COMMIT"
+          mkdir -p artifacts/trusted
+          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
+      - name: Require resolved pkg target artifact
+        run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
+      - name: Download resolved pkg targets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
+      - name: Validate resolved pkg targets
+        shell: bash
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
       - name: Verify signed installation
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -211,7 +294,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES
+          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           run: |
@@ -221,7 +304,7 @@ jobs:
             pkg install -y python3 git
             expected="artifacts/$SERIES/repository/current"
             combined="artifacts/$SERIES/repository/combined"
-            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
+            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
               "$SERIES" "$expected" "file://$PWD/$combined" "$combined"
 
   publish:
@@ -261,6 +344,9 @@ jobs:
     needs: [profile, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
+      RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -270,6 +356,31 @@ jobs:
         with:
           name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Materialize trusted profile
+        env:
+          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$PROFILE_COMMIT"
+          mkdir -p artifacts/trusted
+          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
+      - name: Require resolved pkg target artifact
+        run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
+      - name: Download resolved pkg targets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
+      - name: Validate resolved pkg targets
+        shell: bash
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
       - name: Verify installation from public signed channel
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -277,7 +388,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES
+          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           run: |
@@ -287,7 +398,7 @@ jobs:
             pkg install -y python3 git
             expected="artifacts/$SERIES/repository/current"
             combined="artifacts/$SERIES/repository/combined"
-            RP_UPSTREAM_METADATA="$expected/upstream.json" .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
+            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
               "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/$SERIES/latest" "$combined"
 
   source-release:

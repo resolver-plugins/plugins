@@ -16,35 +16,94 @@ from shared import release_channel as releases
 
 ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_KEY = ROOT / "docs/package-repository/resolver-plugins.pub"
-TARGET = ROOT / ".resolver-plugins/target-pkg.json"
 PKG = "/usr/local/sbin/pkg-static"
 NAME = "os-dhcp-interface-ha"
 
 
+METADATA_FIELDS = {
+    "series", "source_commit", "profile_commit", "repository_snapshot", "freebsd_release",
+    "core_commit", "uname", "pkg_abi", "opnsense", "plugin_version", "pkg_creator",
+    "creator_release", "creator_ports_commit", "creator_recipe_path",
+}
+
+
+def read_metadata(path):
+    data = {}
+    for line in path.read_text().splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or not value or key in data:
+            raise ValueError("invalid HA build metadata")
+        data[key] = value
+    if set(data) != METADATA_FIELDS:
+        raise ValueError("invalid HA build metadata schema")
+    return data
+
+
 def metadata(directory, series, source, profile):
-    data = dict(line.split("=", 1) for line in
-                (directory / "build-metadata.txt").read_text().splitlines())
-    if (series != "26.7" or not re.fullmatch(r"[0-9a-f]{40}", source)
-            or not re.fullmatch(r"[0-9a-f]{40}", profile)
-            or data["source_commit"] != source or data["profile_commit"] != profile
-            or data["series"] != series
-            or not re.fullmatch(re.escape(series) + r"\.[0-9]+", data.get("repository_snapshot", ""))
-            or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?", data["plugin_version"])):
+    data = read_metadata(directory / "build-metadata.txt")
+    if any(data[key] != value for key, value in (
+            ("series", series), ("source_commit", source), ("profile_commit", profile))):
         raise ValueError("build metadata does not match the selected source/profile")
     return data
+
+
+def validate_component(data, build, upstream):
+    fields = {"schema", "series", "source_commit", "profile_commit", "plugin_version", "package_creator", "assets", "creator_source"}
+    if type(data.get("schema")) is not int or data["schema"] != 2 or set(data) != fields:
+        raise ValueError("invalid HA channel schema")
+    series = data["series"]
+    if (series != "26.7" or any(not re.fullmatch(r"[0-9a-f]{40}", data[key]) for key in ("source_commit", "profile_commit"))
+            or not re.fullmatch(re.escape(series) + r"\.[0-9]+", build["repository_snapshot"])
+            or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?", data["plugin_version"])
+            or not re.fullmatch(re.escape(series) + r"(?:\.[0-9]+)*(?:_[0-9]+)?", build["opnsense"])):
+        raise ValueError("untrusted HA DHCP Interface channel identity")
+    creator = target_pkg.normalize_creator(data["package_creator"])
+    if (any(data[key] != build[key] for key in ("series", "source_commit", "profile_commit", "plugin_version"))
+            or upstream["series"] != build["series"] or upstream["core_commit"] != build["core_commit"]
+            or upstream["freebsd_release"] != build["freebsd_release"]
+            or creator["abi"] != f"FreeBSD:{upstream['freebsd_release'].split('.')[0]}:amd64"
+            or creator["abi"] != build["pkg_abi"] or creator["version"] != build["pkg_creator"]):
+        raise ValueError("untrusted HA DHCP Interface channel identity")
+    source = data["creator_source"]
+    target_pkg.validate_source(source, creator, data["series"])
+    if (source["release"] != upstream["tools_tag"] or source["release"] != build["creator_release"]
+            or source["commit"] != build["creator_ports_commit"]
+            or source["path"] != build["creator_recipe_path"]):
+        raise ValueError("creator source differs from recorded metadata")
+    return creator
+
+
+def validate_incoming(directory, series, source, profile, trusted_upstream, target_metadata):
+    build = metadata(directory, series, source, profile)
+    upstream = metadata_profile.load_profile(trusted_upstream, series)
+    target = target_pkg.load_target(target_metadata, series, upstream=trusted_upstream, role="creator")
+    if ((directory / "upstream.json").read_bytes() != trusted_upstream.read_bytes()
+            or build["repository_snapshot"] != repository_snapshot(series)
+            or build["core_commit"] != upstream["core_commit"]
+            or build["freebsd_release"] != upstream["freebsd_release"]
+            or build["pkg_abi"] != target.identity.abi
+            or build["pkg_creator"] != target.identity.version
+            or build["creator_release"] != target.release
+            or build["creator_ports_commit"] != target.ports_commit
+            or build["creator_recipe_path"] != target.recipe_path):
+        raise ValueError("build provenance differs from trusted pins")
+    return build, target
 
 
 def tags(series, version):
     return f"pkg-dhcp-interface-ha-{series}", f"pkg-dhcp-interface-ha-{series}-{version}"
 
 
-def validate(directory):
+def validate(directory, *, target_metadata=None, trusted_upstream=None):
     data = json.loads((directory / "channel.json").read_text())
     build = metadata(directory, data["series"], data["source_commit"], data["profile_commit"])
-    target = target_pkg.load_target(TARGET, data["series"])
-    if (data["schema"] != 1 or data["plugin_version"] != build["plugin_version"]
-            or data["package_creator"] != target.record()
-            or (directory / "resolver-plugins.pub").read_bytes() != PUBLIC_KEY.read_bytes()):
+    upstream = metadata_profile.load_profile(directory / "upstream.json", data["series"])
+    creator = validate_component(data, build, upstream)
+    if target_metadata is not None:
+        target = target_pkg.load_target(target_metadata, data["series"], upstream=trusted_upstream, role="creator")
+        if creator != target.record():
+            raise ValueError("channel creator differs from trusted creator")
+    if (directory / "resolver-plugins.pub").read_bytes() != PUBLIC_KEY.read_bytes():
         raise ValueError("untrusted HA DHCP Interface channel identity")
     actual = releases.directory_checksums(directory)
     actual.pop("channel.json")
@@ -59,18 +118,8 @@ def validate(directory):
     return data
 
 
-def stage(directory, output, series, source, profile, trusted_upstream, key):
-    build = metadata(directory, series, source, profile)
-    upstream = metadata_profile.load_profile(trusted_upstream, series)
-    target = target_pkg.load_target(TARGET, series)
-    if ((directory / "upstream.json").read_bytes() != trusted_upstream.read_bytes()
-            or build["repository_snapshot"] != repository_snapshot(series)
-            or build["core_commit"] != upstream["core_commit"]
-            or build["freebsd_release"] != upstream["freebsd_release"]
-            or build["pkg_abi"] != target.identity.abi
-            or build["pkg_creator"] != target.identity.version
-            or build["pkg_creator_sha256"] != target.sha256):
-        raise ValueError("build provenance differs from trusted pins")
+def stage(directory, output, series, source, profile, trusted_upstream, key, target_metadata):
+    build, target = validate_incoming(directory, series, source, profile, trusted_upstream, target_metadata)
     version = subprocess.check_output(
         ["make", "-C", str(ROOT / "net/dhcp-interface-ha"), "-V", "PLUGIN_PKGVERSION"], text=True).strip()
     if version != build["plugin_version"]:
@@ -87,23 +136,24 @@ def stage(directory, output, series, source, profile, trusted_upstream, key):
     releases.stage_selected_repository([package], output, key, PKG,
                                        [directory / "build-metadata.txt", trusted_upstream])
     shutil.copyfile(PUBLIC_KEY, output / "resolver-plugins.pub")
-    channel = dict(schema=1, series=series, source_commit=source, profile_commit=profile,
+    channel = dict(schema=2, creator_source=target.source_record(), series=series, source_commit=source, profile_commit=profile,
                    plugin_version=version, package_creator=target.record(),
                    assets=releases.directory_checksums(output))
     (output / "channel.json").write_text(json.dumps(channel, sort_keys=True, indent=2) + "\n")
     validate(output)
 
 
-def reuse(repository, directory, output, series, source, profile):
-    build = metadata(directory, series, source, profile)
+def reuse(repository, directory, output, series, source, profile, trusted_upstream, target_metadata):
+    build, target = validate_incoming(directory, series, source, profile, trusted_upstream, target_metadata)
     _, archive = tags(series, build["plugin_version"])
     with tempfile.TemporaryDirectory() as temporary:
         snapshot = releases.snapshot_release(repository, archive, Path(temporary))
         if not snapshot.existed:
             return False
         data = validate(snapshot.directory)
-        if data["source_commit"] != source or data["profile_commit"] != profile:
-            raise ValueError("existing immutable version has different source/profile; bump the plugin revision")
+        if (data["source_commit"] != source or data["profile_commit"] != profile
+                or target_pkg.normalize_creator(data["package_creator"]) != target.record()):
+            raise ValueError("existing immutable version has different source/profile or creator; bump the plugin revision")
         shutil.copytree(snapshot.directory, output)
     return True
 
@@ -150,16 +200,17 @@ if __name__ == "__main__":
     parser.add_argument("--profile-commit")
     parser.add_argument("--trusted-upstream", type=Path)
     parser.add_argument("--key", type=Path)
+    parser.add_argument("--target-pkg-metadata", type=Path)
     parser.add_argument("--repository", default="resolver-plugins/repository")
     parser.add_argument("--recovery", type=Path)
     args = parser.parse_args()
     if args.command == "stage":
         stage(args.directory, args.output, args.series, args.source_commit, args.profile_commit,
-              args.trusted_upstream, args.key)
+              args.trusted_upstream, args.key, args.target_pkg_metadata)
     elif args.command == "reuse":
         print(str(reuse(args.repository, args.directory, args.output, args.series,
-                        args.source_commit, args.profile_commit)).lower())
+                        args.source_commit, args.profile_commit, args.trusted_upstream, args.target_pkg_metadata)).lower())
     elif args.command == "promote":
         promote(args.repository, args.directory, args.recovery)
     else:
-        validate(args.directory)
+        validate(args.directory, target_metadata=args.target_pkg_metadata, trusted_upstream=args.trusted_upstream)

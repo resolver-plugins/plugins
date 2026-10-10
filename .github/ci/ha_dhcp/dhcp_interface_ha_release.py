@@ -12,7 +12,7 @@ MAKEFILE = "net/dhcp-interface-ha/Makefile"
 def repository_snapshot(series):
     if series != "26.7":
         raise ValueError("HA DHCP releases support only OPNsense 26.7")
-    # This signed catalogue contains the exact target-pkg.json archive pin.
+    # Keep ordinary framework dependencies on the reviewed snapshot.
     return "26.7.4"
 
 

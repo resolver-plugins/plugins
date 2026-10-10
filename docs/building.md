@@ -57,7 +57,7 @@ publication helpers still come from the trusted `master` control plane. Closing 
 without merging does not build a release. Manual dispatch remains available
 for an explicit series or development build.
 
-Reproduce that split in a disposable worktree when building locally. Start
+Reproduce that split in a disposable clone when building locally. Start
 from `master`, fetch the selected release branch, and overlay only its release
 inputs before entering the matching FreeBSD environment:
 
@@ -110,34 +110,84 @@ any OPNsense package repository configuration is used.
 
 ### Target package manager and manifest compatibility
 
-`.resolver-plugins/target-pkg.json` pins the exact `pkg` archive and
-`pkg-static` executable hash for each OPNsense series. Build wrappers install
-and lock that target package manager before creating either BIND or plugin
-archives. This forced selection is builder-only; it is not an instruction to
-upgrade an OPNsense host package manager.
+The selected immutable upstream profile's numeric `tools_tag` selects the
+creator recipe from that exact official `opnsense/ports` tag. One resolution
+also selects the minimum reader recipe: `26.1.11` for 26.1, and `26.7` for 26.7.
+Both use the profile's FreeBSD major and `amd64` ABI. The resolver accepts the
+literal version, revision and epoch from either `opnsense/pkg` or
+`ports-mgmt/pkg`; ambiguous or unsupported recipes stop the build.
 
-`.resolver-plugins/target-pkg-content.json` separately pins a canonical digest
-of the archive's extracted paths, types, modes, ownership, file flags,
-hardlink relationships, file bytes, and symlink targets. Each digest records
-the exact signed archive from which its reviewed baseline was calculated. If a
-production build fails because OPNsense repacked an otherwise identical
-archive, the workflow opens a review PR containing only the new outer archive
-hash. It never merges that PR automatically. Merging the PR rebuilds the
-affected release series.
-An identity or extracted-content change remains a hard failure and requires an
-intentional package-creator update.
+Resolve both records once after materializing the selected release inputs:
 
-The initial 26.7 content pin is an intentional baseline of the currently
-signed archive. The previously pinned archive was no longer available when
-this guard was introduced, so that baseline must be reviewed as a full package
-content trust decision; it is not cryptographic proof that the unavailable
-archive had identical contents. Subsequent automatic proposals compare against
-this fixed baseline and cannot update it.
+```sh
+python3 .github/ci/shared/target_pkg.py resolve \
+  --upstream .resolver-plugins/upstream.json --series "$series" \
+  --architecture x86_64 --output-directory artifacts/trusted
+export RP_TARGET_PKG_METADATA=artifacts/trusted/creator-target.json
+export RP_READER_PKG_METADATA=artifacts/trusted/reader-target.json
+```
 
-BIND provenance records the immutable creator as `package_creator`; plugin
-`build-metadata.txt` records the flat `pkg_creator` and
-`pkg_creator_sha256` fields. Reuse is a cache miss unless those values match
-the selected target exactly.
+CI transfers only these two records in a separate, immutable same-run artifact.
+Consumers download its artifact ID and verify both profile-job SHA256 outputs
+before metadata helpers or VM execution. Builder output cannot select signing
+policy. These digests protect our control records; they do not pin upstream
+creator archive or binary bytes.
+
+Repository setup loads the pinned core's trusted and revoked fingerprints.
+Selection first queries the authenticated ordinary OPNsense feed for the exact
+recipe identity. A successful query with no match permits the disabled
+`OPNsense-creator` feed at `<series>/MINT/<resolved-release>/latest`. Update,
+query and fetch errors stop selection; there is no raw-download or latest-version
+fallback. The ordinary dependency snapshot remains independent, including HA's
+reviewed `26.7.4` snapshot.
+
+The selector force-installs and locks the exact name/version/origin/ABI, even
+when an upstream reissue keeps that identity while changing bytes. It verifies
+`pkg-static` ownership, executable version, and installed manifest integrity.
+If replacement fails after unlocking, it attempts to relock the remaining
+installed package while preserving the original failure diagnostic. This is
+build/qualification policy, not an instruction to upgrade a firewall's package
+manager.
+
+For an explicit creator install and verification in the disposable build VM:
+
+```sh
+python3 .github/ci/shared/target_pkg.py install "$RP_TARGET_PKG_METADATA" "$series" \
+  --upstream .resolver-plugins/upstream.json --role creator
+python3 .github/ci/shared/target_pkg.py verify "$RP_TARGET_PKG_METADATA" "$series" \
+  --upstream .resolver-plugins/upstream.json --role creator
+```
+
+Installation qualification uses the separate reader record with `--role reader`
+and the same upstream profile. Set `RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA"`
+on repository setup for that VM, so its disabled feed selects the reader release.
+Do not resolve tags again in consumer jobs.
+
+New BIND provenance uses schema 4 and channels use schema 5; HA channels use
+schema 2. `package_creator` contains name, full version, origin and ABI.
+`creator_source` records the numeric release, official repository, commit and
+recipe path for audit. Flat build metadata records `pkg_creator`,
+`creator_release`, `creator_ports_commit` and `creator_recipe_path`.
+BIND reuse fingerprints include creator identity and the existing BIND/build
+compatibility inputs, excluding audit references and upstream creator bytes.
+Normal CI reads only BIND provenance schema 4, BIND channel schema 5 and HA
+channel schema 2. Other formats stop processing. Compatible current-format
+immutable retries preserve every original byte, including earlier audit
+references. Combined schema-1 catalogues
+retain each component's own creator provenance, permitting creator upgrades or
+origin relocation while requiring a common ABI, exact archives and authenticated
+catalogue reads. Creator byte reissues no longer need hash-update PRs.
+
+Before enabling normal release automation, perform the one-time BIND cutover
+for both 26.1 and 26.7. Build fresh packages with `RP_BIND920_CHANNEL_URL` unset,
+then sign and qualify them against their minimum readers. Temporary local
+cutover tooling validates fresh build metadata and BIND provenance against the
+selected trusted profiles and source/control revisions, validates the existing
+current channels, preserves their exact recovery bytes and publishes the fresh
+channels and shared feeds. Retire that tooling after both public feeds pass
+verification. Historical snapshots remain
+installable through `pkg`; they are not inputs to current CI. Do not rewrite
+their metadata to describe a build that never occurred.
 
 Before copying an artifact, each wrapper verifies that the target parser can
 read a non-null checksum for every packaged file. The equivalent manual gate

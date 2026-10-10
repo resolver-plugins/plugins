@@ -10,7 +10,11 @@ esac
 plugin_directory=$2
 
 [ "$3" = package ] || exit 2
-printf '%s\n' 'make package' >> "${PKG_CALL_LOG:?}"
+[ -f "${PKG_LOCK_MARKER:?}" ] || exit 2
+sha256sum -c "${PKG_STATIC_PATH:?}.manifest" >/dev/null
+[ "$("$PKG_STATIC_PATH" -v)" = '2.3.1' ] || exit 2
+printf '%s\n' 'creator verified at build' >> "${PKG_CALL_LOG:?}"
+printf '%s\n' 'make package'  >> "${PKG_CALL_LOG:?}"
 
 fixture_directory=$(mktemp -d)
 trap 'rm -rf "$fixture_directory"' EXIT

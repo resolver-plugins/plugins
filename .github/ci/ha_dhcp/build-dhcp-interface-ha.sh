@@ -14,23 +14,25 @@ plugin="$root/net/dhcp-interface-ha"
 pkg_static=${RP_PKG_STATIC_COMMAND:-/usr/local/sbin/pkg-static}
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
-target_metadata=${RP_TARGET_PKG_METADATA:-$root/.resolver-plugins/target-pkg.json}
+: "${RP_TARGET_PKG_METADATA:?creator target metadata is required}"
+target_metadata=$RP_TARGET_PKG_METADATA
 
 freebsd_release=$(python3 "$ci/shared/metadata_profile.py" "$RP_UPSTREAM_METADATA" "$series" freebsd_release)
 RP_OPNSENSE_SNAPSHOT=$(python3 "$ci/ha_dhcp/dhcp_interface_ha_release.py" snapshot --series "$series")
 export RP_OPNSENSE_SNAPSHOT
+python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 core_commit=$("$ci/shared/setup-opnsense-repository.sh" "$series")
 "$pkg_command" update -f
-python3 "$ci/shared/target_pkg.py" install "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
+python3 "$ci/shared/target_pkg.py" install "$target_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 # Install the target framework for the package installation and native route check.
 "$pkg_command" install -y -r OPNsense opnsense
-python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
+python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 
 # Keep the package name unsuffixed, regardless of the checkout's Mk marker.
 # Do not use make clean: the upstream target resets tracked plugin source.
 rm -rf "$plugin/work"
 "$make_command" -C "$plugin" PLUGIN_DEVEL= PLUGIN_ABI="$series" PLUGIN_HASH="$SOURCE_COMMIT" package
-python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
+python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 set -- "$plugin"/work/pkg/os-dhcp-interface-ha-*.pkg
 if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
     echo 'Expected exactly one plugin archive' >&2
@@ -50,7 +52,7 @@ fi
 "$pkg_static" check -s os-dhcp-interface-ha
 /usr/local/bin/php "$plugin/tests/native/test_ui_routes.php"
 python3 "$plugin/tests/native/test_fresh_install.py"
-python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --pkg-command "$pkg_command" --pkg-static "$pkg_static"
+python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" --pkg-static "$pkg_static"
 
 mkdir -p "$output"
 cp "$package" "$output/"
@@ -67,6 +69,8 @@ cp "$RP_UPSTREAM_METADATA" "$output/upstream.json"
     printf 'opnsense=%s\n' "$("$pkg_command" query -e '%n = opnsense' '%v')"
     printf 'plugin_version=%s\n' "$("$pkg_static" query -F "$package" '%v')"
     printf 'pkg_creator=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" version)"
-    printf 'pkg_creator_sha256=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" sha256)"
+    printf 'creator_release=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" release)"
+    printf 'creator_ports_commit=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" ports_commit)"
+    printf 'creator_recipe_path=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" recipe_path)"
 } > "$output/build-metadata.txt"
 (cd "$output" && sha256 -r ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)

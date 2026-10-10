@@ -339,10 +339,12 @@ be byte-identical; different bytes fail before any channel is changed,
 preventing an older retry from moving current backward.
 When the target snapshot is absent and current differs, the staged source and
 control commits must each be equal to or descend from current, and at least one
-lineage must advance. The one-time migration from a legacy channel without a
-control commit to schema 4 permits an equal source commit. This allows
-BIND-only and source promotions while rejecting stale runs even after snapshot
-pruning.
+lineage must advance. Normal CI accepts only BIND channel schema 5/provenance
+schema 4 and HA channel schema 2. Before enabling it, freshly rebuild, sign,
+qualify and publish both existing BIND series using temporary local cutover
+tooling. Retire that tooling after verification; keep historical snapshot assets
+unchanged and available to `pkg`. This preserves BIND-only and source promotions
+while rejecting stale runs even after snapshot pruning.
 
 After promotion, a fresh FreeBSD VM configures the pinned OPNsense repository,
 installs its matching core package, and runs `scripts/install-os-bind-rp.sh`

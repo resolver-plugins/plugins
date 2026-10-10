@@ -102,8 +102,7 @@ def test_production_selection_refuses_a_release_branch_control_plane(tmp_path):
       '.github/ci/shared/metadata_profile.py', '.github/ci/shared/setup-opnsense-repository.sh',
       '.github/ci/shared/tools/new_helper.py'], True),
     (['.resolver-plugins/bind920.json', '.resolver-plugins/bind-compatibility.json',
-      '.resolver-plugins/upstream.json', '.resolver-plugins/target-pkg.json',
-      '.resolver-plugins/target-pkg-content.json'], True),
+      '.resolver-plugins/upstream.json'], True),
     (['Mk/plugins.mk', 'Scripts/version.sh', 'Templates/example.in',
       'docs/package-repository/resolver-plugins.pub', 'scripts/install-os-bind-rp.sh',
       '.github/workflows/bind-package-release.yml'], True),
@@ -130,22 +129,6 @@ def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
     assert result.returncode == 0, result.stderr
 
 
-def test_merging_a_repack_recovery_rebuilds_its_exact_series(tmp_path):
-    repository = init_repository(tmp_path)
-    target = '.resolver-plugins/target-pkg.json'
-    profile = json.loads((REPOSITORY_ROOT / target).read_text())
-    before = commit(repository, {target: json.dumps(profile)}, 'original archive')
-    profile['series']['26.1']['sha256'] = 'f' * 64
-    after = commit(repository, {target: json.dumps(profile)}, 'repacked 26.1 archive')
-    helper = '.github/ci/shared/target_pkg.py'
-    (repository / helper).parent.mkdir(parents=True)
-    shutil.copyfile(REPOSITORY_ROOT / helper, repository / helper)
-    result, selected = run_selection(tmp_path, BEFORE_SHA=before, GITHUB_SHA=after)
-    assert result.returncode == 0, result.stderr
-    assert selected == dict(mode='production', series='26.1', source_ref='refs/heads/release/bind-rp/26.1',
-                            control_ref=after, prerelease_tag='', pull_number='')
-
-
 def test_build_jobs_checkout_the_selected_control_plane_and_release_inputs():
     workflow = workflow_text()
     assert '  workflow_dispatch:\n' in workflow.split('\njobs:', 1)[0]
@@ -163,27 +146,12 @@ def test_build_jobs_checkout_the_selected_control_plane_and_release_inputs():
     assert 'needs: [select, profile, test, bind]' in build
 
 
-def test_failed_production_bind_job_can_only_propose_a_content_identical_pkg_repack():
-    workflow = workflow_text()
-    recovery = job_text(workflow, 'recover-target-pkg')
-    validator = recovery
-    proposer = job_text(workflow, 'propose-target-pkg')
-
-    assert "needs.bind.result == 'failure'" in validator
-    assert "needs.select.outputs.mode == 'production'" in validator
-    assert '.resolver-plugins/target-pkg-content.json' in validator
-    assert 'target_pkg.py refresh' in validator
-    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in proposer
-    assert 'gh pr create' in proposer
-    assert 'gh pr merge' not in validator + proposer
-
-
 def test_workflow_uses_sha_pinned_actions_and_nonpersistent_checkout_credentials():
     workflow = workflow_text()
     assert_pinned_actions(workflow)
     for name, job in workflow_jobs(workflow).items():
         if 'uses: actions/checkout@' in job:
-            assert_checkout_credentials(job, persistent=name == 'propose-target-pkg')
+            assert_checkout_credentials(job)
 
 
 def test_production_signing_and_publication_are_separate_from_builds():
@@ -192,11 +160,10 @@ def test_production_signing_and_publication_are_separate_from_builds():
     assert 'secrets.' not in workflow.split('jobs:', 1)[0]
     assert_permissions(workflow, {'contents': 'read', 'pull-requests': 'read'})
     overrides = {
-        'propose-target-pkg': {'contents': 'write', 'pull-requests': 'write'},
         'publish-development': {'contents': 'write', 'pull-requests': 'read'},
         'source-release': {'contents': 'write'},
     }
-    for name in ('bind', 'recover-target-pkg', 'build', 'verify-development',
+    for name in ('bind', 'build', 'verify-development',
                  'sign', 'publish', 'verify', 'verify-published'):
         overrides[name] = {'contents': 'read'}
     for name, job in jobs.items():
@@ -219,13 +186,13 @@ def test_signer_binds_the_control_commit_and_trusted_build_profiles():
     for command in ('validate-bind-provenance', 'validate-build-metadata', 'reuse-snapshot', 'stage-channel'):
         matches = re.findall(r'release_channel\.py ' + command + r' ([^\n]+)', signer.replace('\\\n', ''))
         arguments = shlex.split(matches[0])
-        assert arguments[arguments.index('--target-pkg-metadata') + 1] == '.resolver-plugins/target-pkg.json'
+        assert arguments[arguments.index('--target-pkg-metadata') + 1] == '$RP_TARGET_PKG_METADATA'
         if command == 'validate-bind-provenance':
             assert arguments[arguments.index('--profile') + 1] == '.resolver-plugins/bind920.json'
             assert arguments[arguments.index('--freebsd-release') + 1] == '${{ needs.profile.outputs.freebsd_release }}'
             assert arguments[arguments.index('--series') + 1] == '$SERIES'
         if command == 'validate-build-metadata':
-            assert arguments[arguments.index('--upstream') + 1] == '$output/trusted-upstream.json'
+            assert arguments[arguments.index('--upstream') + 1] == 'artifacts/trusted/upstream.json'
 
 
 def test_publisher_mints_a_repository_scoped_github_app_token():
@@ -316,4 +283,43 @@ def test_freebsd_install_gates_pin_verify_and_replace_official_packages(job):
     assert verifier.index('.github/ci/shared/setup-opnsense-repository.sh') < verifier.index(
         'target_pkg.py install'
     ) < verifier.index(official) < verifier.index(checksums)
+    for line in verifier.splitlines():
+        if 'target_pkg.py install' in line or 'target_pkg.py verify' in line:
+            assert '"$RP_READER_PKG_METADATA"' in line and '--role reader' in line and '--upstream .resolver-plugins/upstream.json' in line
+    assert 'RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=' in verifier
     assert verifier.index('pkg check -s bind-tools bind920 os-bind-rp') < verifier.index(runtime)
+
+
+@pytest.mark.parametrize('workflow', ['bind-package-release.yml', 'ha-dhcp-interface-release.yml'])
+@pytest.mark.parametrize('changed', [None, 'creator', 'reader'])
+def test_control_bundle_preflight_rejects_changed_records(tmp_path, workflow, changed):
+    """Run the real signing preflight; valid substituted records must fail their digest."""
+    from package_fixtures import write_resolved_target, write_json
+    from shared import target_pkg
+    trusted = tmp_path / 'artifacts/trusted'
+    trusted.mkdir(parents=True)
+    upstream = write_json(trusted / 'upstream.json', upstream_profile('26.7'))
+    digests = {}
+    for role in ('creator', 'reader'):
+        record = write_resolved_target(trusted / f'{role}-target.json', upstream_profile('26.7'), role=role)
+        digests[role] = hashlib.sha256(record.read_bytes()).hexdigest()
+        if changed == role:
+            data = json.loads(record.read_text())
+            data['package_creator']['version'] = '9.9.9'
+            write_json(record, data)
+        target_pkg.load_target(record, '26.7', upstream=upstream, role=role)
+    shutil.copytree(REPOSITORY_ROOT / '.github/ci/shared', tmp_path / '.github/ci/shared')
+    signer = job_text((REPOSITORY_ROOT / '.github/workflows' / workflow).read_text(), 'sign')
+    step = signer.split('      - name: Validate resolved pkg targets\n', 1)[1].split('      - ', 1)[0]
+    script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+    for role, digest in digests.items():
+        script = script.replace('${{ needs.profile.outputs.' + role + '_target_sha256 }}', digest)
+    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script], cwd=tmp_path,
+        env=dict(os.environ, SERIES='26.7'), capture_output=True, text=True)
+    if changed:
+        assert result.returncode != 0
+        assert f'{changed}-target.json: FAILED' in result.stdout
+        assert 'checksum did NOT match' in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert 'creator-target.json: OK' in result.stdout and 'reader-target.json: OK' in result.stdout

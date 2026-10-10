@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
 
@@ -24,17 +25,8 @@ DISTVERSION_PATTERN = re.compile(r"9\.20\.[0-9]+")
 SERIES_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
 FREEBSD_RELEASE_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
 ARCHITECTURE_PATTERN = re.compile(r"[a-z0-9_]+")
-PROVENANCE_SCHEMA = 3
+PROVENANCE_SCHEMA = 4
 BUILD_RECIPE_PATH = Path(__file__).with_name("build-bind920.sh")
-PACKAGE_CREATOR_FIELDS = {
-    "name",
-    "version",
-    "origin",
-    "abi",
-    "filename",
-    "sha256",
-    "pkg_static_sha256",
-}
 PACKAGE_ORIGINS = {
     "bind-tools": "dns/bind-tools",
     "bind920": "dns/bind920",
@@ -84,23 +76,12 @@ def package_version(profile: object) -> str:
     return f"{profile['distversion']}_{profile['portrevision']}"
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared import target_pkg
+
+
 def validate_package_creator(package_creator: object) -> dict[str, str]:
-    """Validate the immutable target package-manager provenance record."""
-    if (
-        not isinstance(package_creator, dict)
-        or set(package_creator) != PACKAGE_CREATOR_FIELDS
-        or not all(
-            isinstance(package_creator[field], str) and package_creator[field]
-            for field in PACKAGE_CREATOR_FIELDS
-        )
-        or package_creator["name"] != "pkg"
-        or package_creator["origin"] != "ports-mgmt/pkg"
-        or Path(package_creator["filename"]).name != package_creator["filename"]
-        or SHA256_PATTERN.fullmatch(package_creator["sha256"]) is None
-        or SHA256_PATTERN.fullmatch(package_creator["pkg_static_sha256"]) is None
-    ):
-        raise ValueError("package creator has an invalid schema")
-    return package_creator
+    return target_pkg.normalize_creator(package_creator)
 
 
 def build_recipe_sha256() -> str:

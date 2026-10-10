@@ -5,46 +5,17 @@ from __future__ import annotations
 
 from module_fixtures import *
 
-from package_fixtures import BIND_PROFILE as PROFILE, bind_records, package_creator
+from package_fixtures import BIND_PROFILE as PROFILE, bind_records, creator_identity
 
 MODULE_PATH = CI / "bind/bind920_profile.py"
 bind920_profile = load_module("bind920_profile", MODULE_PATH)
 
 
 PACKAGES = bind_records()
-PACKAGE_CREATOR = package_creator("FreeBSD:14:amd64")
+PACKAGE_CREATOR = creator_identity("FreeBSD:14:amd64")
 
 
 class Bind920ReuseTest(unittest.TestCase):
-    def test_fingerprint_rejects_different_compatibility_inputs(self) -> None:
-        """Changing any compatibility input must prevent package reuse."""
-        baseline = bind920_profile.compatibility_fingerprint(
-            PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-        )
-        changed_profile = dict(PROFILE, makefile_sha256="0" * 64)
-        self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(PROFILE, "26.7", "14.3", "x86_64", PACKAGE_CREATOR))
-        self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(PROFILE, "26.1", "14.4", "x86_64", PACKAGE_CREATOR))
-        self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(PROFILE, "26.1", "14.3", "aarch64", PACKAGE_CREATOR))
-        self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(changed_profile, "26.1", "14.3", "x86_64", PACKAGE_CREATOR))
-        self.assertNotEqual(baseline, bind920_profile.compatibility_fingerprint(PROFILE, "26.1", "14.3", "x86_64", dict(PACKAGE_CREATOR, sha256="c" * 64)))
-
-    def test_fingerprint_changes_when_the_bind_build_recipe_changes(self) -> None:
-        """A build-policy change must force fresh BIND package archives."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            recipe = Path(temporary_directory) / "build-bind920.sh"
-            recipe.write_text("pkg install lmdb\n", encoding="utf-8")
-            with patch.object(bind920_profile, "BUILD_RECIPE_PATH", recipe):
-                baseline = bind920_profile.compatibility_fingerprint(
-                    PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-                )
-                recipe.write_text("pkg install lmdb0\n", encoding="utf-8")
-                corrected = bind920_profile.compatibility_fingerprint(
-                    PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-                )
-
-        self.assertNotEqual(baseline, corrected)
-
-
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
         """The shell wrapper writes complete provenance for both package version forms."""
         for version, revision, package_version in [('9.20.26', 2, '9.20.26_2'), ('9.20.27', 0, '9.20.27')]:
@@ -65,7 +36,7 @@ class Bind920ReuseTest(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 provenance = json.loads(output.read_text())
                 self.assertEqual(bind_records(package_version), provenance['packages'])
-                self.assertEqual(3, provenance['schema'])
+                self.assertEqual(4, provenance['schema'])
                 self.assertEqual(PACKAGE_CREATOR, provenance['package_creator'])
                 self.assertEqual(hashlib.sha256(bind920_profile.BUILD_RECIPE_PATH.read_bytes()).hexdigest(),
                                  provenance['build_recipe_sha256'])

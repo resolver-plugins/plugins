@@ -8,10 +8,10 @@ fi
 case "$1" in
     update) exit 0 ;;
     fetch)
-        [ "$2" = -y ] && [ "$3" = -r ] && [ "$4" = OPNsense ] || exit 2
-        [ "$5" = -o ] && [ "$7" = pkg-2.3.1_1 ] || exit 2
-        mkdir -p "$6/All"
-        printf '%s\n' 'fixture target package archive' > "$6/All/pkg-2.3.1_1.pkg"
+        [ "$2" = -U ] && [ "$3" = -y ] && [ "$4" = -r ] && [ "$5" = OPNsense ] || exit 2
+        [ "$6" = -o ] && [ "$8" = pkg-2.3.1_1 ] || exit 2
+        mkdir -p "$7/All"
+        printf '%s\n' 'fixture target package archive' > "$7/All/pkg-2.3.1_1.pkg"
         ;;
     add)
         [ "$2" = -f ] || exit 2
@@ -19,15 +19,21 @@ case "$1" in
         then
             cp "${0%/*}/pkg-static-fixture.sh" "$PKG_STATIC_PATH"
             chmod 0755 "$PKG_STATIC_PATH"
+            sha256sum "$PKG_STATIC_PATH" > "$PKG_STATIC_PATH.manifest"
         fi
         ;;
     lock)
         case "$2" in
             -y) : > "${PKG_LOCK_MARKER:?}" ;;
-            -l) [ -f "${PKG_LOCK_MARKER:?}" ] && printf '%s\n' 'pkg-2.3.1_1' ;;
+            -l) if [ -f "${PKG_LOCK_MARKER:?}" ]; then printf '%s\n' 'pkg-2.3.1_1'; fi ;;
             *) exit 2 ;;
         esac
         ;;
+    unlock) rm -f "${PKG_LOCK_MARKER:?}" ;;
+    which) [ -f "${PKG_STATIC_PATH:?}.manifest" ] || exit 2
+        [ "$3" = "$PKG_STATIC_PATH" ] || exit 2
+        printf '%s\n' 'pkg-2.3.1_1' ;;
+    check) sha256sum -c "${PKG_STATIC_PATH:?}.manifest" >/dev/null ;;
     install)
         if [ "${3:-}" = python3 ] && [ -n "${PYTHON_COMMAND:-}" ]
         then
@@ -54,7 +60,12 @@ case "$1" in
         ;;
         esac
         ;;
-    rquery) printf '%s\n' '26.1.11_10' ;;
+    rquery)
+        case "$*" in
+            *'%n = pkg'*) printf '%s\n' 'pkg|2.3.1_1|ports-mgmt/pkg|FreeBSD:14:amd64' ;;
+            *) printf '%s\n' '26.1.11_10' ;;
+        esac ;;
+
     config) printf '%s\n' 'FreeBSD:14:amd64' ;;
     version) printf '%s\n' "${PKG_VERSION_COMPARISON:-=}" ;;
     *) exit 2 ;;

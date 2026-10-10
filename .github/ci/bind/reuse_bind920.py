@@ -44,14 +44,14 @@ def select_candidate(
     """Validate and select a compatible BIND package pair from provenance."""
     if not isinstance(provenance, dict):
         raise ValueError("BIND provenance has an invalid schema")
-    if provenance.get("schema") != bind920_profile.PROVENANCE_SCHEMA:
-        raise CacheMiss("stable BIND provenance schema differs")
+    schema = provenance.get("schema")
+    if type(schema) is not int or schema != bind920_profile.PROVENANCE_SCHEMA:
+        raise ValueError("BIND provenance has an unsupported schema")
+    target_pkg.normalize_creator(provenance.get("package_creator"))
     if provenance.get("package_creator") != package_creator:
         raise CacheMiss("stable BIND package creator differs")
-    if not isinstance(provenance, dict) or set(provenance) != PROVENANCE_FIELDS:
+    if set(provenance) != PROVENANCE_FIELDS:
         raise ValueError("BIND provenance has an invalid schema")
-    if provenance["schema"] != bind920_profile.PROVENANCE_SCHEMA:
-        raise ValueError("BIND provenance has an unsupported schema")
     if not isinstance(provenance["fingerprint"], str):
         raise ValueError("BIND provenance has an invalid fingerprint")
     if not all(isinstance(provenance[field], str) for field in ("series", "freebsd_release", "architecture")):

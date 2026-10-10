@@ -5,8 +5,6 @@ on:
     paths:
       - 'dns/bind/**'
       - '.github/ci/**'
-      - '.resolver-plugins/target-pkg.json'
-      - '.resolver-plugins/target-pkg-content.json'
       - '.github/workflows/bind-tests.yml'
       - '.resolver-plugins/bind920.json'
   workflow_call:
@@ -54,7 +52,7 @@ jobs:
                 bind_source=true
                 ci_helpers=true
                 ;;
-              .resolver-plugins/bind920.json|.resolver-plugins/target-pkg.json|.resolver-plugins/target-pkg-content.json)
+              .resolver-plugins/bind920.json)
                 ci_helpers=true
                 ;;
             esac

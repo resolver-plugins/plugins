@@ -20,7 +20,8 @@ pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
 git_command=${GIT_COMMAND:-git}
 python_command=${PYTHON_COMMAND:-python3}
-target_pkg_metadata=${RP_TARGET_PKG_METADATA:-$repository_root/.resolver-plugins/target-pkg.json}
+: "${RP_TARGET_PKG_METADATA:?RP_TARGET_PKG_METADATA is required}"
+target_pkg_metadata=$RP_TARGET_PKG_METADATA
 pkg_static=${RP_PKG_STATIC_COMMAND:-/usr/local/sbin/pkg-static}
 
 metadata_field() {
@@ -37,17 +38,20 @@ package_version=$(metadata_field package_version) || fail 'invalid BIND profile'
 freebsd_release=$("$python_command" "$script_directory/../shared/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
 
+"$python_command" "$script_directory/../shared/target_pkg.py" field \
+    "$target_pkg_metadata" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
+
 "$pkg_command" update -f
 "$pkg_command" install -y git
 "$script_directory/../shared/setup-opnsense-repository.sh" "$series" >/dev/null
 pkg_creator_record=$("$python_command" "$script_directory/../shared/target_pkg.py" install \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static") || fail 'cannot select target package creator'
 [ -n "$pkg_creator_record" ] || fail 'target package creator record is empty'
 "$pkg_command" install -y autoconf automake fstrm gmake json-c libedit libidn2 \
     libnghttp2 libtool liburcu libuv libxml2 lmdb0 pkgconf protobuf-c
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 
 if [ -n "${RP_BIND920_CHANNEL_URL:-}" ]
@@ -104,11 +108,11 @@ PY
 fi
 
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind-tools" PORTSDIR="$ports_directory" package
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind-tools package was not produced as expected'
@@ -118,11 +122,11 @@ bind_tools_package=$1
 "$pkg_command" add "$bind_tools_package"
 
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind920" PORTSDIR="$ports_directory" package
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
-    "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
+    "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind920/work/pkg/bind920-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind920 package was not produced as expected'

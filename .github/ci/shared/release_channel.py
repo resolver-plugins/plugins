@@ -34,24 +34,10 @@ COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SERIES_PLUGIN_VERSION_PATTERN = re.compile(r"(?P<series>[0-9]+\.[0-9]+)_(?P<revision>[1-9][0-9]*)")
 PACKAGE_ABI_PATTERN = re.compile(r"FreeBSD:[0-9]+:amd64")
 BUILD_METADATA_FIELDS = {
-    "series",
-    "uname",
-    "pkg_abi",
-    "bind920",
-    "bind_source",
-    "opnsense",
-    "opnsense_core_commit",
-    "upstream_commit",
-    "core_commit",
-    "tools_tag",
-    "freebsd_release",
-    "source_commit",
-    "pkg_creator",
-    "pkg_creator_sha256",
-}
-LEGACY_BUILD_METADATA_FIELDS = BUILD_METADATA_FIELDS - {
-    "pkg_creator",
-    "pkg_creator_sha256",
+    "series", "uname", "pkg_abi", "bind920", "bind_source", "opnsense",
+    "opnsense_core_commit", "upstream_commit", "core_commit", "tools_tag",
+    "freebsd_release", "source_commit",
+    "pkg_creator", "creator_release", "creator_ports_commit", "creator_recipe_path",
 }
 TRUSTED_BUILD_FIELDS = {"series", "upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
 
@@ -318,7 +304,7 @@ def stage_selected_repository(
     return assets
 
 
-def read_build_metadata(path: Path, *, allow_legacy: bool = False) -> dict[str, str]:
+def read_build_metadata(path: Path) -> dict[str, str]:
     """Read the small, line-oriented build identity used by channel.json."""
     if not path.is_file():
         raise ValueError("plugin build metadata does not exist")
@@ -328,11 +314,8 @@ def read_build_metadata(path: Path, *, allow_legacy: bool = False) -> dict[str, 
         if not separator or not key or not value or key in fields:
             raise ValueError("plugin build metadata is invalid")
         fields[key] = value
-    accepted_fields = {frozenset(BUILD_METADATA_FIELDS)}
-    if allow_legacy:
-        accepted_fields.add(frozenset(LEGACY_BUILD_METADATA_FIELDS))
     if (
-        frozenset(fields) not in accepted_fields
+        set(fields) != BUILD_METADATA_FIELDS
         or SERIES_PATTERN.fullmatch(fields.get("series", "")) is None
         or not all(fields.values())
     ):
@@ -362,7 +345,8 @@ def validate_build_metadata(
     ):
         raise ValueError("trusted release metadata is invalid")
     expected = {field: upstream[field] for field in TRUSTED_BUILD_FIELDS}
-    package_creator = target_pkg.load_target(target_pkg_metadata, series).record()
+    target = target_pkg.load_target(target_pkg_metadata, series, upstream=upstream_path, role="creator")
+    package_creator = target.record()
     if (
         {field: metadata[field] for field in TRUSTED_BUILD_FIELDS} != expected
         or metadata["series"] != series
@@ -374,7 +358,10 @@ def validate_build_metadata(
         or provenance.get("freebsd_release") != metadata["freebsd_release"]
         or provenance.get("package_creator") != package_creator
         or metadata["pkg_creator"] != package_creator["version"]
-        or metadata["pkg_creator_sha256"] != package_creator["sha256"]
+        or metadata["pkg_abi"] != package_creator["abi"]
+        or metadata["creator_release"] != target.release
+        or metadata["creator_ports_commit"] != target.ports_commit
+        or metadata["creator_recipe_path"] != target.recipe_path
     ):
         raise ValueError("build artifact does not match trusted release metadata")
     return metadata
@@ -417,7 +404,12 @@ def stage_channel_repository(
         or metadata["opnsense_core_commit"] != metadata["core_commit"]
         or bind_metadata.get("package_creator") != package_creator
         or metadata["pkg_creator"] != package_creator["version"]
-        or metadata["pkg_creator_sha256"] != package_creator["sha256"]
+        or target_package.role != "creator"
+        or target_package.release != metadata["tools_tag"]
+        or metadata["pkg_abi"] != package_creator["abi"]
+        or metadata["creator_release"] != target_package.release
+        or metadata["creator_ports_commit"] != target_package.ports_commit
+        or metadata["creator_recipe_path"] != target_package.recipe_path
     ):
         raise ValueError("BIND provenance does not match plugin build metadata")
     package_abi = validate_channel_package_manifests(
@@ -429,7 +421,8 @@ def stage_channel_repository(
         packages, output, private_key, pkg_command, [provenance, build_metadata]
     )
     channel_manifest = {
-        "schema": 4,
+        "schema": 5,
+        "creator_source": target_package.source_record(),
         "control_commit": control_commit,
         "series": metadata["series"],
         "package_abi": package_abi,
@@ -672,7 +665,61 @@ def validate_static_channel(directory: Path) -> None:
         validate_channel_directory(directory)
 
 
-def validate_channel_directory(directory: Path) -> None:
+def validate_bind_component(channel: object, provenance: object, metadata: dict[str, str]) -> None:
+    """Check current-format sidecars using their recorded build identity."""
+    if not isinstance(channel, dict) or not isinstance(provenance, dict):
+        raise ValueError("prior channel audit metadata is inconsistent")
+    fields = {
+        "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
+        "package_creator", "package_abi", "control_commit", "creator_source",
+    }
+    if type(channel.get("schema")) is not int or channel["schema"] != 5 or set(channel) != fields:
+        raise ValueError("prior channel audit metadata is inconsistent")
+    provenance_fields = {
+        "schema", "fingerprint", "series", "freebsd_release", "architecture", "packages",
+        "package_creator", "build_recipe_sha256",
+    }
+    if (type(provenance.get("schema")) is not int or provenance["schema"] != 4
+            or set(provenance) != provenance_fields):
+        raise ValueError("prior BIND provenance is inconsistent")
+    validate_bind_fingerprint(provenance.get("fingerprint"))
+    validate_bind_fingerprint(provenance.get("build_recipe_sha256"))
+    records = provenance.get("packages")
+    if not isinstance(records, dict) or set(records) != {"bind-tools", "bind920"}:
+        raise ValueError("prior BIND provenance is inconsistent")
+    for name, record in records.items():
+        expected = dict(name=name, version=metadata["bind920"], origin=f"dns/{name}",
+                        filename=f"{name}-{metadata['bind920']}.pkg")
+        if record != expected:
+            raise ValueError("prior BIND package identity is inconsistent")
+    expected_bind = {key: provenance.get(key) for key in ("fingerprint", "freebsd_release", "architecture")}
+    if (channel["series"] != metadata["series"] or provenance.get("series") != metadata["series"]
+            or channel["source_commit"] != metadata["source_commit"]
+            or channel["build"] != {key: metadata[key] for key in TRUSTED_BUILD_FIELDS - {"series"}}
+            or channel["bind"] != expected_bind
+            or provenance.get("freebsd_release") != metadata["freebsd_release"]
+            or provenance.get("architecture") != "x86_64"
+            or metadata["opnsense_core_commit"] != metadata["core_commit"]):
+        raise ValueError("prior channel audit metadata is inconsistent")
+    if (not isinstance(channel["control_commit"], str)
+            or COMMIT_PATTERN.fullmatch(channel["control_commit"]) is None):
+        raise ValueError("prior channel control commit is invalid")
+    creator = target_pkg.normalize_creator(channel["package_creator"])
+    if (channel["package_creator"] != provenance.get("package_creator")
+            or creator["version"] != metadata["pkg_creator"]
+            or creator["abi"] != metadata["pkg_abi"]):
+        raise ValueError("prior channel creator is inconsistent")
+    if channel["package_abi"] != creator["abi"]:
+        raise ValueError("prior channel ABI is inconsistent")
+    source = channel["creator_source"]
+    target_pkg.validate_source(source, creator, channel["series"])
+    if (source["release"] != metadata["tools_tag"] or source["release"] != metadata["creator_release"]
+            or source["commit"] != metadata["creator_ports_commit"]
+            or source["path"] != metadata["creator_recipe_path"]):
+        raise ValueError("prior channel creator source is inconsistent")
+
+
+def validate_channel_directory(directory: Path, *, target_metadata: Path | None = None, upstream: Path | None = None) -> None:
     """Reject malformed recovery bytes before mutating the current channel."""
     packages = select_channel_packages(directory)
     if len(packages) != 3:
@@ -685,74 +732,15 @@ def validate_channel_directory(directory: Path) -> None:
     expected_checksums = {package.name: sha256(package) for package in packages}
     if not isinstance(channel, dict) or channel.get("packages") != expected_checksums:
         raise ValueError("prior channel package checksum does not match its audit manifest")
-    schema = channel.get("schema") if isinstance(channel, dict) else None
-    metadata = read_build_metadata(
-        directory / "build-metadata.txt", allow_legacy=schema == 1
-    )
-    base_channel_fields = {
-        "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
-    }
-    if schema == 1:
-        required_channel_fields = base_channel_fields
-    elif schema == 2:
-        required_channel_fields = base_channel_fields | {"package_creator"}
-    elif schema == 3:
-        required_channel_fields = base_channel_fields | {"package_creator", "package_abi"}
-    else:
-        required_channel_fields = base_channel_fields | {
-            "control_commit", "package_creator", "package_abi",
-        }
-    required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
-    expected_bind = {
-        field: provenance.get(field)
-        for field in ("fingerprint", "freebsd_release", "architecture")
-    }
-    try:
-        if schema == 1:
-            package_abi = None
-        elif schema == 2:
-            package_abi = channel.get("package_creator", {}).get("abi")
-        else:
-            package_abi = channel["package_abi"]
-        if package_abi is not None:
-            validate_package_abi(package_abi)
-    except (AttributeError, KeyError, ValueError) as error:
-        raise ValueError("prior channel audit metadata is inconsistent") from error
-    if (
-        set(channel) != required_channel_fields
-        or schema not in {1, 2, 3, 4}
-        or (
-            schema == 4
-            and (
-                not isinstance(channel.get("control_commit"), str)
-                or COMMIT_PATTERN.fullmatch(channel["control_commit"]) is None
-            )
-        )
-        or channel["series"] != metadata["series"]
-        or channel["plugin_version"]
-        != packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg")
-        or channel["source_commit"] != metadata["source_commit"]
-        or channel["build"] != {
-            field: metadata[field] for field in sorted(required_build_fields)
-        }
-        or channel["bind"] != expected_bind
-        or any(value is None for value in expected_bind.values())
-        or (
-            schema in {2, 3, 4}
-            and (
-                channel.get("package_creator") != provenance.get("package_creator")
-                or (
-                    schema in {3, 4}
-                    and package_abi != channel.get("package_creator", {}).get("abi")
-                )
-                or metadata.get("pkg_creator")
-                != provenance.get("package_creator", {}).get("version")
-                or metadata.get("pkg_creator_sha256")
-                != provenance.get("package_creator", {}).get("sha256")
-            )
-        )
-    ):
-        raise ValueError("prior channel audit metadata is inconsistent")
+    metadata = read_build_metadata(directory / "build-metadata.txt")
+    validate_bind_component(channel, provenance, metadata)
+    if target_metadata is not None:
+        target = target_pkg.load_target(target_metadata, channel["series"], upstream=upstream, role="creator")
+        creator = target_pkg.normalize_creator(channel.get("package_creator"))
+        if creator != target.record():
+            raise ValueError("channel creator differs from trusted creator")
+    if channel["plugin_version"] != packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"):
+        raise ValueError("prior channel plugin version is inconsistent")
     public_key = directory / "resolver-plugins.pub"
     assets = [path.name for path in directory.iterdir() if path.is_file()]
     if (
@@ -796,7 +784,7 @@ def materialize_existing_snapshot(
             or channel.get("series") != series
             or channel.get("plugin_version") != version
             or channel.get("source_commit") != source_commit
-            or channel.get("package_creator") != package_creator
+            or target_pkg.normalize_creator(channel.get("package_creator")) != package_creator
             or channel.get("bind") != expected_bind
             or any(value is None for value in expected_bind.values())
         ):
@@ -900,19 +888,16 @@ def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
         or COMMIT_PATTERN.fullmatch(staged_commit) is None
     ):
         return False
-    if staged_channel.get("schema") != 4:
+    if current_channel.get("schema") != 5 or staged_channel.get("schema") != 5:
         return False
     staged_control = staged_channel.get("control_commit")
     if not isinstance(staged_control, str) or COMMIT_PATTERN.fullmatch(staged_control) is None:
         return False
     if not commit_is_ancestor_or_equal(current_commit, staged_commit):
         return False
-    if current_channel.get("schema") in {1, 2, 3}:
-        return True
     current_control = current_channel.get("control_commit")
     if (
-        current_channel.get("schema") != 4
-        or not isinstance(current_control, str)
+        not isinstance(current_control, str)
         or COMMIT_PATTERN.fullmatch(current_control) is None
         or not commit_is_ancestor_or_equal(current_control, staged_control)
     ):
@@ -1350,6 +1335,10 @@ def main() -> None:
     validate_metadata.add_argument("--series", required=True)
     validate_metadata.add_argument("--source-commit", required=True)
     validate_metadata.add_argument("--target-pkg-metadata", type=Path, required=True)
+    validate_channel = commands.add_parser("validate-channel")
+    validate_channel.add_argument("--directory", type=Path, required=True)
+    validate_channel.add_argument("--target-pkg-metadata", type=Path)
+    validate_channel.add_argument("--upstream", type=Path)
     snapshot_tag = commands.add_parser("snapshot-tag")
     snapshot_tag.add_argument("series")
     snapshot_tag.add_argument("version")
@@ -1417,7 +1406,9 @@ def main() -> None:
     bootstrap.add_argument("--series", required=True)
     bootstrap.add_argument("--public-key-path", required=True)
     arguments = parser.parse_args()
-    if arguments.command == "validate-bind-provenance":
+    if arguments.command == "validate-channel":
+        validate_channel_directory(arguments.directory, target_metadata=arguments.target_pkg_metadata, upstream=arguments.upstream)
+    elif arguments.command == "validate-bind-provenance":
         provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
         validate_bind_provenance(
             provenance, bind920_profile.load_profile(arguments.profile),

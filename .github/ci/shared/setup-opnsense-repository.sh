@@ -14,8 +14,12 @@ if [ -z "${RP_UPSTREAM_METADATA:-}" ]
 then
     fail 'RP_UPSTREAM_METADATA is required'
 fi
+[ -n "${RP_TARGET_PKG_METADATA:-}" ] || fail 'RP_TARGET_PKG_METADATA is required'
 
 script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+target_release=$(python3 "$script_directory/target_pkg.py" field \
+    "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA") || \
+    fail 'invalid target/upstream profile'
 metadata_field() {
     python3 "$script_directory/metadata_profile.py" \
         "$RP_UPSTREAM_METADATA" "$series" "$1"
@@ -69,6 +73,13 @@ grep -Fq 'signature_type: "fingerprints"' "$repository_source" || \
 
 mkdir -p "$repository_directory" "$fingerprint_directory"
 install -m 0644 "$repository_source" "$repository_directory/OPNsense.conf"
+# This disabled feed serves only the resolved role's exact release.
+sed \
+    -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|g' \
+    -e "s|%%CORE_ABI%%|$series/MINT/$target_release|g" \
+    -e 's/^OPNsense:/OPNsense-creator:/' \
+    -e 's|enabled: yes|enabled: no|' \
+    "$repository_template" > "$repository_directory/OPNsense-creator.conf"
 printf '%s\n' 'FreeBSD: {' '  enabled: no' '}' > "$repository_directory/FreeBSD.conf"
 
 for group in trusted revoked

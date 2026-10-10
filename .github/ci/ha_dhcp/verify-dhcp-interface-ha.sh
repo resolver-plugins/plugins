@@ -9,14 +9,18 @@ combined=$4
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 ci="$root/.github/ci"
 : "${RP_UPSTREAM_METADATA:?trusted upstream metadata is required}"
-python3 "$ci/ha_dhcp/dhcp_interface_ha_channel.py" validate --directory "$expected"
+: "${RP_TARGET_PKG_METADATA:?creator target metadata is required}"
+: "${RP_READER_PKG_METADATA:?reader target metadata is required}"
+python3 "$ci/shared/target_pkg.py" field "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
+python3 "$ci/shared/target_pkg.py" field "$RP_READER_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role reader >/dev/null
+python3 "$ci/ha_dhcp/dhcp_interface_ha_channel.py" validate --directory "$expected" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --trusted-upstream "$RP_UPSTREAM_METADATA"
 RP_OPNSENSE_SNAPSHOT=$(python3 "$ci/ha_dhcp/dhcp_interface_ha_release.py" snapshot --series "$series")
 export RP_OPNSENSE_SNAPSHOT
-"$ci/shared/setup-opnsense-repository.sh" "$series" >/dev/null
+RP_TARGET_PKG_METADATA=$RP_READER_PKG_METADATA "$ci/shared/setup-opnsense-repository.sh" "$series" >/dev/null
 pkg update -f
-python3 "$ci/shared/target_pkg.py" install "$root/.resolver-plugins/target-pkg.json" "$series"
+python3 "$ci/shared/target_pkg.py" install "$RP_READER_PKG_METADATA" "$series" --upstream "$RP_UPSTREAM_METADATA" --role reader
 pkg install -y -r OPNsense opnsense
-python3 "$ci/shared/target_pkg.py" verify "$root/.resolver-plugins/target-pkg.json" "$series"
+python3 "$ci/shared/target_pkg.py" verify "$RP_READER_PKG_METADATA" "$series" --upstream "$RP_UPSTREAM_METADATA" --role reader
 SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
 export SSL_CERT_FILE
 case "$url" in
@@ -29,7 +33,7 @@ case "$url" in
         done
         ;;
 esac
-python3 "$ci/shared/package_catalogue.py" verify --directory "$combined" --url "$url"
+python3 "$ci/shared/package_catalogue.py" verify --directory "$combined" --url "$url" --reader-target "$RP_READER_PKG_METADATA" --upstream "$RP_UPSTREAM_METADATA"
 install -d -m 0750 /conf
 if [ ! -e /conf/config.xml ]; then
     printf '%s\n' '<opnsense/>' > /conf/config.xml
@@ -64,4 +68,4 @@ cmp /tmp/dhcpha-expected-sorted /tmp/dhcpha-installed-sorted
 pkg check -s os-dhcp-interface-ha
 /usr/local/bin/php "$root/net/dhcp-interface-ha/tests/native/test_ui_routes.php"
 python3 "$root/net/dhcp-interface-ha/tests/native/test_fresh_install.py"
-python3 "$ci/shared/target_pkg.py" verify "$root/.resolver-plugins/target-pkg.json" "$series"
+python3 "$ci/shared/target_pkg.py" verify "$RP_READER_PKG_METADATA" "$series" --upstream "$RP_UPSTREAM_METADATA" --role reader
