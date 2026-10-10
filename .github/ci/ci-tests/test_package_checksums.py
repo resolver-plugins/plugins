@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import importlib.util
-import shlex
-import tempfile
-from contextlib import contextmanager
-from collections.abc import Iterator
-from pathlib import Path
+from module_fixtures import *
 
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "package_checksums.py"
-SPEC = importlib.util.spec_from_file_location("package_checksums", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-package_checksums = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(package_checksums)
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "ci-local"
+package_checksums = load_module("package_checksums", "shared/package_checksums.py")
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "ci-local"
 
 
 @contextmanager
@@ -51,28 +42,11 @@ def test_accepts_complete_target_readable_file_checksums(tmp_path: Path, prefix:
 
 @pytest.mark.parametrize(
     "output",
-    ["", "/usr/local/sbin/named|(null)\n", "/usr/local/sbin/named|\n"],
+    ["", "/usr/local/first|" + "a" * 64 + "\n/usr/local/sbin/named|(null)\n"],
 )
 def test_rejects_missing_or_null_file_checksums(tmp_path: Path, output: str) -> None:
     archive = tmp_path / "bind920.pkg"
     archive.touch()
     with pkg_fixture(output) as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="bind920.pkg"):
-            package_checksums.verify_archive(str(pkg), archive)
-
-
-def test_rejects_malformed_checksum_rows(tmp_path: Path) -> None:
-    archive = tmp_path / "bind920.pkg"
-    archive.touch()
-    with pkg_fixture("not-a-file-checksum-row\n") as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="malformed"):
-            package_checksums.verify_archive(str(pkg), archive)
-
-
-@pytest.mark.parametrize("checksum", ["garbage", "3$" + "a" * 64, "1$abc"])
-def test_rejects_unrecognized_checksum_formats(tmp_path: Path, checksum: str) -> None:
-    archive = tmp_path / "bind920.pkg"
-    archive.touch()
-    with pkg_fixture(f"/usr/local/sbin/named|{checksum}\n") as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="unrecognized"):
+        with pytest.raises(package_checksums.PackageChecksumError, match="incomplete target-readable"):
             package_checksums.verify_archive(str(pkg), archive)

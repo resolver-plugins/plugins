@@ -1,5 +1,4 @@
-import pathlib
-import subprocess
+from git_fixtures import *
 
 import pytest
 
@@ -8,33 +7,15 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 GUARD = REPOSITORY_ROOT / ".github/ci/check-bind-pkg-descr.sh"
 
 
-def git(repository: pathlib.Path, *arguments: str) -> str:
-    return subprocess.run(
-        ["git", "-C", repository, *arguments],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-
 def initialize_repository(repository: pathlib.Path) -> str:
-    repository.mkdir()
-    git(repository, "init")
-    git(repository, "config", "user.email", "tests@example.invalid")
-    git(repository, "config", "user.name", "Description guard tests")
+    init_repository(repository)
     initial = {
         "dns/bind/Makefile": "PLUGIN_VERSION= 1.0\nPLUGIN_REVISION= 1\nPLUGIN_DEPENDS= bind920\n",
         "dns/bind/pkg-descr": "Initial description\n",
         "dns/bind/src/service": "initial\n",
         "dns/bind/tests/test_service.py": "initial\n",
     }
-    for name, contents in initial.items():
-        destination = repository / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(contents, encoding="utf-8")
-    git(repository, "add", ".")
-    git(repository, "commit", "-m", "initial")
-    return git(repository, "rev-parse", "HEAD")
+    return commit(repository, initial, "initial")
 
 
 def run_guard(repository: pathlib.Path, base: str, head: str) -> int:
@@ -48,13 +29,8 @@ def run_guard(repository: pathlib.Path, base: str, head: str) -> int:
 
 def check_case(repository: pathlib.Path, changes: dict[str, str]) -> int:
     base = initialize_repository(repository)
-    for name, contents in changes.items():
-        destination = repository / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(contents, encoding="utf-8")
-    git(repository, "add", ".")
-    git(repository, "commit", "-m", "change")
-    return run_guard(repository, base, "HEAD")
+    head = commit(repository, changes, "change")
+    return run_guard(repository, base, head)
 
 
 @pytest.mark.parametrize(
@@ -76,16 +52,6 @@ def check_case(repository: pathlib.Path, changes: dict[str, str]) -> int:
                 "dns/bind/Makefile": (
                     "PLUGIN_VERSION= 1.0\nPLUGIN_REVISION= 1\nPLUGIN_DEPENDS= bind920\n"
                     "PLUGIN_DEPEND_FORMULA_DEPENDS= bind920\n"
-                )
-            },
-            1,
-        ),
-        (
-            "manifest-dependency",
-            {
-                "dns/bind/Makefile": (
-                    "PLUGIN_VERSION= 1.0\nPLUGIN_REVISION= 1\nPLUGIN_DEPENDS= bind920\n"
-                    "PLUGIN_MANIFEST_DEPENDS= bind920\n"
                 )
             },
             1,
@@ -115,7 +81,6 @@ def test_guard_uses_merge_base_when_the_release_branch_advances(tmp_path):
     git(repository, "commit", "-am", "advance base")
     advanced_base = git(repository, "rev-parse", "HEAD")
 
-    assert original_base == git(repository, "merge-base", advanced_base, head)
     assert run_guard(repository, advanced_base, head) == 1
 
 

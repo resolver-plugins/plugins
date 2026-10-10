@@ -9,18 +9,8 @@ case "$2" in
 esac
 plugin_directory=$2
 
-case "$3" in
-    clean)
-        for package in "$plugin_directory"/work/pkg/os-bind-rp-*.pkg
-        do
-            [ -f "$package" ] || continue
-            rm -f "$package"
-        done
-        exit 0
-        ;;
-    package) ;;
-    *) exit 2 ;;
-esac
+[ "$3" = package ] || exit 2
+printf '%s\n' 'make package' >> "${PKG_CALL_LOG:?}"
 
 fixture_directory=$(mktemp -d)
 trap 'rm -rf "$fixture_directory"' EXIT

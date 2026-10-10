@@ -18,7 +18,7 @@ inputs:
   in existing release profiles. They are not the build-time trust anchor.
 
 Do not substitute a moving branch, a current tools checkout, or an unverified
-core commit for these values. `.github/ci/metadata_profile.py` rejects profiles
+core commit for these values. `.github/ci/shared/metadata_profile.py` rejects profiles
 that do not meet the required schema and provenance checks.
 
 The BIND runtime package recipe is pinned separately in
@@ -32,8 +32,9 @@ routine update warrants it.
 
 ## Local build
 
-The GitHub Actions workflow is the canonical build path. It keeps the CI
-scripts checked out from `master`, fetches the selected immutable release
+The [BIND release workflow](../.github/workflows/bind-package-release.yml) is the
+canonical build path. It keeps the CI scripts checked out from `master`,
+fetches the selected immutable release
 commit, then materializes only that commit's `dns/bind` source and
 `.resolver-plugins/upstream.json` and `Mk` build framework. This matters for
 legacy release branches, which intentionally do not carry the control-plane
@@ -41,10 +42,18 @@ scripts. In particular, the release `Mk` files prevent a development-branch
 marker from adding an unintended `-devel` package suffix.
 
 Package-affecting pushes to `master` automatically run production for the
-newest numeric `release/bind-rp/<series>` branch. Merging a package-affecting
-pull request into a release-source branch automatically runs production for
-that series, pinned to the merge commit. The workflow and publication helpers
-still come from the trusted `master` control plane. Closing a pull request
+newest numeric `release/bind-rp/<series>` branch. Release helpers are grouped in
+`.github/ci/bind/`, `.github/ci/ha_dhcp/`, and `.github/ci/shared/`;
+regression tests remain in `.github/ci/ci-tests/`. The BIND workflow watches the
+whole `bind/` and `shared/` directories, so new helpers are covered automatically.
+HA-only source, release helpers
+and workflows, test-only edits, and documentation do not trigger a BIND build.
+Shared catalogue, signing/publication, package-creator, and build-framework changes
+still do. PR test workflows retain their own broader validation filters.
+
+Merging a package-affecting pull request into a release-source branch automatically
+runs production for that series, pinned to the merge commit. The workflow and
+publication helpers still come from the trusted `master` control plane. Closing a pull request
 without merging does not build a release. Manual dispatch remains available
 for an explicit series or development build.
 
@@ -135,7 +144,7 @@ read a non-null checksum for every packaged file. The equivalent manual gate
 is:
 
 ```sh
-python3 .github/ci/package_checksums.py \
+python3 .github/ci/shared/package_checksums.py \
   --pkg-command /usr/local/sbin/pkg-static path/to/package.pkg
 ```
 
@@ -147,7 +156,7 @@ For example, after preparing the selected release source:
 ```sh
 RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
 SOURCE_COMMIT="$source_commit" \
-.github/ci/build-os-bind-rp.sh "$series" "artifacts/$series"
+.github/ci/bind/build-os-bind-rp.sh "$series" "artifacts/$series"
 ```
 
 If that command exits with status `3`, build or reuse the Resolver fallback
@@ -156,17 +165,17 @@ and invoke the plugin wrapper with `RP_BIND920_FALLBACK=yes`:
 ```sh
 RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
 SOURCE_COMMIT="$source_commit" \
-.github/ci/build-bind920.sh "$series" "artifacts/$series"
+.github/ci/bind/build-bind920.sh "$series" "artifacts/$series"
 RP_BIND920_FALLBACK=yes RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
 SOURCE_COMMIT="$source_commit" \
-.github/ci/build-os-bind-rp.sh "$series" "artifacts/$series"
+.github/ci/bind/build-os-bind-rp.sh "$series" "artifacts/$series"
 ```
 
 The package and `build-metadata.txt` are written below the output directory.
 The metadata records the source commit, BIND package version, OPNsense package
 version, ABI, provenance values, and FreeBSD environment used for the build.
 
-`.github/ci/setup-opnsense-repository.sh <series>` is normally called by the
+`.github/ci/shared/setup-opnsense-repository.sh <series>` is normally called by the
 build runner. Use it directly only when diagnosing repository setup; it changes
 the FreeBSD VM's package repository configuration.
 
@@ -209,16 +218,29 @@ it does not publish packages.
 
 ## Before approving a build change
 
+The `CI helper tests` pull-request workflow runs the full `.github/ci/ci-tests/`
+suite when CI, workflow, package, framework, or installer inputs change. It uses
+read-only repository permissions and local Git and command fixtures. Package
+build and publication triggers are unchanged.
+
 Check that the metadata is valid before running a full VM build:
 
 ```sh
-python3 .github/ci/metadata_profile.py \
+python3 .github/ci/shared/metadata_profile.py \
   .resolver-plugins/upstream.json "$series" freebsd_release
-sh -n .github/ci/build-bind920.sh .github/ci/build-os-bind-rp.sh \
-  .github/ci/setup-opnsense-repository.sh
-python3 -m py_compile .github/ci/*.py
+sh -n .github/ci/bind/build-bind920.sh .github/ci/bind/build-os-bind-rp.sh \
+  .github/ci/shared/setup-opnsense-repository.sh
+python3 -m compileall -q .github/ci
 pytest -q .github/ci/ci-tests
 git diff --check
+```
+
+Also check the three suites used by the candidate workflow without pytest:
+
+```sh
+python3 .github/ci/ci-tests/test_bind920_candidate.py
+python3 .github/ci/ci-tests/test_bind920_reuse.py
+python3 .github/ci/ci-tests/test_release_channel_provenance.py
 ```
 
 Inspect the resulting package and `build-metadata.txt` before treating a build

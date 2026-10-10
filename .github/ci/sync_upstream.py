@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from metadata_profile import (
+from shared.metadata_profile import (
     COMMIT_PATTERN,
     FREEBSD_RELEASE_PATTERN,
     tools_tag_matches_series,

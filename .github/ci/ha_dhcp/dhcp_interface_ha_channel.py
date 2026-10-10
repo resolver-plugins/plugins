@@ -6,15 +6,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
-import metadata_profile
-from dhcp_interface_ha_release import repository_snapshot
-import package_checksums
-import release_channel as releases
-import target_pkg
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ha_dhcp.dhcp_interface_ha_release import repository_snapshot
+from shared import metadata_profile, package_checksums, target_pkg
+from shared import release_channel as releases
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_KEY = ROOT / "docs/package-repository/resolver-plugins.pub"
 TARGET = ROOT / ".resolver-plugins/target-pkg.json"
 PKG = "/usr/local/sbin/pkg-static"

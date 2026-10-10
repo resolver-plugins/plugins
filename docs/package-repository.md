@@ -27,7 +27,7 @@ After HA DHCP publication, the 26.7 feed also contains `os-dhcp-interface-ha`.
 OPNsense 26.1 continues to offer BIND only. Existing client URLs and trust keys stay
 the same; the additional plugin is installed only when explicitly selected.
 
-Both production workflows assemble the feed with `.github/ci/package_catalogue.py`.
+Both production workflows assemble the feed with `.github/ci/shared/package_catalogue.py`.
 Each release retains the other plugin's exact published archives, verifies input
 catalogue signatures, package identities, ABI, provenance and checksums, then signs
 one combined catalogue. Both publishers share the `package-release` concurrency
@@ -267,8 +267,11 @@ cache miss. The plugin is built against that exact pair.
 
 Package-affecting pushes to `master` automatically publish the newest numeric
 `release/bind-rp/<series>` branch after review and merge. The trigger covers
-the BIND plugin, release helpers and workflow, control-plane metadata, package
-framework, and committed repository public key. `workflow_dispatch` remains
+the BIND plugin, the `.github/ci/bind/` and `.github/ci/shared/` helper directories, release
+workflow, build metadata, package framework, BIND installer, and committed
+repository public key. HA-only helpers, tests, documentation, and upstream
+discovery tooling do not trigger BIND publication. Changes to the shared catalogue
+or signing/publication helpers still do. `workflow_dispatch` remains
 available for development builds and explicit production rebuilds or series selection; a production
 dispatch from any ref other than `master` is rejected. Release branches supply
 immutable build inputs only and never run publication helpers. Publication
@@ -372,6 +375,15 @@ managed service script, and querying an authoritative canary name. This catches
 broken executables, linked libraries, service integration, and basic DNS
 response failures before promotion.
 
+The published installation gate also checks the installer's mode-0700 durable
+state directory and the configuration backup's original bytes and mode. It keeps
+the caller-owned temporary archives, compares their recorded hashes with both
+the fetched and staged packages, and observes the isolated repository dry run
+before the installer's live transaction. It checks every installed package's file checksums.
+These observations qualify only the selected series in a successful native run;
+both 26.1 and 26.7 need successful runs before retiring the corresponding local
+official-replacement regression test.
+
 If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
 the replacement public key, and republish every channel for every supported
 series. Announce the new fingerprint; existing clients must update their key
@@ -386,7 +398,7 @@ repository. Each component release rebuilds the shared catalogue with the other
 component's published packages. Existing Resolver Plugins clients keep the same
 feed URL and public key.
 
-The [HA DHCP release workflow](../.github/workflows/dhcp-interface-ha-release.yml)
+The [HA DHCP release workflow](../.github/workflows/ha-dhcp-interface-release.yml)
 runs automatically when the plugin's package version increases on `master`;
 manual dispatch from `master` supports recovery. It publishes experimental
 `os-dhcp-interface-ha` packages for 26.7 / amd64 after staged and public

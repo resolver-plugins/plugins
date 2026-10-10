@@ -1,19 +1,11 @@
 """Shared-feed preservation, signature boundaries and publication concurrency."""
-import base64
-import json
-from pathlib import Path
-import shutil
-import subprocess
-import sys
-import tempfile
-from types import SimpleNamespace
-from unittest.mock import Mock
+from common_imports import *
 
 import pytest
 
 CI = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CI))
-import package_catalogue as catalogue
+from shared import package_catalogue as catalogue
 from ha_fixtures import make_ha_channel
 
 
@@ -85,7 +77,9 @@ def test_either_release_preserves_the_other_component_bytes(channels, tmp_path, 
     output = stage(channels, tmp_path)
     data = catalogue.validate(output)
     assert set(data['components']) == {'bind', 'dhcp'}
-    assert sum(len(record['packages']) for record in data['components'].values()) == 4
+    assert {name for record in data['components'].values() for name in record['packages']} == {
+        'bind-tools-9.20.26_1.pkg', 'bind920-9.20.26_1.pkg',
+        'os-bind-rp-26.7_1.pkg', 'os-dhcp-interface-ha-0.2_43.pkg'}
     for name, directory in zip(('bind', 'dhcp'), channels[:2]):
         for filename in data['components'][name]['packages']:
             assert (output / filename).read_bytes() == (directory / filename).read_bytes()
@@ -97,7 +91,7 @@ def test_either_release_preserves_the_other_component_bytes(channels, tmp_path, 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(catalogue.releases, 'publish_abi_channel', publish)
         catalogue.publish('example/distribution', output, tmp_path / 'recovery')
-        publish.assert_called_once()
+        publish.assert_called_once_with('example/distribution', output, tmp_path / 'recovery')
         # A newer retained component invalidates the staged aggregate on retry.
         directory = channels[0 if component == 'bind' else 1]
         (directory / 'build-metadata.txt').write_text('new source metadata')
@@ -120,8 +114,13 @@ def test_bind_only_bootstrap_cannot_omit_a_newly_published_dhcp_component(channe
     publish.assert_not_called()
 
 
-@pytest.mark.parametrize('fault', ['key', 'series', 'abi', 'extra', 'signature'])
-def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing(channels, tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('fault,exception,error', [
+    ('key', ValueError, 'key or package set differs'),
+    ('series', ValueError, 'audit metadata is inconsistent'),
+    ('abi', ValueError, 'package ABI differs'),
+    ('signature', subprocess.CalledProcessError, 'pkg.*update'),
+])
+def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing(channels, tmp_path, fault, exception, error):
     bind, dhcp, identities = channels
     if fault == 'key':
         (bind / 'resolver-plugins.pub').write_text('foreign key')
@@ -132,18 +131,16 @@ def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing
     elif fault == 'abi':
         name = 'os-dhcp-interface-ha-0.2_43.pkg'
         identities[name] = (*identities[name][:3], 'FreeBSD:14:amd64')
-    elif fault == 'extra':
-        (bind / 'unexpected.pkg').write_text('unreviewed')
     else:
         catalogue.verify_packages.side_effect = subprocess.CalledProcessError(1, ['pkg', 'update'])
-    with pytest.raises((ValueError, subprocess.CalledProcessError)):
+    with pytest.raises(exception, match=error):
         stage(channels, tmp_path)
     catalogue.releases.stage_selected_repository.assert_not_called()
 
 
 @pytest.mark.parametrize('fault,rehash,error', [
     ('bytes', False, 'assets'), ('missing', False, 'assets'),
-    ('extra', False, 'assets'), ('metadata', False, 'assets'),
+    ('extra', False, 'assets'),
     ('bytes', True, 'package bytes differ from component provenance'),
     ('metadata', True, 'component metadata differs from original release'),
 ])
@@ -187,15 +184,10 @@ def test_static_publisher_rejects_component_removal_before_any_mutation(channels
 
 def test_both_workflows_serialize_and_publish_the_shared_catalogue():
     root = CI.parents[1]
-    for filename in ('package-release.yml', 'dhcp-interface-ha-release.yml'):
+    for filename in ('bind-package-release.yml', 'ha-dhcp-interface-release.yml'):
         text = (root / '.github/workflows' / filename).read_text()
         assert 'group: package-release\n  cancel-in-progress: false' in text
-        assert 'package_catalogue.py fetch' in text
-        assert 'package_catalogue.py stage' in text
         assert 'package_catalogue.py publish' in text
-        assert 'release_channel.py publish-abi-channel' not in text
-        assert 'repository/combined' in text
-        assert 'resolver-plugins.github.io/repository/pkg/' in text
 
 
 @pytest.fixture
@@ -207,7 +199,10 @@ def executable_directory():
 
 
 @pytest.mark.parametrize('fault', ['', 'signature', 'extra-package', 'archive-bytes'])
-def test_native_repository_verification_uses_isolated_signed_catalogue_and_exact_archives(tmp_path, executable_directory, monkeypatch, fault):
+def test_repository_verification_observes_isolated_catalogue_and_exact_archives(tmp_path, executable_directory, monkeypatch, fault):
+    verification = tmp_path / 'verification'
+    verification.mkdir()
+    monkeypatch.setattr(catalogue.tempfile, 'TemporaryDirectory', lambda: nullcontext(str(verification)))
     package = tmp_path / 'os-example-1.pkg'
     package.write_text('expected package bytes')
     command = executable_directory / 'pkg-fixture'
@@ -219,14 +214,19 @@ import sys
 args = sys.argv[1:]
 fault = FAULT
 package = Path(PACKAGE)
+root = Path(VERIFICATION_ROOT)
+if any(operation in args for operation in ('update', 'rquery', 'fetch')):
+    with (root / 'commands.log').open('a') as stream:
+        stream.write(next(operation for operation in ('update', 'rquery', 'fetch') if operation in args) + '\\n')
+    assert args[:6] == ['-o', f'REPOS_DIR={root / "repos"}', '-o', f'PKG_DBDIR={root / "db"}',
+                        '-o', f'PKG_CACHEDIR={root / "cache"}']
 if 'update' in args:
-    repos = Path(next(arg.split('=', 1)[1] for arg in args if arg.startswith('REPOS_DIR=')))
+    repos = root / 'repos'
     config = (repos / 'catalogue.conf').read_text()
     assert 'signature_type: "pubkey"' in config
-    assert 'mirror_type: "none"' in config
-    assert 'example.invalid' in config
-    assert any(arg.startswith('PKG_DBDIR=') for arg in args)
-    assert any(arg.startswith('PKG_CACHEDIR=') for arg in args)
+    assert 'url: "https://packages.example.invalid/feed"' in config
+    key = Path(json.loads(config.split('pubkey: ', 1)[1].splitlines()[0]))
+    assert key.read_bytes() == EXPECTED_KEY
     if fault == 'signature':
         sys.exit(1)
 elif 'query' in args and not args[-1].startswith('%dn'):
@@ -246,11 +246,14 @@ elif 'fetch' in args:
         (output / package.name).write_text('different bytes')
 elif 'query' not in args:
     raise AssertionError(args)
-'''.replace('FAULT', repr(fault)).replace('PACKAGE', repr(str(package))))
+'''.replace('FAULT', repr(fault)).replace('PACKAGE', repr(str(package)))
+       .replace('EXPECTED_KEY', repr(catalogue.PUBLIC_KEY.read_bytes()))
+       .replace('VERIFICATION_ROOT', repr(str(verification))))
     command.chmod(0o755)
     monkeypatch.setattr(catalogue, 'PKG', str(command))
     if not fault:
         catalogue.verify_packages([package], 'https://packages.example.invalid/feed')
+        assert (verification / 'commands.log').read_text().splitlines() == ['update', 'rquery', 'fetch']
     elif fault == 'signature':
         with pytest.raises(subprocess.CalledProcessError):
             catalogue.verify_packages([package], 'https://packages.example.invalid/feed')

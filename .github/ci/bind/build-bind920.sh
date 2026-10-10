@@ -14,7 +14,7 @@ artifact_directory=$2
 [ -n "${RP_UPSTREAM_METADATA:-}" ] || fail 'RP_UPSTREAM_METADATA is required'
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/../.." && pwd)
+repository_root=$(CDPATH= cd -- "$script_directory/../../.." && pwd)
 profile_path=${RP_BIND920_METADATA:-$repository_root/.resolver-plugins/bind920.json}
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
@@ -34,19 +34,19 @@ distinfo_sha256=$(metadata_field distinfo_sha256) || fail 'invalid BIND profile'
 distversion=$(metadata_field distversion) || fail 'invalid BIND profile'
 portrevision=$(metadata_field portrevision) || fail 'invalid BIND profile'
 package_version=$(metadata_field package_version) || fail 'invalid BIND profile'
-freebsd_release=$("$python_command" "$script_directory/metadata_profile.py" \
+freebsd_release=$("$python_command" "$script_directory/../shared/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
 
 "$pkg_command" update -f
 "$pkg_command" install -y git
-"$script_directory/setup-opnsense-repository.sh" "$series" >/dev/null
-pkg_creator_record=$("$python_command" "$script_directory/target_pkg.py" install \
+"$script_directory/../shared/setup-opnsense-repository.sh" "$series" >/dev/null
+pkg_creator_record=$("$python_command" "$script_directory/../shared/target_pkg.py" install \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static") || fail 'cannot select target package creator'
 [ -n "$pkg_creator_record" ] || fail 'target package creator record is empty'
 "$pkg_command" install -y autoconf automake fstrm gmake json-c libedit libidn2 \
     libnghttp2 libtool liburcu libuv libxml2 lmdb0 pkgconf protobuf-c
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 
@@ -103,31 +103,31 @@ path.write_text(updated, encoding="utf-8")
 PY
 fi
 
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind-tools" PORTSDIR="$ports_directory" package
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind-tools package was not produced as expected'
 bind_tools_package=$1
-"$python_command" "$script_directory/package_checksums.py" \
+"$python_command" "$script_directory/../shared/package_checksums.py" \
     --pkg-command "$pkg_static" "$bind_tools_package"
 "$pkg_command" add "$bind_tools_package"
 
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind920" PORTSDIR="$ports_directory" package
-"$python_command" "$script_directory/target_pkg.py" verify \
+"$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind920/work/pkg/bind920-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind920 package was not produced as expected'
 bind_package=$1
-"$python_command" "$script_directory/package_checksums.py" \
+"$python_command" "$script_directory/../shared/package_checksums.py" \
     --pkg-command "$pkg_static" "$bind_package"
 "$pkg_command" add "$bind_package"
 

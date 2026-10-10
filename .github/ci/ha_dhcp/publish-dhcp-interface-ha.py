@@ -3,9 +3,11 @@
 import argparse
 from pathlib import Path
 import re
+import sys
 import tempfile
 
-from release_channel import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared.release_channel import (
     asset_order, run_gh, snapshot_matches_directory, snapshot_release,
     upload_release_assets,
 )

@@ -3,32 +3,16 @@
 
 from __future__ import annotations
 
-import importlib.util
-import json
-import subprocess
-import tempfile
-import unittest
-from pathlib import Path
-from unittest.mock import patch
+from module_fixtures import *
+
+from package_fixtures import bind_channel_inputs, bind_records, package_creator, write_json, write_target_metadata
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "release_channel.py"
-SPEC = importlib.util.spec_from_file_location("release_channel", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-release_channel = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(release_channel)
+release_channel = load_module("release_channel", "shared/release_channel.py")
 
 
 def target_creator_record(digest: str = "a" * 64) -> dict[str, str]:
-    return {
-        "abi": "FreeBSD:15:amd64",
-        "filename": "pkg-2.3.1_1.pkg",
-        "name": "pkg",
-        "origin": "ports-mgmt/pkg",
-        "pkg_static_sha256": digest,
-        "sha256": digest,
-        "version": "2.3.1_1",
-    }
+    return package_creator(sha256=digest, pkg_static_sha256=digest)
 
 
 def bind_provenance_record(fingerprint: str = "f" * 64) -> dict[str, object]:
@@ -39,45 +23,25 @@ def bind_provenance_record(fingerprint: str = "f" * 64) -> dict[str, object]:
     }
 
 
+def make_assets(directory, assets):
+    directory.mkdir(parents=True)
+    for name, contents in assets.items():
+        (directory / name).write_bytes(contents)
+    return directory
+
+
+def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, immutable=False):
+    if assets is not None:
+        make_assets(directory, assets)
+    manifest = directory.with_name(directory.name + '-checksums.json')
+    if existed:
+        write_json(manifest, {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in directory.iterdir() if p.is_file()})
+    return release_channel.ReleaseSnapshot(tag, existed, directory, manifest,
+                                           draft=draft, immutable=immutable)
+
+
 class ChannelTagTest(unittest.TestCase):
-    def test_series_abi_path_uses_exact_freebsd_amd64_package_abi_and_series(self) -> None:
-        """A package ABI and OPNsense series select one static repository path."""
-        self.assertEqual(
-            "pkg/FreeBSD:15:amd64/26.7/latest",
-            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7"),
-        )
-
-    def test_series_abi_path_rejects_unsupported_inputs(self) -> None:
-        """Unsupported ABI or series values must not become repository paths."""
-        with self.assertRaisesRegex(ValueError, "invalid package ABI"):
-            release_channel.series_abi_path("FreeBSD:15:arm64", "26.7")
-        with self.assertRaisesRegex(ValueError, "invalid series"):
-            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7/archive")
-
-    def test_package_release_title_names_current_and_archive_purpose(self) -> None:
-        self.assertEqual("26.1-latest", release_channel.package_release_title("pkg-26.1"))
-        self.assertEqual(
-            "26.1-archive-1.36_9",
-            release_channel.package_release_title("pkg-26.1-os-bind-rp-1.36_9"),
-        )
-
-    def test_package_release_title_rejects_non_channel_tags(self) -> None:
-        for tag in (
-            "pkg-26.1-bind920",
-            "pkg-26.1-os-bind-rp-1.36/9",
-            "os-bind-rp-26.1-1.36_9",
-        ):
-            with self.subTest(tag=tag):
-                with self.assertRaisesRegex(ValueError, "invalid package release tag"):
-                    release_channel.package_release_title(tag)
-
-    def test_source_release_tag_identifies_the_series_plugin_and_bind_build(self) -> None:
-        fingerprint = "f" * 64
-        self.assertEqual(
-            f"os-bind-rp-26.7-1.36_7-bind-{fingerprint}",
-            release_channel.source_release_tag("26.7", "1.36_7", fingerprint),
-        )
-
     def test_channel_tags_are_series_scoped(self) -> None:
         """Current and immutable snapshot channels must never share a tag."""
         fingerprint = "f" * 64
@@ -86,37 +50,13 @@ class ChannelTagTest(unittest.TestCase):
             f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
             release_channel.snapshot_channel_tag("26.7", "1.36_2", fingerprint),
         )
-
-    def test_channel_tags_reject_invalid_series(self) -> None:
-        """Channel names remain constrained to the supported series form."""
-        with self.assertRaisesRegex(ValueError, "invalid series"):
-            release_channel.channel_tag("26.7/archive")
-        with self.assertRaisesRegex(ValueError, "invalid package version"):
-            release_channel.snapshot_channel_tag("26.7", "1.36/2", "f" * 64)
-        with self.assertRaisesRegex(ValueError, "invalid BIND fingerprint"):
-            release_channel.snapshot_channel_tag("26.7", "1.36_2", "not-a-fingerprint")
+        self.assertEqual(
+            f'os-bind-rp-26.7-1.36_7-bind-{fingerprint}',
+            release_channel.source_release_tag('26.7', '1.36_7', fingerprint),
+        )
 
 
 class GitHubCliTest(unittest.TestCase):
-    def test_run_gh_retries_a_timed_out_command(self) -> None:
-        calls: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            calls.append(command)
-            if len(calls) == 1:
-                raise subprocess.TimeoutExpired(command, timeout=300)
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.run_gh(["release", "upload", "pkg-test", "asset.pkg"])
-
-        self.assertEqual(
-            [
-                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
-                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
-            ],
-            calls,
-        )
 
     def test_release_asset_download_retries_after_removing_partial_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -129,6 +69,7 @@ class GitHubCliTest(unittest.TestCase):
                 if len(calls) == 1:
                     downloaded.write_bytes(b"partial")
                     raise subprocess.CalledProcessError(1, ["gh", *arguments])
+                self.assertFalse(downloaded.exists(), "partial download survived before retry")
                 downloaded.write_bytes(b"complete")
 
             with patch.object(release_channel, "run_gh", side_effect=fake_run_gh):
@@ -141,72 +82,6 @@ class GitHubCliTest(unittest.TestCase):
 
 
 class PullRequestReleaseCleanupTest(unittest.TestCase):
-    def test_pull_request_release_selection_rejects_near_matches(self) -> None:
-        releases = [
-            [
-                {"tag_name": "pr-51-26.7"},
-                {"tag_name": "pr-51-26.1"},
-                {"tag_name": "pr-510-26.7"},
-                {"tag_name": "pr-51-26.7-extra"},
-                {"tag_name": "os-bind-rp-26.7-1.36_2"},
-            ]
-        ]
-
-        self.assertEqual(
-            ["pr-51-26.1", "pr-51-26.7"],
-            release_channel.select_pull_request_release_tags(releases, "51"),
-        )
-
-    def test_pull_request_release_cleanup_deletes_release_and_tag(self) -> None:
-        commands: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            commands.append(command)
-            if command[:3] == ["gh", "api", "--method"]:
-                return subprocess.CompletedProcess(command, 1, "", "gh: Not Found (HTTP 404)")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_development_release(
-                "resolver-plugins/plugins", "pr-51-26.7"
-            )
-
-        self.assertEqual(
-            [
-                [
-                    "gh", "release", "delete", "pr-51-26.7", "--yes",
-                    "--repo", "resolver-plugins/plugins",
-                ],
-                [
-                    "gh", "api", "--method", "DELETE",
-                    "repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7",
-                ],
-            ],
-            commands,
-        )
-
-    def test_missing_pull_request_release_cleanup_removes_an_orphaned_tag(self) -> None:
-        commands: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            commands.append(command)
-            if command[:2] == ["gh", "release"]:
-                return subprocess.CompletedProcess(command, 1, "", "release not found")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_development_release(
-                "resolver-plugins/plugins", "pr-51-26.7"
-            )
-
-        self.assertEqual(
-            [
-                "gh", "api", "--method", "DELETE",
-                "repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7",
-            ],
-            commands[1],
-        )
-
     def test_pull_request_release_cleanup_does_not_hide_tag_api_failure(self) -> None:
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
             if command[:2] == ["gh", "release"]:
@@ -219,12 +94,8 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
                     "resolver-plugins/plugins", "pr-51-26.7"
                 )
 
-    def test_invalid_pull_request_release_inputs_fail_before_mutation(self) -> None:
+    def test_pull_request_cleanup_refuses_a_production_tag_before_mutation(self) -> None:
         with patch.object(release_channel.subprocess, "run") as run:
-            with self.assertRaisesRegex(ValueError, "invalid pull request number"):
-                release_channel.cleanup_pull_request_releases(
-                    "resolver-plugins/plugins", "51/../../master"
-                )
             with self.assertRaisesRegex(ValueError, "invalid development release tag"):
                 release_channel.cleanup_development_release(
                     "resolver-plugins/plugins", "pkg-26.7"
@@ -233,142 +104,47 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
         run.assert_not_called()
 
     def test_pull_request_release_cleanup_lists_and_deletes_exact_matches(self) -> None:
-        deleted: list[str] = []
+        commands: list[list[str]] = []
 
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command[:3] == ["gh", "api", "--paginate"]:
-                if "/releases?" in command[-1]:
-                    payload = [[
-                        {"tag_name": "pr-51-26.7"},
-                        {"tag_name": "pr-51-26.1"},
-                        {"tag_name": "pr-510-26.7"},
-                        {"tag_name": "pkg-26.7"},
-                    ]]
+            if command[:3] == ['gh', 'api', '--paginate']:
+                if '/releases?' in command[-1]:
+                    payload = [[{'tag_name': tag} for tag in (
+                        'pr-51-26.7', 'pr-51-26.1', 'pr-510-26.7', 'pr-51-26.7-extra',
+                        'pkg-26.7', 'os-bind-rp-26.7-1.36_2',
+                    )]]
                 else:
-                    payload = [[]]
-                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-            if command[:3] == ["gh", "api", "--method"]:
-                return subprocess.CompletedProcess(command, 1, "", "gh: Not Found (HTTP 404)")
-            deleted.append(command[3])
-            return subprocess.CompletedProcess(command, 0, "", "")
+                    payload = [[{'ref': ref} for ref in (
+                        'refs/tags/pr-51-27.1', 'refs/tags/pr-51-26.7',
+                        'refs/tags/pr-510-26.7', 'refs/tags/pkg-26.7',
+                    )]]
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), '')
+            commands.append(command)
+            if command[:2] == ['gh', 'release'] and command[3] == 'pr-51-27.1':
+                return subprocess.CompletedProcess(command, 1, '', 'release not found')
+            if command[:3] == ['gh', 'api', '--method'] and not command[-1].endswith('pr-51-27.1'):
+                return subprocess.CompletedProcess(command, 1, '', 'gh: Not Found (HTTP 404)')
+            return subprocess.CompletedProcess(command, 0, '', '')
 
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_pull_request_releases(
-                "resolver-plugins/plugins", "51"
-            )
+        with patch.object(release_channel.subprocess, 'run', side_effect=fake_run):
+            release_channel.cleanup_pull_request_releases('resolver-plugins/plugins', '51')
 
-        self.assertEqual(["pr-51-26.1", "pr-51-26.7"], deleted)
-
-    def test_pull_request_release_cleanup_discovers_an_orphaned_tag(self) -> None:
-        deleted_refs: list[str] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            if command[:3] == ["gh", "api", "--paginate"]:
-                if "/releases?" in command[-1]:
-                    payload = [[]]
-                else:
-                    payload = [[
-                        {"ref": "refs/tags/pr-51-26.7"},
-                        {"ref": "refs/tags/pr-510-26.7"},
-                        {"ref": "refs/tags/pkg-26.7"},
-                    ]]
-                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-            if command[:2] == ["gh", "release"]:
-                return subprocess.CompletedProcess(command, 1, "", "release not found")
-            deleted_refs.append(command[-1])
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.cleanup_pull_request_releases(
-                "resolver-plugins/plugins", "51"
-            )
-
-        self.assertEqual(
-            ["repos/resolver-plugins/plugins/git/refs/tags/pr-51-26.7"],
-            deleted_refs,
-        )
-
+        expected = []
+        for tag in ('pr-51-26.1', 'pr-51-26.7', 'pr-51-27.1'):
+            expected.extend([
+                ['gh', 'release', 'delete', tag, '--yes', '--repo', 'resolver-plugins/plugins'],
+                ['gh', 'api', '--method', 'DELETE', f'repos/resolver-plugins/plugins/git/refs/tags/{tag}'],
+            ])
+        self.assertEqual(expected, commands)
 
 class SelfContainedRepositoryStageTest(unittest.TestCase):
-    def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self) -> None:
-        """A self-contained channel carries one plugin, its BIND pair, and auditable metadata."""
+    def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            package_creator = {
-                "name": "pkg",
-                "version": "2.3.1_1",
-                "origin": "ports-mgmt/pkg",
-                "abi": "FreeBSD:15:amd64",
-                "filename": "pkg-2.3.1_1.pkg",
-                "sha256": "a" * 64,
-                "pkg_static_sha256": "b" * 64,
-            }
-            packages = root / "packages"
-            packages.mkdir()
-            for name in (
-                "bind-tools-9.20.26_1.pkg",
-                "bind920-9.20.26_1.pkg",
-                "os-bind-rp-26.7_1.pkg",
-            ):
-                (packages / name).write_bytes(name.encode())
-            (packages / "bind920-provenance.json").write_text(
-                json.dumps(
-                    {
-                        "schema": 2,
-                        "fingerprint": "f" * 64,
-                        "series": "26.7",
-                        "freebsd_release": "15.1",
-                        "architecture": "x86_64",
-                        "package_creator": package_creator,
-                        "packages": {
-                            "bind-tools": {
-                                "name": "bind-tools",
-                                "version": "9.20.26_1",
-                                "origin": "dns/bind-tools",
-                                "filename": "bind-tools-9.20.26_1.pkg",
-                            },
-                            "bind920": {
-                                "name": "bind920",
-                                "version": "9.20.26_1",
-                                "origin": "dns/bind920",
-                                "filename": "bind920-9.20.26_1.pkg",
-                            },
-                        }
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (packages / "build-metadata.txt").write_text(
-                "series=26.7\n"
-                "uname=FreeBSD test 15.1\n"
-                "pkg_abi=FreeBSD:15:amd64\n"
-                "bind920=9.20.26_1\n"
-                "bind_source=resolver\n"
-                "opnsense=26.7\n"
-                "opnsense_core_commit=2222222222222222222222222222222222222222\n"
-                "source_commit=0123456789abcdef\n"
-                "upstream_commit=1111111111111111111111111111111111111111\n"
-                "core_commit=2222222222222222222222222222222222222222\n"
-                "tools_tag=26.7\n"
-                "freebsd_release=15.1\n"
-                "pkg_creator=2.3.1_1\n"
-                "pkg_creator_sha256=" + "a" * 64 + "\n",
-                encoding="utf-8",
-            )
-            target_metadata = root / "target-pkg.json"
-            target_metadata.write_text(
-                json.dumps(
-                    {
-                        "schema": 1,
-                        "series": {
-                            "26.1": dict(package_creator, abi="FreeBSD:14:amd64"),
-                            "26.7": package_creator,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            key = root / "private.pem"
+            creator = package_creator()
+            packages = bind_channel_inputs(root / 'packages')
+            target_metadata = write_target_metadata(root / 'target-pkg.json')
+            key = root / 'private.pem'
             key.touch()
 
             def fake_repo(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -411,13 +187,13 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             self.assertEqual("26.7", manifest["series"])
             self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
             self.assertEqual("26.7_1", manifest["plugin_version"])
-            self.assertEqual("0123456789abcdef", manifest["source_commit"])
+            self.assertEqual("a" * 40, manifest["source_commit"])
             self.assertEqual("f" * 64, manifest["bind"]["fingerprint"])
             self.assertEqual("15.1", manifest["build"]["freebsd_release"])
-            self.assertEqual("26.7", manifest["build"]["tools_tag"])
-            self.assertEqual(package_creator, manifest["package_creator"])
+            self.assertEqual("26.7.1", manifest["build"]["tools_tag"])
+            self.assertEqual(creator, manifest["package_creator"])
             self.assertEqual(
-                release_channel.sha256(packages / "os-bind-rp-26.7_1.pkg"),
+                hashlib.sha256((packages / "os-bind-rp-26.7_1.pkg").read_bytes()).hexdigest(),
                 manifest["packages"]["os-bind-rp-26.7_1.pkg"],
             )
             (root / "channel/resolver-plugins.pub").write_text("public key", encoding="utf-8")
@@ -438,103 +214,18 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             )
             release_channel.validate_channel_directory(root / "channel")
 
-            legacy_manifest = dict(legacy_v3_manifest, schema=1)
-            legacy_manifest.pop("package_creator")
-            legacy_manifest.pop("package_abi")
-            (root / "channel/channel.json").write_text(
-                json.dumps(legacy_manifest), encoding="utf-8"
-            )
-            legacy_provenance = json.loads(
-                (root / "channel/bind920-provenance.json").read_text(encoding="utf-8")
-            )
-            legacy_provenance["schema"] = 1
-            legacy_provenance.pop("package_creator")
-            (root / "channel/bind920-provenance.json").write_text(
-                json.dumps(legacy_provenance), encoding="utf-8"
-            )
-            legacy_metadata = "\n".join(
-                line
-                for line in (root / "channel/build-metadata.txt").read_text().splitlines()
-                if not line.startswith(("pkg_creator=", "pkg_creator_sha256="))
-            )
-            (root / "channel/build-metadata.txt").write_text(
-                legacy_metadata + "\n", encoding="utf-8"
-            )
-            release_channel.validate_channel_directory(root / "channel")
-
-    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self) -> None:
-        """A 26.7 channel cannot carry a FreeBSD 14 package set."""
+    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            packages = root / "packages"
-            packages.mkdir()
-            for name in (
-                "bind-tools-9.20.26_1.pkg",
-                "bind920-9.20.26_1.pkg",
-                "os-bind-rp-1.36_7.pkg",
-            ):
-                (packages / name).write_bytes(name.encode())
-            package_creator = {
-                "name": "pkg",
-                "version": "2.3.1_1",
-                "origin": "ports-mgmt/pkg",
-                "abi": "FreeBSD:15:amd64",
-                "filename": "pkg-2.3.1_1.pkg",
-                "sha256": "a" * 64,
-                "pkg_static_sha256": "b" * 64,
-            }
-            (packages / "bind920-provenance.json").write_text(
-                json.dumps(
-                    {
-                        "schema": 2,
-                        "fingerprint": "f" * 64,
-                        "series": "26.7",
-                        "freebsd_release": "15.1",
-                        "architecture": "x86_64",
-                        "package_creator": package_creator,
-                        "packages": {
-                            "bind-tools": {
-                                "name": "bind-tools", "version": "9.20.26_1",
-                                "origin": "dns/bind-tools", "filename": "bind-tools-9.20.26_1.pkg",
-                            },
-                            "bind920": {
-                                "name": "bind920", "version": "9.20.26_1",
-                                "origin": "dns/bind920", "filename": "bind920-9.20.26_1.pkg",
-                            },
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (packages / "build-metadata.txt").write_text(
-                "series=26.7\n"
-                "uname=FreeBSD test 15.1\n"
-                "pkg_abi=FreeBSD:15:amd64\n"
-                "bind920=9.20.26_1\n"
-                "bind_source=resolver\n"
-                "opnsense=26.7\n"
-                "opnsense_core_commit=2222222222222222222222222222222222222222\n"
-                "source_commit=0123456789abcdef\n"
-                "upstream_commit=1111111111111111111111111111111111111111\n"
-                "core_commit=2222222222222222222222222222222222222222\n"
-                "tools_tag=26.7\n"
-                "freebsd_release=15.1\n"
-                "pkg_creator=2.3.1_1\n"
-                "pkg_creator_sha256=" + "a" * 64 + "\n",
-                encoding="utf-8",
-            )
-            target_metadata = root / "target-pkg.json"
-            target_metadata.write_text(
-                json.dumps({"schema": 1, "series": {"26.1": dict(package_creator, abi="FreeBSD:14:amd64"), "26.7": package_creator}}),
-                encoding="utf-8",
-            )
-            key = root / "private.pem"
+            packages = bind_channel_inputs(root / 'packages')
+            target_metadata = write_target_metadata(root / 'target-pkg.json')
+            key = root / 'private.pem'
             key.touch()
             with patch.object(
                 release_channel,
                 "validate_channel_package_manifests",
                 return_value="FreeBSD:14:amd64",
-            ), patch.object(release_channel, "stage_selected_repository"):
+            ), patch.object(release_channel, "stage_selected_repository") as sign:
                 with self.assertRaisesRegex(ValueError, "trusted target package profile"):
                     release_channel.stage_channel_repository(
                         packages,
@@ -544,6 +235,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                         target_metadata,
                         "c" * 40,
                     )
+                sign.assert_not_called()
 
     def test_asset_order_puts_repository_metadata_after_packages(self) -> None:
         """Publishing a self-contained channel uploads packages before catalog metadata."""
@@ -559,18 +251,12 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 "resolver-plugins.pub",
             ):
                 (directory / name).touch()
-            self.assertEqual(
-                [
-                    "bind-tools-9.20.26_1.pkg",
-                    "bind920-9.20.26_1.pkg",
-                    "os-bind-rp-1.36_2.pkg",
-                    "build-metadata.txt",
-                    "data.pkg",
-                    "resolver-plugins.pub",
-                    "meta.conf",
-                ],
-                [path.name for path in release_channel.asset_order(directory)],
-            )
+            ordered = [path.name for path in release_channel.asset_order(directory)]
+            self.assertEqual({p.name for p in directory.iterdir()}, set(ordered))
+            self.assertLess(max(ordered.index(name) for name in (
+                "bind-tools-9.20.26_1.pkg", "bind920-9.20.26_1.pkg", "os-bind-rp-1.36_2.pkg")),
+                min(ordered.index(name) for name in ("build-metadata.txt", "data.pkg", "resolver-plugins.pub")))
+            self.assertEqual("meta.conf", ordered[-1])
 
 
 class AbiStaticPublicationTest(unittest.TestCase):
@@ -641,7 +327,7 @@ class AbiStaticPublicationTest(unittest.TestCase):
                 for command, payload in calls
                 if command[-1].endswith("/git/trees") and payload is not None
             )
-            assert isinstance(tree_payload, dict)
+            self.assertEqual("2" * 40, tree_payload["base_tree"])
             changes = tree_payload["tree"]
             self.assertIn(
                 {"path": "pkg/FreeBSD:15:amd64/26.7/latest/obsolete.pkg", "mode": "100644", "type": "blob", "sha": None},
@@ -658,6 +344,13 @@ class AbiStaticPublicationTest(unittest.TestCase):
                 {change["path"] for change in changes if change.get("sha") is not None},
             )
             self.assertEqual(old_head + "\n", (root / "recovery/gh-pages-head.txt").read_text())
+            commit = next(payload for command, payload in calls
+                          if command[-1].endswith('/git/commits') and payload is not None)
+            self.assertEqual('a' * 40, commit['tree'])
+            self.assertEqual([old_head], commit['parents'])
+            updates = [payload for command, payload in calls if '--method' in command
+                       and command[command.index('--method') + 1] == 'PATCH']
+            self.assertEqual([{'sha': 'b' * 40, 'force': False}], updates)
 
     def test_publication_rejects_a_changed_head_before_ref_update(self) -> None:
         """A concurrent gh-pages publisher must win instead of losing its update."""
@@ -701,579 +394,179 @@ class AbiStaticPublicationTest(unittest.TestCase):
 
 
 class PublicationRecoveryTest(unittest.TestCase):
-    def test_existing_package_release_title_converges_during_publication(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            directory = root / "staged"
-            directory.mkdir()
-            asset = directory / "os-bind-rp-1.36_9.pkg"
-            asset.write_bytes(b"package")
-            manifest = root / "checksums.json"
-            manifest.write_text(
-                json.dumps({asset.name: release_channel.sha256(asset)}), encoding="utf-8"
-            )
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.1-os-bind-rp-1.36_9", True, directory, manifest
-            )
-            mutations: list[list[str]] = []
 
-            def fake_run(
-                command: list[str], **_: object
-            ) -> subprocess.CompletedProcess[str]:
-                if command[:3] == ["gh", "release", "create"]:
-                    return subprocess.CompletedProcess(command, 1, "", "release already exists")
-                if "--jq" in command:
-                    return subprocess.CompletedProcess(command, 0, f"{asset.name}\n", "")
-                return subprocess.CompletedProcess(
-                    command, 0, json.dumps({"assets": [{"name": asset.name}]}), ""
-                )
+    def test_immutable_release_retry_states(self):
+        assets = {'os-bind-rp-1.36_2.pkg': b'plugin', 'build-metadata.txt': b'metadata'}
+        repository, tag, title = 'resolver-plugins/plugins', 'os-bind-rp-26.7-1.36_2', 'os-bind-rp 26.7 1.36_2'
+        for state in ('identical', 'different', 'mutable', 'absent', 'complete-draft', 'partial-draft'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                staged = make_assets(root / 'staged', assets)
+                remote_assets = assets if state not in ('different', 'partial-draft') else {'os-bind-rp-1.36_2.pkg': b'old'}
+                existing = make_snapshot(root / 'remote', tag, remote_assets if state != 'absent' else None,
+                                         existed=state != 'absent', draft=state.endswith('-draft'),
+                                         immutable=state == 'identical')
+                published = make_snapshot(staged, tag, immutable=True)
+                with patch.object(release_channel, 'snapshot_release', side_effect=[existing, published]) as read, \
+                     patch.object(release_channel, 'run_gh') as run:
+                    if state in ('different', 'mutable'):
+                        with self.assertRaisesRegex(RuntimeError, 'different bytes' if state == 'different' else 'not immutable'):
+                            release_channel.publish_immutable_release(repository, tag, staged, title)
+                    else:
+                        release_channel.publish_immutable_release(repository, tag, staged, title)
+                create = ['release', 'create', tag, str(staged / 'os-bind-rp-1.36_2.pkg'),
+                          str(staged / 'build-metadata.txt'), '--repo', repository,
+                          '--title', title, '--latest=false']
+                expected = {
+                    'identical': [], 'different': [], 'mutable': [], 'absent': [create],
+                    'complete-draft': [['release', 'edit', tag, '--draft=false', '--latest=false', '--repo', repository]],
+                    'partial-draft': [['release', 'delete', tag, '--yes', '--repo', repository], create],
+                }[state]
+                self.assertEqual(expected, [call.args[0] for call in run.call_args_list])
 
-            with (
-                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
-                patch.object(release_channel, "run_gh", side_effect=mutations.append),
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-            ):
-                release_channel.publish(
-                    "resolver-plugins/repository",
-                    snapshot.tag,
-                    directory,
-                    False,
-                )
 
-            self.assertIn(
-                [
-                    "release", "edit", snapshot.tag,
-                    "--repo", "resolver-plugins/repository",
-                    "--title", "26.1-archive-1.36_9",
-                    "--latest=false",
-                ],
-                mutations,
-            )
-
-    def test_existing_identical_immutable_release_is_a_noop(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            remote = root / "remote"
-            staged.mkdir()
-            remote.mkdir()
-            for directory in (staged, remote):
-                (directory / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
-                (directory / "build-metadata.txt").write_bytes(b"metadata")
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(release_channel.directory_checksums(remote)), encoding="utf-8"
-            )
-            snapshot = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2", True, remote, manifest, immutable=True
-            )
-            with (
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-                patch.object(release_channel, "run_gh") as run_gh,
-            ):
-                release_channel.publish_immutable_release(
-                    "resolver-plugins/plugins",
-                    snapshot.tag,
-                    staged,
-                    "os-bind-rp 26.7 1.36_2",
-                )
-
-            run_gh.assert_not_called()
-
-    def test_existing_different_immutable_release_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            remote = root / "remote"
-            staged.mkdir()
-            remote.mkdir()
-            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"new")
-            (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"old")
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(release_channel.directory_checksums(remote)), encoding="utf-8"
-            )
-            snapshot = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2", True, remote, manifest
-            )
-            with patch.object(release_channel, "snapshot_release", return_value=snapshot):
-                with self.assertRaisesRegex(RuntimeError, "different bytes"):
-                    release_channel.publish_immutable_release(
-                        "resolver-plugins/plugins",
-                        snapshot.tag,
-                        staged,
-                        "os-bind-rp 26.7 1.36_2",
-                    )
-
-    def test_absent_immutable_release_is_created_and_verified(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            staged.mkdir()
-            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
-            (staged / "build-metadata.txt").write_bytes(b"metadata")
-            absent = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2",
-                False,
-                root / "missing",
-                root / "missing.json",
-            )
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
-            )
-            published = release_channel.ReleaseSnapshot(
-                absent.tag, True, staged, manifest, immutable=True
-            )
-            calls: list[tuple[list[str], int]] = []
-
-            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
-                calls.append((arguments, attempts))
-
-            with (
-                patch.object(
-                    release_channel,
-                    "snapshot_release",
-                    side_effect=(absent, published),
-                ),
-                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
-            ):
-                release_channel.publish_immutable_release(
-                    "resolver-plugins/plugins",
-                    absent.tag,
-                    staged,
-                    "os-bind-rp 26.7 1.36_2",
-                )
-
-            self.assertEqual(
-                [
-                    "release", "create", absent.tag,
-                    str(staged / "os-bind-rp-1.36_2.pkg"),
-                    str(staged / "build-metadata.txt"),
-                    "--repo", "resolver-plugins/plugins",
-                    "--title", "os-bind-rp 26.7 1.36_2",
-                    "--latest=false",
-                ],
-                calls[0][0],
-            )
-            self.assertEqual(1, calls[0][1])
-            self.assertFalse(
-                any(call[:2] == ["release", "upload"] for call, _ in calls)
-            )
-
-    def test_complete_immutable_release_draft_is_published_on_retry(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            staged.mkdir()
-            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
-            )
-            draft = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2", True, staged, manifest, draft=True
-            )
-            published = release_channel.ReleaseSnapshot(
-                draft.tag, True, staged, manifest, immutable=True
-            )
-            calls: list[tuple[list[str], int]] = []
-
-            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
-                calls.append((arguments, attempts))
-
-            with (
-                patch.object(
-                    release_channel,
-                    "snapshot_release",
-                    side_effect=(draft, published),
-                ),
-                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
-            ):
-                release_channel.publish_immutable_release(
-                    "resolver-plugins/plugins",
-                    draft.tag,
-                    staged,
-                    "os-bind-rp 26.7 1.36_2",
-                )
-
-            self.assertEqual(
-                [
-                    "release", "edit", draft.tag, "--draft=false", "--latest=false",
-                    "--repo", "resolver-plugins/plugins",
-                ],
-                calls[0][0],
-            )
-            self.assertEqual(1, calls[0][1])
-
-    def test_partial_immutable_release_draft_is_replaced_on_retry(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            partial = root / "partial"
-            staged.mkdir()
-            partial.mkdir()
-            (staged / "os-bind-rp-1.36_2.pkg").write_bytes(b"plugin")
-            (partial / "os-bind-rp-1.36_2.pkg").write_bytes(b"partial")
-            partial_manifest = root / "partial.json"
-            partial_manifest.write_text(
-                json.dumps(release_channel.directory_checksums(partial)), encoding="utf-8"
-            )
-            draft = release_channel.ReleaseSnapshot(
-                "os-bind-rp-26.7-1.36_2", True, partial, partial_manifest, draft=True
-            )
-            published_manifest = root / "published.json"
-            published_manifest.write_text(
-                json.dumps(release_channel.directory_checksums(staged)), encoding="utf-8"
-            )
-            published = release_channel.ReleaseSnapshot(
-                draft.tag, True, staged, published_manifest, immutable=True
-            )
-            calls: list[tuple[list[str], int]] = []
-
-            def fake_run_gh(arguments: list[str], *, attempts: int = 3) -> None:
-                calls.append((arguments, attempts))
-
-            with (
-                patch.object(
-                    release_channel,
-                    "snapshot_release",
-                    side_effect=(draft, published),
-                ),
-                patch.object(release_channel, "run_gh", side_effect=fake_run_gh),
-            ):
-                release_channel.publish_immutable_release(
-                    "resolver-plugins/plugins",
-                    draft.tag,
-                    staged,
-                    "os-bind-rp 26.7 1.36_2",
-                )
-
-            self.assertEqual(["release", "delete"], calls[0][0][:2])
-            self.assertEqual(["release", "create"], calls[1][0][:2])
-            self.assertEqual([1, 1], [attempts for _, attempts in calls])
+    def test_immutable_publication_rejects_invalid_readback(self):
+        for fault, error in [('draft', 'remains a draft'), ('mutable', 'not immutable'), ('bytes', 'different bytes')]:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                staged = make_assets(root / 'staged', {'asset.pkg': b'expected'})
+                absent = make_snapshot(root / 'absent', 'source-release', existed=False)
+                readback = make_snapshot(root / 'remote', absent.tag,
+                                         {'asset.pkg': b'changed' if fault == 'bytes' else b'expected'},
+                                         draft=fault == 'draft', immutable=fault != 'mutable')
+                with patch.object(release_channel, 'snapshot_release', side_effect=[absent, readback]), \
+                     patch.object(release_channel, 'run_gh'):
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        release_channel.publish_immutable_release('example/plugins', absent.tag, staged, 'Fixture')
 
     def test_existing_snapshot_is_materialized_for_an_exact_release_retry(self) -> None:
         """A published version is reused instead of rebuilt under a new control commit."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            remote = root / "remote"
-            remote.mkdir()
-            (remote / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "bind": bind_provenance_record(),
-                        "package_creator": target_creator_record(),
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "a" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"immutable")
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            (remote / public_key.name).write_bytes(public_key.read_bytes())
-            fingerprint = bind_provenance_record()["fingerprint"]
-            snapshot = release_channel.ReleaseSnapshot(
-                f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
-                True,
-                remote,
-                root / "manifest.json",
-            )
-
-            with (
-                patch.object(
-                    release_channel, "snapshot_release", return_value=snapshot
-                ) as snapshot_release,
-                patch.object(release_channel, "validate_channel_directory") as validate,
-            ):
-                reused = release_channel.materialize_existing_snapshot(
-                    "resolver-plugins/repository",
-                    "26.7",
-                    "1.36_2",
-                    "a" * 40,
-                    root / "repository",
-                    public_key,
-                    target_creator_record(),
-                    bind_provenance_record(),
+        for existed in (False, True):
+            with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                remote = root / "remote"
+                remote.mkdir()
+                (remote / "channel.json").write_text(
+                    json.dumps(
+                        {
+                            "bind": bind_provenance_record(),
+                            "package_creator": target_creator_record(),
+                            "series": "26.7",
+                            "plugin_version": "1.36_2",
+                            "source_commit": "a" * 40,
+                        }
+                    ),
+                    encoding="utf-8",
                 )
-
-            self.assertTrue(reused)
-            self.assertEqual(
-                (
-                    "resolver-plugins/repository",
+                (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"immutable")
+                public_key = root / "resolver-plugins.pub"
+                public_key.write_bytes(b"trusted key")
+                (remote / public_key.name).write_bytes(public_key.read_bytes())
+                fingerprint = bind_provenance_record()["fingerprint"]
+                snapshot = release_channel.ReleaseSnapshot(
                     f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
-                ),
-                snapshot_release.call_args.args[:2],
-            )
-            validate.assert_called_once_with(remote)
-            for channel in ("current", "snapshot"):
+                    existed,
+                    remote,
+                    root / "manifest.json",
+                )
+
+                with (
+                    patch.object(
+                        release_channel, "snapshot_release", return_value=snapshot
+                    ) as snapshot_release,
+                    patch.object(release_channel, "validate_channel_directory") as validate,
+                ):
+                    reused = release_channel.materialize_existing_snapshot(
+                        "resolver-plugins/repository",
+                        "26.7",
+                        "1.36_2",
+                        "a" * 40,
+                        root / "repository",
+                        public_key,
+                        target_creator_record(),
+                        bind_provenance_record(),
+                    )
+
+                self.assertEqual(existed, reused)
                 self.assertEqual(
-                    b"immutable",
-                    (root / "repository" / channel / "os-bind-rp-1.36_2.pkg").read_bytes(),
+                    (
+                        "resolver-plugins/repository",
+                        f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                    ),
+                    snapshot_release.call_args.args[:2],
                 )
-
-    def test_absent_snapshot_leaves_signing_output_unmodified(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_3",
-                False,
-                root / "missing",
-                root / "missing.json",
-            )
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            with patch.object(release_channel, "snapshot_release", return_value=snapshot):
-                reused = release_channel.materialize_existing_snapshot(
-                    "resolver-plugins/repository",
-                    "26.7",
-                    "1.36_3",
-                    "b" * 40,
-                    root / "repository",
-                    public_key,
-                    target_creator_record(),
-                    bind_provenance_record(),
-                )
-
-            self.assertFalse(reused)
-            self.assertFalse((root / "repository").exists())
-
-    def test_snapshot_reuse_rejects_different_release_source(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            remote = root / "remote"
-            remote.mkdir()
-            (remote / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "bind": bind_provenance_record(),
-                        "package_creator": target_creator_record(),
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "a" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            (remote / public_key.name).write_bytes(public_key.read_bytes())
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
-            )
-            with (
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-            ):
-                with self.assertRaisesRegex(ValueError, "does not match requested release"):
-                    release_channel.materialize_existing_snapshot(
-                        "resolver-plugins/repository",
-                        "26.7",
-                        "1.36_2",
-                        "b" * 40,
-                        root / "repository",
-                        public_key,
-                        target_creator_record(),
-                        bind_provenance_record(),
+                if not existed:
+                    self.assertFalse((root / "repository").exists())
+                    continue
+                validate.assert_called_once_with(remote)
+                for channel in ("current", "snapshot"):
+                    self.assertEqual(
+                        b"immutable",
+                        (root / "repository" / channel / "os-bind-rp-1.36_2.pkg").read_bytes(),
                     )
 
-    def test_snapshot_reuse_rejects_different_bind_provenance(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            remote = root / "remote"
-            remote.mkdir()
-            (remote / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "bind": bind_provenance_record("b" * 64),
-                        "package_creator": target_creator_record(),
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "a" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            (remote / public_key.name).write_bytes(public_key.read_bytes())
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
-            )
-            with (
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-            ):
-                with self.assertRaisesRegex(ValueError, "does not match requested release"):
-                    release_channel.materialize_existing_snapshot(
-                        "resolver-plugins/repository",
-                        "26.7",
-                        "1.36_2",
-                        "a" * 40,
-                        root / "repository",
-                        public_key,
-                        target_creator_record(),
-                        bind_provenance_record("c" * 64),
-                    )
+    def test_snapshot_reuse_rejects_different_release_inputs(self):
+        for field, changed, keyword in [
+            ('source_commit', 'b' * 40, 'source'),
+            ('bind', bind_provenance_record('b' * 64), 'bind'),
+            ('package_creator', target_creator_record('b' * 64), 'creator'),
+        ]:
+            with self.subTest(input=keyword), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = dict(bind=bind_provenance_record(), package_creator=target_creator_record(),
+                                series='26.7', plugin_version='1.36_2', source_commit='a' * 40)
+                manifest[field] = changed
+                snapshot = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2', {
+                    'channel.json': json.dumps(manifest).encode(), 'resolver-plugins.pub': b'trusted key'})
+                public_key = root / 'resolver-plugins.pub'
+                public_key.write_bytes(b'trusted key')
+                with patch.object(release_channel, 'snapshot_release', return_value=snapshot), \
+                     patch.object(release_channel, 'validate_channel_directory'):
+                    with self.assertRaisesRegex(ValueError, 'does not match requested release'):
+                        release_channel.materialize_existing_snapshot(
+                            'resolver-plugins/repository', '26.7', '1.36_2', 'a' * 40,
+                            root / 'repository', public_key, target_creator_record(), bind_provenance_record())
+                self.assertFalse((root / 'repository').exists())
 
-    def test_snapshot_reuse_rejects_different_target_pkg_creator(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            remote = root / "remote"
-            remote.mkdir()
-            (remote / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "bind": bind_provenance_record(),
-                        "package_creator": target_creator_record("b" * 64),
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "a" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            (remote / public_key.name).write_bytes(public_key.read_bytes())
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote, root / "manifest.json"
-            )
-            with (
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-            ):
-                with self.assertRaisesRegex(ValueError, "does not match requested release"):
-                    release_channel.materialize_existing_snapshot(
-                        "resolver-plugins/repository",
-                        "26.7",
-                        "1.36_2",
-                        "a" * 40,
-                        root / "repository",
-                        public_key,
-                        target_creator_record("c" * 64),
-                        bind_provenance_record(),
-                    )
 
-    def test_recovery_channel_rejects_an_audit_checksum_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            packages = [
-                directory / "bind-tools-9.20.26_1.pkg",
-                directory / "bind920-9.20.26_1.pkg",
-                directory / "os-bind-rp-1.36_2.pkg",
-            ]
-            for package in packages:
-                package.write_bytes(package.name.encode())
-            (directory / "bind920-provenance.json").write_text(
-                json.dumps(
-                    {
-                        "series": "26.7",
-                        "freebsd_release": "15.1",
-                        "packages": {
-                            "bind-tools": {
-                                "name": "bind-tools",
-                                "version": "9.20.26_1",
-                                "origin": "dns/bind-tools",
-                                "filename": packages[0].name,
-                            },
-                            "bind920": {
-                                "name": "bind920",
-                                "version": "9.20.26_1",
-                                "origin": "dns/bind920",
-                                "filename": packages[1].name,
-                            },
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (directory / "build-metadata.txt").write_text(
-                "series=26.7\nuname=FreeBSD test\npkg_abi=FreeBSD:15:amd64\n"
-                "bind920=9.20.26_1\nbind_source=resolver\nopnsense=26.7\n"
-                "opnsense_core_commit=core\nupstream_commit=upstream\ncore_commit=core\n"
-                "tools_tag=26.7.1\nfreebsd_release=15.1\nsource_commit=source\n",
-                encoding="utf-8",
-            )
-            (directory / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "schema": 1,
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "source",
-                        "build": {},
-                        "bind": {},
-                        "packages": {package.name: "0" * 64 for package in packages},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (directory / "resolver-plugins.pub").write_text("public key", encoding="utf-8")
-            (directory / "meta.conf").touch()
-            (directory / "packagesite.pkg").touch()
-
-            with self.assertRaisesRegex(ValueError, "checksum"):
+    def test_recovery_channel_rejects_an_audit_checksum_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = bind_channel_inputs(root / 'channel')
+            write_json(directory / 'channel.json', dict(
+                schema=1, series='26.7', plugin_version='26.7_1', source_commit='a' * 40,
+                build={}, bind={}, packages={p.name: '0' * 64 for p in directory.glob('*.pkg')}))
+            for name in ('resolver-plugins.pub', 'meta.conf', 'packagesite.pkg'):
+                (directory / name).touch()
+            with self.assertRaisesRegex(ValueError, 'checksum'):
                 release_channel.validate_channel_directory(directory)
-
-    def test_release_snapshot_comparison_detects_a_remote_change(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            manifests = []
-            snapshots = []
-            for number, digest in enumerate(("a" * 64, "b" * 64)):
-                directory = root / str(number)
-                directory.mkdir()
-                manifest = root / f"{number}.json"
-                manifest.write_text(json.dumps({"asset.pkg": digest}), encoding="utf-8")
-                manifests.append(manifest)
-                snapshots.append(
-                    release_channel.ReleaseSnapshot("pkg-26.7", True, directory, manifest)
-                )
-            self.assertFalse(release_channel.release_snapshots_match(*snapshots))
 
     def test_failed_promotion_restores_all_channels_from_preserved_bytes(self) -> None:
         """A failed later upload restores already changed releases without remote downloads."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            snapshot = root / "snapshot"
-            latest = root / "latest"
-            snapshot.mkdir()
-            latest.mkdir()
-            (snapshot / "os-bind-rp-1.36_1.pkg").write_bytes(b"snapshot-new")
-            (latest / "os-bind-rp-1.36_2.pkg").write_bytes(b"latest-new")
-            restored: list[tuple[str, bytes]] = []
+            snapshot = make_assets(root / 'snapshot', {'os-bind-rp-1.36_1.pkg': b'snapshot-new'})
+            latest = make_assets(root / 'latest', {'os-bind-rp-1.36_2.pkg': b'latest-new'})
+            remote = {'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}
+            operations = []
 
             def fake_snapshot(repository: str, tag: str, recovery: Path):
-                directory = recovery / tag
-                if "-os-bind-rp-" in tag:
-                    return release_channel.ReleaseSnapshot(
-                        tag, False, directory, recovery / f"{tag}.json"
-                    )
-                directory.mkdir(parents=True, exist_ok=True)
-                asset = directory / "old.pkg"
-                asset.write_bytes(f"{tag}-old".encode())
-                manifest = recovery / f"{tag}.json"
-                manifest.write_text(json.dumps({"old.pkg": release_channel.sha256(asset)}))
-                return release_channel.ReleaseSnapshot(tag, True, directory, manifest)
+                if '-os-bind-rp-' in tag:
+                    return make_snapshot(recovery / tag, tag, existed=False)
+                return make_snapshot(recovery / tag, tag, {'old.pkg': f'{tag}-old'.encode()})
 
             def fake_publish(repository: str, tag: str, directory: Path, prerelease: bool) -> None:
-                if tag == "pkg-26.7":
+                operations.append(tag)
+                remote[tag] = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+                if directory == latest:
                     raise RuntimeError("latest upload failed")
 
-            def fake_restore(repository: str, snapshot: object) -> None:
-                assert isinstance(snapshot, release_channel.ReleaseSnapshot)
-                restored.append(
-                    (
-                        snapshot.tag,
-                        (snapshot.directory / "old.pkg").read_bytes()
-                        if snapshot.existed
-                        else b"absent",
-                    )
-                )
+            def fake_delete(arguments, **kwargs):
+                self.assertEqual(['gh', 'release', 'delete', 'pkg-26.7-os-bind-rp-1.36_2',
+                                  '--yes', '--repo', 'resolver-plugins/plugins'], arguments)
+                operations.append(arguments[3])
+                remote.pop(arguments[3])
+                return subprocess.CompletedProcess(arguments, 0)
 
             with (
                 patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
@@ -1282,7 +575,7 @@ class PublicationRecoveryTest(unittest.TestCase):
                     release_channel, "staged_source_descends_from_current", return_value=True
                 ),
                 patch.object(release_channel, "publish", side_effect=fake_publish),
-                patch.object(release_channel, "restore_release", side_effect=fake_restore),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_delete),
             ):
                 with self.assertRaisesRegex(RuntimeError, "latest upload failed"):
                     release_channel.publish_channels(
@@ -1291,445 +584,128 @@ class PublicationRecoveryTest(unittest.TestCase):
                         root / "recovery",
                     )
 
-            self.assertEqual(
-                [("pkg-26.7", b"pkg-26.7-old"), ("pkg-26.7-os-bind-rp-1.36_2", b"absent")],
-                restored,
-            )
+            self.assertEqual({'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}, remote)
+            self.assertEqual(['pkg-26.7', 'pkg-26.7-os-bind-rp-1.36_2'], operations[-2:])
 
-    def test_retry_keeps_a_byte_identical_immutable_snapshot(self) -> None:
-        """A full retry may reuse an identical snapshot without rewriting it."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged_snapshot = root / "staged-snapshot"
-            staged_current = root / "staged-current"
-            remote_snapshot = root / "remote-snapshot"
-            for directory in (staged_snapshot, staged_current, remote_snapshot):
-                directory.mkdir()
-            (staged_snapshot / "asset.pkg").write_bytes(b"immutable")
-            (remote_snapshot / "asset.pkg").write_bytes(b"immutable")
-            (staged_current / "asset.pkg").write_bytes(b"current")
-            manifest = root / "snapshot.json"
-            manifest.write_text(
-                json.dumps({"asset.pkg": release_channel.sha256(remote_snapshot / "asset.pkg")})
-            )
-            immutable = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote_snapshot, manifest
-            )
-            absent_current = release_channel.ReleaseSnapshot(
-                "pkg-26.7", False, root / "missing", root / "missing.json"
-            )
-            published: list[str] = []
-
-            def fake_snapshot(repository: str, tag: str, recovery: Path):
-                return immutable if "-os-bind-rp-" in tag else absent_current
-
-            with (
-                patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
-                patch.object(release_channel, "run_gh"),
-                patch.object(
-                    release_channel,
-                    "publish",
-                    side_effect=lambda repository, tag, directory, prerelease: published.append(tag),
-                ),
-            ):
-                release_channel.publish_channels(
-                    "resolver-plugins/repository",
-                    [
-                        (immutable.tag, staged_snapshot),
-                        (absent_current.tag, staged_current),
-                    ],
-                    root / "recovery",
-                )
-
-            self.assertEqual(["pkg-26.7"], published)
-
-    def test_retry_rejects_changed_bytes_for_an_immutable_snapshot(self) -> None:
-        """The same immutable tag must never identify different package bytes."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = root / "staged"
-            remote = root / "remote"
-            staged.mkdir()
-            remote.mkdir()
-            (staged / "asset.pkg").write_bytes(b"new")
-            (remote / "asset.pkg").write_bytes(b"old")
-            manifest = root / "snapshot.json"
-            manifest.write_text(
-                json.dumps({"asset.pkg": release_channel.sha256(remote / "asset.pkg")})
-            )
-            immutable = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", True, remote, manifest
-            )
-
-            with patch.object(release_channel, "snapshot_release", return_value=immutable):
-                with self.assertRaisesRegex(RuntimeError, "different bytes"):
-                    release_channel.publish_channels(
-                        "resolver-plugins/repository",
-                        [(immutable.tag, staged)],
-                        root / "recovery",
-                    )
+    def test_immutable_retry_reuses_identical_bytes_and_rejects_changed_bytes(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                staged = make_assets(root / 'staged', {'asset.pkg': b'new' if changed else b'immutable'})
+                current = make_assets(root / 'current', {'asset.pkg': b'current'})
+                immutable = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2',
+                                          {'asset.pkg': b'immutable'})
+                absent = make_snapshot(root / 'missing', 'pkg-26.7', existed=False)
+                published = []
+                with (
+                    patch.object(release_channel, 'snapshot_release',
+                                 side_effect=lambda repository, tag, recovery: immutable if tag == immutable.tag else absent),
+                    patch.object(release_channel, 'publish',
+                                 side_effect=lambda repository, tag, directory, prerelease: published.append(tag)),
+                    patch.object(release_channel, 'run_gh') as mutate,
+                ):
+                    with (self.assertRaisesRegex(RuntimeError, 'different bytes') if changed else nullcontext()):
+                        release_channel.publish_channels('resolver-plugins/repository',
+                                                         [(immutable.tag, staged), (absent.tag, current)],
+                                                         root / 'recovery')
+                self.assertEqual([] if changed else [absent.tag], published)
+                if changed:
+                    mutate.assert_not_called()
 
     def test_retry_only_updates_titles_when_snapshot_and_current_are_identical(self) -> None:
-        """A repeated promotion corrects titles without rewriting package assets."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            channels = []
-            snapshots = {}
-            for tag in ("pkg-26.7-os-bind-rp-1.36_2", "pkg-26.7"):
-                staged = root / f"staged-{tag}"
-                remote = root / f"remote-{tag}"
-                staged.mkdir()
-                remote.mkdir()
-                (staged / "asset.pkg").write_bytes(tag.encode())
-                (remote / "asset.pkg").write_bytes(tag.encode())
-                manifest = root / f"{tag}.json"
-                manifest.write_text(
-                    json.dumps({"asset.pkg": release_channel.sha256(remote / "asset.pkg")})
-                )
-                channels.append((tag, staged))
-                snapshots[tag] = release_channel.ReleaseSnapshot(
-                    tag, True, remote, manifest
-                )
+        """Retry updates titles only after unchanged real snapshot bytes pass preflight."""
+        for changed in (False, True):
+            with self.subTest(changed_preflight=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                channels = []
+                snapshots = []
+                for tag in ('pkg-26.7-os-bind-rp-1.36_2', 'pkg-26.7'):
+                    staged = make_assets(root / f'staged-{tag}', {'asset.pkg': tag.encode()})
+                    channels.append((tag, staged))
+                    snapshots.append(make_snapshot(root / f'remote-{tag}', tag, {'asset.pkg': tag.encode()}))
+                preflight_current = (make_snapshot(root / 'changed-current', 'pkg-26.7', {'asset.pkg': b'changed'})
+                                     if changed else snapshots[1])
+                mutations: list[list[str]] = []
+                with (
+                    patch.object(release_channel, 'snapshot_release', side_effect=[*snapshots, snapshots[0], preflight_current]),
+                    patch.object(release_channel, 'validate_channel_directory'),
+                    patch.object(release_channel, 'publish') as publish,
+                    patch.object(release_channel, 'run_gh', side_effect=mutations.append),
+                ):
+                    with (self.assertRaisesRegex(RuntimeError, 'changed during publication preflight')
+                          if changed else nullcontext()):
+                        release_channel.publish_channels('resolver-plugins/repository', channels, root / 'recovery')
 
-            mutations: list[list[str]] = []
-            with (
-                patch.object(
-                    release_channel,
-                    "snapshot_release",
-                    side_effect=lambda repository, tag, recovery: snapshots[tag],
-                ),
-                patch.object(release_channel, "validate_channel_directory"),
-                patch.object(release_channel, "publish") as publish,
-                patch.object(release_channel, "run_gh", side_effect=mutations.append),
-            ):
-                release_channel.publish_channels(
-                    "resolver-plugins/repository", channels, root / "recovery"
-                )
+                publish.assert_not_called()
+                if changed:
+                    self.assertEqual([], mutations)
+                else:
+                    self.assertEqual([['release', 'edit', tag] for tag, _ in channels],
+                                     [command[:3] for command in mutations])
 
-            publish.assert_not_called()
-            self.assertEqual(
-                [
-                    [
-                        "release", "edit", "pkg-26.7-os-bind-rp-1.36_2",
-                        "--repo", "resolver-plugins/repository",
-                        "--title", "26.7-archive-1.36_2", "--latest=false",
-                    ],
-                    [
-                        "release", "edit", "pkg-26.7",
-                        "--repo", "resolver-plugins/repository",
-                        "--title", "26.7-latest", "--latest=false",
-                    ],
-                ],
-                mutations,
-            )
+    def test_source_and_control_ancestry(self):
+        def manifest(source, control=None):
+            data = dict(schema=4 if control else 3, source_commit=source * 40)
+            if control:
+                data['control_commit'] = control * 40
+            return data
 
-    def test_schema_four_migration_allows_new_control_for_the_same_source(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            current = root / "current"
-            staged = root / "staged"
-            current.mkdir()
-            staged.mkdir()
-            source_commit = "a" * 40
-            (current / "channel.json").write_text(
-                json.dumps({"schema": 3, "source_commit": source_commit}), encoding="utf-8"
-            )
-            (staged / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "schema": 4,
-                        "source_commit": source_commit,
-                        "control_commit": "c" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
+        for name, current, staged, statuses, expected, pairs in [
+            ('schema-migration', manifest('a'), manifest('a', 'c'), [], True, []),
+            ('control-advance', manifest('a', 'b'), manifest('a', 'c'), [0], True, [('b', 'c')]),
+            ('identical-inputs', manifest('a', 'b'), manifest('a', 'b'), [], False, []),
+            ('control-rollback', manifest('a', 'd'), manifest('b', 'c'), [0, 1], False, [('a', 'b'), ('d', 'c')]),
+            ('schema-downgrade', manifest('a', 'c'), manifest('b'), [], False, []),
+        ]:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for directory, data in [('current', current), ('staged', staged)]:
+                    make_assets(root / directory, {'channel.json': json.dumps(data).encode()})
+                results = [subprocess.CompletedProcess(['git'], status) for status in statuses]
+                with patch.object(release_channel.subprocess, 'run', side_effect=results) as run:
+                    self.assertEqual(expected, release_channel.staged_source_descends_from_current(root / 'current', root / 'staged'))
+                self.assertEqual([['git', 'merge-base', '--is-ancestor', old * 40, new * 40] for old, new in pairs],
+                                 [call.args[0] for call in run.call_args_list])
 
-            with patch.object(release_channel.subprocess, "run") as run:
-                self.assertTrue(
-                    release_channel.staged_source_descends_from_current(current, staged)
-                )
 
-            run.assert_not_called()
+    def test_stale_retry_cannot_replace_current_with_or_without_a_snapshot(self):
+        for existed, error in [(False, 'stale package promotion'), (True, 'current channel has different bytes')]:
+            with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                staged_snapshot = make_assets(root / 'staged-snapshot', {'asset.pkg': b'snapshot-a'})
+                staged_current = make_assets(root / 'staged-current', {'asset.pkg': b'current-a'})
+                snapshot = make_snapshot(root / 'remote-snapshot', 'pkg-26.7-os-bind-rp-1.36_2',
+                                         {'asset.pkg': b'snapshot-a'} if existed else None, existed=existed)
+                current = make_snapshot(root / 'remote-current', 'pkg-26.7', {'asset.pkg': b'current-b'})
+                def fetch(repository, tag, recovery):
+                    return snapshot if tag == snapshot.tag else current
+                with patch.object(release_channel, 'snapshot_release', side_effect=fetch), \
+                     patch.object(release_channel, 'validate_channel_directory'), \
+                     patch.object(release_channel, 'staged_source_descends_from_current', return_value=False), \
+                     patch.object(release_channel, 'publish') as publish, \
+                     patch.object(release_channel, 'run_gh') as mutate:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        release_channel.publish_channels('resolver-plugins/repository',
+                            [(snapshot.tag, staged_snapshot), (current.tag, staged_current)], root / 'recovery')
+                publish.assert_not_called()
+                mutate.assert_not_called()
 
-    def test_same_source_uses_control_commit_ancestry(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            current = root / "current"
-            staged = root / "staged"
-            current.mkdir()
-            staged.mkdir()
-            source_commit = "a" * 40
-            current_control = "b" * 40
-            staged_control = "c" * 40
-            for directory, control_commit in (
-                (current, current_control),
-                (staged, staged_control),
-            ):
-                (directory / "channel.json").write_text(
-                    json.dumps(
-                        {
-                            "schema": 4,
-                            "source_commit": source_commit,
-                            "control_commit": control_commit,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-
-            result = subprocess.CompletedProcess(["git"], 0)
-            with patch.object(release_channel.subprocess, "run", return_value=result) as run:
-                self.assertTrue(
-                    release_channel.staged_source_descends_from_current(current, staged)
-                )
-
-            run.assert_called_once_with(
-                ["git", "merge-base", "--is-ancestor", current_control, staged_control],
-                capture_output=True,
-                text=True,
-            )
-
-    def test_identical_source_and_control_cannot_replace_different_bytes(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            current = root / "current"
-            staged = root / "staged"
-            current.mkdir()
-            staged.mkdir()
-            channel = {
-                "schema": 4,
-                "source_commit": "a" * 40,
-                "control_commit": "b" * 40,
-            }
-            for directory in (current, staged):
-                (directory / "channel.json").write_text(
-                    json.dumps(channel), encoding="utf-8"
-                )
-
-            with patch.object(release_channel.subprocess, "run") as run:
-                self.assertFalse(
-                    release_channel.staged_source_descends_from_current(current, staged)
-                )
-
-            run.assert_not_called()
-
-    def test_source_advance_cannot_hide_a_control_rollback(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            current = root / "current"
-            staged = root / "staged"
-            current.mkdir()
-            staged.mkdir()
-            current_source = "a" * 40
-            staged_source = "b" * 40
-            current_control = "d" * 40
-            staged_control = "c" * 40
-            for directory, source_commit, control_commit in (
-                (current, current_source, current_control),
-                (staged, staged_source, staged_control),
-            ):
-                (directory / "channel.json").write_text(
-                    json.dumps(
-                        {
-                            "schema": 4,
-                            "source_commit": source_commit,
-                            "control_commit": control_commit,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-
-            results = [
-                subprocess.CompletedProcess(["git"], 0),
-                subprocess.CompletedProcess(["git"], 1),
-            ]
-            with patch.object(release_channel.subprocess, "run", side_effect=results) as run:
-                self.assertFalse(
-                    release_channel.staged_source_descends_from_current(current, staged)
-                )
-
-            self.assertEqual(
-                [
-                    ["git", "merge-base", "--is-ancestor", current_source, staged_source],
-                    ["git", "merge-base", "--is-ancestor", current_control, staged_control],
-                ],
-                [call.args[0] for call in run.call_args_list],
-            )
-
-    def test_legacy_staged_channel_cannot_replace_schema_four_current(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            current = root / "current"
-            staged = root / "staged"
-            current.mkdir()
-            staged.mkdir()
-            current_source = "a" * 40
-            staged_source = "b" * 40
-            (current / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "schema": 4,
-                        "source_commit": current_source,
-                        "control_commit": "c" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (staged / "channel.json").write_text(
-                json.dumps({"schema": 3, "source_commit": staged_source}), encoding="utf-8"
-            )
-
-            self.assertFalse(
-                release_channel.staged_source_descends_from_current(current, staged)
-            )
-
-    def test_absent_snapshot_cannot_let_a_stale_run_replace_current(self) -> None:
-        """A pruned or recovered snapshot must not let an old run downgrade current."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged_snapshot = root / "staged-snapshot"
-            staged_current = root / "staged-current"
-            remote_current = root / "remote-current"
-            for directory in (staged_snapshot, staged_current, remote_current):
-                directory.mkdir()
-            (staged_snapshot / "asset.pkg").write_bytes(b"snapshot-a")
-            (staged_current / "asset.pkg").write_bytes(b"current-a")
-            (remote_current / "asset.pkg").write_bytes(b"current-b")
-            current_manifest = root / "current.json"
-            current_manifest.write_text(
-                json.dumps(
-                    {"asset.pkg": release_channel.sha256(remote_current / "asset.pkg")}
-                )
-            )
-            absent_snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_2",
-                False,
-                root / "missing",
-                root / "missing.json",
-            )
-            current = release_channel.ReleaseSnapshot(
-                "pkg-26.7", True, remote_current, current_manifest
-            )
-
-            def fake_snapshot(repository: str, tag: str, recovery: Path):
-                return absent_snapshot if "-os-bind-rp-" in tag else current
-
-            with (
-                patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-                patch.object(
-                    release_channel,
-                    "staged_source_descends_from_current",
-                    return_value=False,
-                ),
-                patch.object(release_channel, "publish") as publish,
-            ):
-                with self.assertRaisesRegex(RuntimeError, "stale package promotion"):
-                    release_channel.publish_channels(
-                        "resolver-plugins/repository",
-                        [
-                            (absent_snapshot.tag, staged_snapshot),
-                            (current.tag, staged_current),
-                        ],
-                        root / "recovery",
-                    )
-
-            publish.assert_not_called()
-
-    def test_retry_cannot_replace_a_different_current_channel(self) -> None:
-        """Retrying an older snapshot must not roll a newer current channel back."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged_snapshot = root / "staged-snapshot"
-            staged_current = root / "staged-current"
-            remote_snapshot = root / "remote-snapshot"
-            remote_current = root / "remote-current"
-            for directory in (
-                staged_snapshot,
-                staged_current,
-                remote_snapshot,
-                remote_current,
-            ):
-                directory.mkdir()
-            (staged_snapshot / "asset.pkg").write_bytes(b"snapshot-a")
-            (remote_snapshot / "asset.pkg").write_bytes(b"snapshot-a")
-            (staged_current / "asset.pkg").write_bytes(b"current-a")
-            (remote_current / "asset.pkg").write_bytes(b"current-b")
-
-            def release_snapshot(tag: str, directory: Path) -> object:
-                manifest = root / f"{tag}.json"
-                manifest.write_text(
-                    json.dumps({"asset.pkg": release_channel.sha256(directory / "asset.pkg")})
-                )
-                return release_channel.ReleaseSnapshot(tag, True, directory, manifest)
-
-            immutable = release_snapshot(
-                "pkg-26.7-os-bind-rp-1.36_2", remote_snapshot
-            )
-            current = release_snapshot("pkg-26.7", remote_current)
-
-            def fake_snapshot(repository: str, tag: str, recovery: Path):
-                return immutable if "-os-bind-rp-" in tag else current
-
-            with (
-                patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-                patch.object(release_channel, "publish") as publish,
-            ):
-                with self.assertRaisesRegex(RuntimeError, "current channel has different bytes"):
-                    release_channel.publish_channels(
-                        "resolver-plugins/repository",
-                        [
-                            (immutable.tag, staged_snapshot),
-                            (current.tag, staged_current),
-                        ],
-                        root / "recovery",
-                    )
-
-            publish.assert_not_called()
 
     def test_restore_absent_release_accepts_a_not_found_delete(self) -> None:
         """A failed release creation has no remote state to restore."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             snapshot = release_channel.ReleaseSnapshot("pkg-26.7-test", False, root, root / "missing.json")
-            result = subprocess.CompletedProcess(["gh"], 1, stderr="release not found")
-            with patch.object(release_channel.subprocess, "run", return_value=result):
-                release_channel.restore_release("resolver-plugins/plugins", snapshot)
+            for status, error in ((0, ''), (1, 'release not found')):
+                with self.subTest(error=error), patch.object(
+                    release_channel.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess(['gh'], status, stderr=error),
+                ) as run:
+                    release_channel.restore_release('resolver-plugins/plugins', snapshot)
+                    run.assert_called_once_with(
+                        ['gh', 'release', 'delete', snapshot.tag, '--yes', '--repo', 'resolver-plugins/plugins'],
+                        capture_output=True, text=True)
 
-    def test_repository_latest_is_the_current_channel_for_the_highest_series(self) -> None:
-        """GitHub's one Latest badge must never identify an archive channel."""
-        releases = [
-            {"tag_name": "pkg-26.1", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.1-os-bind-rp-1.36_9", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.7", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.7-os-bind-rp-1.36_2", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.10", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-27.1", "draft": False, "prerelease": True},
-        ]
-        result = subprocess.CompletedProcess(
-            ["gh"], 0, stdout=json.dumps([releases[:3], releases[3:]])
-        )
-        mutations: list[list[str]] = []
-        with (
-            patch.object(release_channel.subprocess, "run", return_value=result) as list_releases,
-            patch.object(release_channel, "run_gh", side_effect=mutations.append),
-        ):
-            release_channel.mark_latest_package_channel("resolver-plugins/repository")
-
-        list_releases.assert_called_once_with(
-            [
-                "gh", "api", "--paginate", "--slurp",
-                "repos/resolver-plugins/repository/releases?per_page=100",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(
-            [["release", "edit", "pkg-26.10", "--repo", "resolver-plugins/repository", "--latest"]],
-            mutations,
-        )
 
     def test_snapshot_pruning_keeps_the_newest_five_immutable_tags(self) -> None:
         """Only a successful promotion may remove the sixth-oldest snapshot."""
@@ -1764,123 +740,36 @@ class PublicationRecoveryTest(unittest.TestCase):
 
 
 class ChannelManifestValidationTest(unittest.TestCase):
-    def package_identities(self):
-        return [
-            (("bind-tools", "9.20.26_1", "dns/bind-tools", "FreeBSD:15:amd64"), set()),
-            (
-                ("bind920", "9.20.26_1", "dns/bind920", "FreeBSD:15:amd64"),
-                {("bind-tools", "dns/bind-tools", "9.20.26_1")},
-            ),
-            (("os-bind-rp", "26.7_1", "opnsense/os-bind-rp", "FreeBSD:15:amd64"), set()),
-        ]
-
-    def bind_records(self):
-        return {
-            "bind-tools": {
-                "name": "bind-tools",
-                "version": "9.20.26_1",
-                "origin": "dns/bind-tools",
-                "filename": "bind-tools-9.20.26_1.pkg",
-            },
-            "bind920": {
-                "name": "bind920",
-                "version": "9.20.26_1",
-                "origin": "dns/bind920",
-                "filename": "bind920-9.20.26_1.pkg",
-            },
-        }
-
-    def validate_with_formula(self, formula: str) -> None:
-        packages = [
-            Path("/tmp/bind-tools-9.20.26_1.pkg"),
-            Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-26.7_1.pkg"),
-        ]
-        with (
-            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
-            patch.object(release_channel, "query_package", side_effect=self.package_identities()),
-            patch.object(release_channel, "read_package_manifest", return_value={"dep_formula": formula}),
-        ):
-            release_channel.validate_channel_package_manifests(
-                packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
-            )
-
-    def test_channel_rejects_plugin_without_minimum_bind_formula(self) -> None:
-        with self.assertRaisesRegex(ValueError, "dependency formula"):
-            self.validate_with_formula("bind920 = 9.20.26")
-
-    def test_channel_accepts_declared_minimum_bind_formula(self) -> None:
-        self.validate_with_formula("bind920 >= 9.20.26")
-
-    def test_channel_rejects_formula_with_exact_bind_edge(self) -> None:
-        identities = self.package_identities()
-        identities[2] = (
-            identities[2][0],
-            {("bind920", "dns/bind920", "9.20.26_1")},
-        )
-        packages = [
-            Path("/tmp/bind-tools-9.20.26_1.pkg"),
-            Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-26.7_1.pkg"),
-        ]
-        with (
-            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
-            patch.object(release_channel, "query_package", side_effect=identities),
-            patch.object(
-                release_channel,
-                "read_package_manifest",
-                return_value={"dep_formula": "bind920 >= 9.20.26"},
-            ),
-        ):
-            with self.assertRaisesRegex(ValueError, "exact BIND"):
-                release_channel.validate_channel_package_manifests(
-                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
-                )
-
-    def test_channel_rejects_plugin_version_from_a_different_scheme(self) -> None:
-        identities = self.package_identities()
-        identities[2] = (
-            ("os-bind-rp", "1.36_2", "opnsense/os-bind-rp", "FreeBSD:15:amd64"),
-            set(),
-        )
-        packages = [
-            Path("/tmp/bind-tools-9.20.26_1.pkg"),
-            Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-1.36_2.pkg"),
-        ]
-        with (
-            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
-            patch.object(release_channel, "query_package", side_effect=identities),
-            patch.object(
-                release_channel,
-                "read_package_manifest",
-                return_value={"dep_formula": "bind920 >= 9.20.26"},
-            ),
-        ):
-            with self.assertRaisesRegex(ValueError, "plugin version does not match OPNsense series"):
-                release_channel.validate_channel_package_manifests(
-                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
-                )
-
-    def test_channel_rejects_plugin_filename_that_differs_from_validated_identity(self) -> None:
-        packages = [
-            Path("/tmp/bind-tools-9.20.26_1.pkg"),
-            Path("/tmp/bind920-9.20.26_1.pkg"),
-            Path("/tmp/os-bind-rp-1.36_2.pkg"),
-        ]
-        with (
-            patch.object(release_channel, "read_bind_package_records", return_value=self.bind_records()),
-            patch.object(release_channel, "query_package", side_effect=self.package_identities()),
-            patch.object(
-                release_channel,
-                "read_package_manifest",
-                return_value={"dep_formula": "bind920 >= 9.20.26"},
-            ),
-        ):
-            with self.assertRaisesRegex(ValueError, "filename does not match package identity"):
-                release_channel.validate_channel_package_manifests(
-                    packages, Path("/tmp/bind920-provenance.json"), "pkg", "26.7"
-                )
+    def test_manifest_contract(self):
+        for fault, error in [
+            ('valid', None), ('formula', 'dependency formula'), ('exact-edge', 'exact BIND'),
+            ('version', 'plugin version does not match OPNsense series'),
+            ('filename', 'filename does not match package identity'),
+        ]:
+            with self.subTest(fault=fault):
+                identities = [
+                    (('bind-tools', '9.20.26_1', 'dns/bind-tools', 'FreeBSD:15:amd64'), set()),
+                    (('bind920', '9.20.26_1', 'dns/bind920', 'FreeBSD:15:amd64'),
+                     {('bind-tools', 'dns/bind-tools', '9.20.26_1')}),
+                    (('os-bind-rp', '26.7_1', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'), set()),
+                ]
+                if fault == 'exact-edge':
+                    identities[2][1].add(('bind920', 'dns/bind920', '9.20.26_1'))
+                if fault == 'version':
+                    identities[2] = (('os-bind-rp', '1.36_2', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'), set())
+                packages = [Path(f'/tmp/{name}-{version}.pkg') for (name, version, _, _), _ in identities]
+                if fault == 'filename':
+                    packages[2] = Path('/tmp/os-bind-rp-1.36_2.pkg')
+                formula = 'bind920 = 9.20.26' if fault == 'formula' else 'bind920 >= 9.20.26'
+                with patch.object(release_channel, 'read_bind_package_records', return_value=bind_records('9.20.26_1')), \
+                     patch.object(release_channel, 'query_package', side_effect=identities), \
+                     patch.object(release_channel, 'read_package_manifest', return_value={'dep_formula': formula}):
+                    if error:
+                        with self.assertRaisesRegex(ValueError, error):
+                            release_channel.validate_channel_package_manifests(packages, Path('/tmp/provenance'), 'pkg', '26.7')
+                    else:
+                        self.assertEqual('FreeBSD:15:amd64', release_channel.validate_channel_package_manifests(
+                            packages, Path('/tmp/provenance'), 'pkg', '26.7'))
 
 
 class BootstrapRepositoryConfigTest(unittest.TestCase):

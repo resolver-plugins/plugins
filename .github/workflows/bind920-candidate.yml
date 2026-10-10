@@ -32,7 +32,7 @@ jobs:
           python-version: '3.12.13'
       - name: Run candidate helper tests
         run: |
-          python -m py_compile .github/ci/*.py
+          python -m compileall -q .github/ci
           python .github/ci/ci-tests/test_bind920_candidate.py
           python .github/ci/ci-tests/test_bind920_reuse.py
           python .github/ci/ci-tests/test_release_channel_provenance.py
@@ -49,7 +49,7 @@ jobs:
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout init --cone
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout set dns/bind920
           git -C "$RUNNER_TEMP/freebsd-ports" checkout "$candidate_commit"
-          current_commit=$(python3 .github/ci/bind920_profile.py .resolver-plugins/bind920.json ports_commit)
+          current_commit=$(python3 .github/ci/bind/bind920_profile.py .resolver-plugins/bind920.json ports_commit)
           git -C "$RUNNER_TEMP/freebsd-ports" show "$current_commit:dns/bind920/Makefile" > "$RUNNER_TEMP/current.Makefile"
           git -C "$RUNNER_TEMP/freebsd-ports" diff --no-ext-diff "$current_commit" "$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.diff"
           git -C "$RUNNER_TEMP/freebsd-ports" log --format='%h %s' "$current_commit..$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.log"

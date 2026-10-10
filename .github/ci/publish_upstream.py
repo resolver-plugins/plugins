@@ -233,10 +233,11 @@ class GitHub:
                 continue
             if status not in {'A', 'M', 'T'}:
                 raise ValueError(f'unsupported local tree change: {status}')
-            tree_line = local_git(local_repository, 'ls-tree', '-z', commit_sha, '--', path)
-            if not isinstance(tree_line, str) or '\t' not in tree_line:
+            tree_line = local_git(local_repository, 'ls-tree', '-z', commit_sha, '--', path, binary=True)
+            if (not isinstance(tree_line, bytes) or not tree_line.endswith(b'\0')
+                    or b'\0' in tree_line[:-1] or b'\t' not in tree_line):
                 raise ValueError(f'cannot inspect local tree entry: {path}')
-            attributes, listed_path = tree_line.split('\t', maxsplit=1)
+            attributes, listed_path = tree_line[:-1].decode().split('\t', maxsplit=1)
             mode, object_type, object_sha = attributes.split()
             if listed_path != path:
                 raise ValueError(f'cannot inspect local tree entry: {path}')

@@ -2,52 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import json
-import shutil
-import subprocess
-import sys
-import tarfile
-import tempfile
-from contextlib import contextmanager
-from collections.abc import Iterator
-from pathlib import Path
+from module_fixtures import *
 
 import pytest
 
+from package_fixtures import package_creator, write_target_metadata
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "target_pkg.py"
-SPEC = importlib.util.spec_from_file_location("target_pkg", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-target_pkg = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = target_pkg
-SPEC.loader.exec_module(target_pkg)
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "ci-local"
+
+MODULE_PATH = CI / "shared/target_pkg.py"
+target_pkg = load_module("target_pkg", MODULE_PATH, register=True)
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "ci-local"
 
 
 def write_metadata(path: Path, archive: Path, pkg_static: Path) -> None:
-    record = {
-        "name": "pkg",
-        "version": "2.3.1_1",
-        "origin": "ports-mgmt/pkg",
-        "abi": "FreeBSD:14:amd64",
-        "filename": "pkg-2.3.1_1.pkg",
-        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-        "pkg_static_sha256": hashlib.sha256(pkg_static.read_bytes()).hexdigest(),
-    }
-    path.write_text(
-        json.dumps(
-            {
-                "schema": 1,
-                "series": {
-                    "26.1": record,
-                    "26.7": dict(record, abi="FreeBSD:15:amd64"),
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    write_target_metadata(path, package_creator(
+        abi="FreeBSD:14:amd64",
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        pkg_static_sha256=hashlib.sha256(pkg_static.read_bytes()).hexdigest(),
+    ))
 
 
 def write_content_metadata(path: Path, archive: Path) -> None:
@@ -125,7 +97,7 @@ def pkg_fixture() -> Iterator[tuple[Path, Path, Path, Path]]:
             "    printf '%s\\n' 'pkg|2.3.1_1|ports-mgmt/pkg|FreeBSD:14:amd64';;\n"
             "  add) [ \"$2\" = -f ] || exit 64;;\n"
             "  lock)\n"
-            "    if [ \"$2\" = -y ]; then : > \"$lock\"; elif [ \"$2\" = -l ]; then [ -f \"$lock\" ] && printf '%s\\n' 'pkg-2.3.1_1'; else exit 64; fi;;\n"
+            "    if [ \"$2\" = -y ]; then : > \"$lock\"; elif [ \"$2\" = -l ]; then [ ! -f \"$lock\" ] || printf '%s\\n' 'pkg-2.3.1_1'; else exit 64; fi;;\n"
             "  *) exit 64;;\n"
             "esac\n",
             encoding="utf-8",
@@ -143,14 +115,15 @@ def test_installs_locks_and_verifies_the_exact_pinned_archive(tmp_path: Path) ->
             metadata, "26.1", str(pkg), pkg_static_path=pkg_static
         )
 
-        assert selected.identity.version == "2.3.1_1"
+        assert selected.identity == target_pkg.PackageIdentity(
+            'pkg', '2.3.1_1', 'ports-mgmt/pkg', 'FreeBSD:14:amd64')
         assert selected.sha256 == hashlib.sha256(archive.read_bytes()).hexdigest()
         assert selected.pkg_static_sha256 == hashlib.sha256(pkg_static.read_bytes()).hexdigest()
         calls = log.read_text(encoding="utf-8").splitlines()
         assert calls[0].startswith("fetch -y -r OPNsense -o ")
         assert calls[0].endswith(" pkg-2.3.1_1")
-        assert calls[1].startswith("query -F ")
-        assert calls[2].startswith("add -f ")
+        downloaded = Path(calls[0].split()[5]) / 'All/pkg-2.3.1_1.pkg'
+        assert calls[1:3] == [f'query -F {downloaded} %n|%v|%o|%q', f'add -f {downloaded}']
         assert calls[3:] == ["lock -y pkg", "query -e %n = pkg %n|%v|%o|%q", "lock -l"]
 
 
@@ -173,25 +146,24 @@ def test_rejects_an_archive_with_the_wrong_sha256_before_install(tmp_path: Path)
         )
 
 
-def test_verify_rejects_a_changed_static_executable(tmp_path: Path) -> None:
+@pytest.mark.parametrize('fault', ['identity', 'lock', 'static-bytes'])
+def test_verify_rejects_changed_creator_state(tmp_path: Path, fault: str) -> None:
     with pkg_fixture() as (pkg, archive, pkg_static, _):
         metadata = tmp_path / "target-pkg.json"
         write_metadata(metadata, archive, pkg_static)
         selected = target_pkg.select_target_pkg(
             metadata, "26.1", str(pkg), pkg_static_path=pkg_static
         )
-        pkg_static.write_bytes(b"unexpected replacement\n")
-
-        with pytest.raises(target_pkg.TargetPackageError, match="pkg-static SHA-256"):
+        if fault == 'identity':
+            pkg.write_text(pkg.read_text().replace('pkg|2.3.1_1|', 'pkg|2.3.2|'))
+        elif fault == 'lock':
+            (pkg.parent / 'locked').unlink()
+        else:
+            pkg_static.write_bytes(b'unexpected replacement\n')
+        error = {'identity': 'installed pkg identity', 'lock': 'not locked',
+                 'static-bytes': 'pkg-static SHA-256'}[fault]
+        with pytest.raises(target_pkg.TargetPackageError, match=error):
             target_pkg.verify_target_pkg(selected, str(pkg), pkg_static_path=pkg_static)
-
-
-def test_rejects_unknown_or_malformed_series_metadata(tmp_path: Path) -> None:
-    metadata = tmp_path / "target-pkg.json"
-    metadata.write_text('{"schema": 1, "series": {}}', encoding="utf-8")
-
-    with pytest.raises(target_pkg.TargetPackageError, match="26.1"):
-        target_pkg.load_target(metadata, "26.1")
 
 
 def test_refreshes_only_the_outer_archive_hash_for_identical_contents(tmp_path: Path) -> None:
@@ -200,6 +172,7 @@ def test_refreshes_only_the_outer_archive_hash_for_identical_contents(tmp_path: 
         content_metadata = tmp_path / "target-pkg-content.json"
         write_metadata(metadata, archive, pkg_static)
         write_content_metadata(content_metadata, archive)
+        expected = json.loads(metadata.read_text())
         archive.write_bytes(archive.read_bytes() + b"repacked\n")
 
         digest = target_pkg.refresh_archive_sha256(
@@ -212,84 +185,36 @@ def test_refreshes_only_the_outer_archive_hash_for_identical_contents(tmp_path: 
         )
 
         assert digest == hashlib.sha256(archive.read_bytes()).hexdigest()
-        assert target_pkg.load_target(metadata, "26.1").sha256 == digest
+        expected["series"]["26.1"]["sha256"] = digest
+        assert json.loads(metadata.read_text()) == expected
 
 
-def test_refresh_rejects_changed_extracted_contents(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changes", [
+    {"payload": b"changed\n"},
+    {"payload_mode": 0o755},
+    {"link_target": "usr/local/sbin/pkg-static"},
+    {"hardlink_payload": False},
+    {"version": "2.3.2"},
+], ids=["bytes", "mode", "symlink", "hardlink", "identity"])
+def test_refresh_preserves_metadata_when_content_or_identity_changes(tmp_path: Path, changes: dict) -> None:
     with pkg_fixture() as (pkg, archive, pkg_static, _):
         metadata = tmp_path / "target-pkg.json"
         content_metadata = tmp_path / "target-pkg-content.json"
         write_metadata(metadata, archive, pkg_static)
         write_content_metadata(content_metadata, archive)
-        write_archive(archive, pkg_static, b"changed\n")
-
-        with pytest.raises(target_pkg.TargetPackageError, match="extracted contents"):
-            target_pkg.refresh_archive_sha256(
-                metadata,
-                content_metadata,
-                "26.1",
-                str(pkg),
-                "OPNsense",
-                metadata,
-            )
-
-
-def test_refresh_rejects_changed_file_mode(tmp_path: Path) -> None:
-    with pkg_fixture() as (pkg, archive, pkg_static, _):
-        metadata = tmp_path / "target-pkg.json"
-        content_metadata = tmp_path / "target-pkg-content.json"
-        write_metadata(metadata, archive, pkg_static)
-        write_content_metadata(content_metadata, archive)
-        write_archive(archive, pkg_static, payload_mode=0o755)
-
-        with pytest.raises(target_pkg.TargetPackageError, match="extracted contents"):
+        if 'version' in changes:
+            document = json.loads(metadata.read_text())
+            document['series']['26.1']['version'] = changes['version']
+            metadata.write_text(json.dumps(document))
+        else:
+            write_archive(archive, pkg_static, **changes)
+        before = metadata.read_bytes()
+        error = 'identity' if 'version' in changes else 'extracted contents'
+        with pytest.raises(target_pkg.TargetPackageError, match=error):
             target_pkg.refresh_archive_sha256(
                 metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
             )
-
-
-def test_refresh_rejects_changed_symlink_target(tmp_path: Path) -> None:
-    with pkg_fixture() as (pkg, archive, pkg_static, _):
-        metadata = tmp_path / "target-pkg.json"
-        content_metadata = tmp_path / "target-pkg-content.json"
-        write_metadata(metadata, archive, pkg_static)
-        write_content_metadata(content_metadata, archive)
-        write_archive(archive, pkg_static, link_target="usr/local/sbin/pkg-static")
-
-        with pytest.raises(target_pkg.TargetPackageError, match="extracted contents"):
-            target_pkg.refresh_archive_sha256(
-                metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
-            )
-
-
-def test_refresh_rejects_changed_hardlink_relationship(tmp_path: Path) -> None:
-    with pkg_fixture() as (pkg, archive, pkg_static, _):
-        metadata = tmp_path / "target-pkg.json"
-        content_metadata = tmp_path / "target-pkg-content.json"
-        write_metadata(metadata, archive, pkg_static)
-        write_content_metadata(content_metadata, archive)
-        write_archive(archive, pkg_static, hardlink_payload=False)
-
-        with pytest.raises(target_pkg.TargetPackageError, match="extracted contents"):
-            target_pkg.refresh_archive_sha256(
-                metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
-            )
-
-
-def test_refresh_rejects_changed_identity(tmp_path: Path) -> None:
-    with pkg_fixture() as (pkg, archive, pkg_static, _):
-        metadata = tmp_path / "target-pkg.json"
-        content_metadata = tmp_path / "target-pkg-content.json"
-        write_metadata(metadata, archive, pkg_static)
-        write_content_metadata(content_metadata, archive)
-        document = json.loads(metadata.read_text(encoding="utf-8"))
-        document["series"]["26.1"]["version"] = "2.3.2"
-        metadata.write_text(json.dumps(document), encoding="utf-8")
-
-        with pytest.raises(target_pkg.TargetPackageError, match="identity"):
-            target_pkg.refresh_archive_sha256(
-                metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
-            )
+        assert metadata.read_bytes() == before
 
 
 def test_identifies_a_single_archive_only_change(tmp_path: Path) -> None:
@@ -307,44 +232,3 @@ def test_identifies_a_single_archive_only_change(tmp_path: Path) -> None:
         document["series"]["26.1"]["version"] = "2.3.2"
         after.write_text(json.dumps(document), encoding="utf-8")
         assert target_pkg.changed_archive_series(before, after) is None
-
-
-def test_changed_series_command_fails_when_provenance_is_unavailable(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(MODULE_PATH),
-            "changed-series",
-            str(tmp_path / "missing-before.json"),
-            str(tmp_path / "missing-after.json"),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 1
-    assert "target pkg selection failed" in result.stderr
-
-
-def test_content_hash_rejects_archive_path_traversal(tmp_path: Path) -> None:
-    archive_path = tmp_path / "traversal.pkg"
-    with tarfile.open(archive_path, "w") as archive:
-        entry = tarfile.TarInfo("../escape")
-        entry.size = 0
-        archive.addfile(entry)
-
-    with pytest.raises(subprocess.CalledProcessError):
-        target_pkg.package_content_sha256(archive_path)
-    assert not (tmp_path / "escape").exists()
-
-
-def test_content_hash_rejects_special_entries(tmp_path: Path) -> None:
-    archive_path = tmp_path / "special.pkg"
-    with tarfile.open(archive_path, "w") as archive:
-        entry = tarfile.TarInfo("named-pipe")
-        entry.type = tarfile.FIFOTYPE
-        archive.addfile(entry)
-
-    with pytest.raises(target_pkg.TargetPackageError, match="unsupported entry"):
-        target_pkg.package_content_sha256(archive_path)

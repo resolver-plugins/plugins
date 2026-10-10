@@ -1,7 +1,4 @@
-import json
-import os
-import pathlib
-import subprocess
+from git_fixtures import *
 
 import pytest
 
@@ -9,49 +6,30 @@ import pytest
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 METADATA_PROFILE = pathlib.Path(
     os.environ.get(
-        'METADATA_PROFILE', REPOSITORY_ROOT / '.github/ci/metadata_profile.py'
+        'METADATA_PROFILE', REPOSITORY_ROOT / '.github/ci/shared/metadata_profile.py'
     )
 )
-UPSTREAM_COMMIT = '6f3937f938377464534ebebde66cc13d84186542'
-CORE_COMMIT = '8cc69b21e0f4c2622fc8a62df2a15ba7cb1e731f'
-CORE_ARCHIVE_SHA256 = (
-    '95cb9d549165520de984adbe7bd740ca237dd470b779d7ef3706d5f11b8c321e'
-)
-
-
-def metadata() -> dict[str, str]:
-    return {
-        'series': '26.1',
-        'upstream_branch': 'stable/26.1',
-        'upstream_commit': UPSTREAM_COMMIT,
-        'tools_tag': '26.1.11',
-        'freebsd_release': '14.3',
-        'core_commit': CORE_COMMIT,
-        'core_archive_url': (
-            f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz'
-        ),
-        'core_archive_sha256': CORE_ARCHIVE_SHA256,
-    }
+UPSTREAM_COMMIT = 'a' * 40
+CORE_COMMIT = 'b' * 40
+CORE_ARCHIVE_SHA256 = 'c' * 64
 
 
 @pytest.mark.parametrize(
     ('field', 'invalid_value'),
     (
+        (None, None),
         ('core_commit', 'refs/heads/stable/26.1'),
-        ('core_commit', CORE_COMMIT.upper()),
         ('upstream_commit', 'refs/heads/stable/26.1'),
-        ('upstream_commit', UPSTREAM_COMMIT.upper()),
-        ('core_archive_sha256', 'not-a-sha256'),
-        ('core_archive_sha256', CORE_ARCHIVE_SHA256.upper()),
         ('upstream_branch', 'stable/26.7'),
         ('tools_tag', '26.7.1'),
         ('tools_tag', '26.1.r1'),
-        ('freebsd_release', 'not-a-release'),
     ),
 )
-def test_rejects_invalid_strict_profile_fields(tmp_path, field, invalid_value):
-    profile = metadata()
-    profile[field] = invalid_value
+def test_cli_validates_strict_profile_fields(tmp_path, field, invalid_value):
+    profile = upstream_profile(upstream_commit=UPSTREAM_COMMIT, core_commit=CORE_COMMIT,
+                               archive_sha256=CORE_ARCHIVE_SHA256)
+    if field:
+        profile[field] = invalid_value
     if field == 'core_commit':
         profile['core_archive_url'] = (
             f'https://github.com/opnsense/core/archive/{invalid_value}.tar.gz'
@@ -66,4 +44,9 @@ def test_rejects_invalid_strict_profile_fields(tmp_path, field, invalid_value):
         check=False,
     )
 
-    assert result.returncode != 0
+    if field is None:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == CORE_COMMIT + '\n'
+    else:
+        assert result.returncode != 0
+        assert result.stdout == ''

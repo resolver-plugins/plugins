@@ -112,8 +112,8 @@ jobs:
           python-version: '3.12.13'
       - name: Run stdlib CI helper tests
         run: |
-          python -m py_compile .github/ci/*.py
-          python .github/ci/bind920_profile.py .resolver-plugins/bind920.json package_version
+          python -m compileall -q .github/ci
+          python .github/ci/bind/bind920_profile.py .resolver-plugins/bind920.json package_version
           python .github/ci/ci-tests/test_bind920_candidate.py
           python .github/ci/ci-tests/test_bind920_reuse.py
           python .github/ci/ci-tests/test_release_channel_provenance.py
@@ -182,10 +182,10 @@ jobs:
             git fetch --no-tags origin \
               'refs/heads/master:refs/remotes/origin/canonical-tests'
             git checkout refs/remotes/origin/canonical-tests -- \
-              .github/ci/metadata_profile.py dns/bind/tests
+              .github/ci/shared/metadata_profile.py dns/bind/tests
           fi
           test -d dns/bind/tests
-          test -f .github/ci/metadata_profile.py
+          test -f .github/ci/shared/metadata_profile.py
           source_commit=$(git rev-parse HEAD)
           if [[ "$PR_BASE" != "release/bind-rp/$SERIES" ]]; then
             source_ref="refs/heads/release/bind-rp/$SERIES"
@@ -201,6 +201,6 @@ jobs:
             done
           fi
           git show "$source_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
-          python3 .github/ci/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release > /dev/null
+          python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release > /dev/null
       - name: Run canonical BIND tests
         run: python3 -m pytest -q dns/bind/tests
