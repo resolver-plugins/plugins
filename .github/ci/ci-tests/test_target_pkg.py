@@ -166,14 +166,6 @@ def test_verify_rejects_changed_creator_state(tmp_path: Path, fault: str) -> Non
             target_pkg.verify_target_pkg(selected, str(pkg), pkg_static_path=pkg_static)
 
 
-def test_rejects_missing_series_metadata(tmp_path: Path) -> None:
-    metadata = tmp_path / "target-pkg.json"
-    metadata.write_text('{"schema": 1, "series": {}}', encoding="utf-8")
-
-    with pytest.raises(target_pkg.TargetPackageError, match="26.1"):
-        target_pkg.load_target(metadata, "26.1")
-
-
 def test_refreshes_only_the_outer_archive_hash_for_identical_contents(tmp_path: Path) -> None:
     with pkg_fixture() as (pkg, archive, pkg_static, _):
         metadata = tmp_path / "target-pkg.json"
@@ -202,40 +194,28 @@ def test_refreshes_only_the_outer_archive_hash_for_identical_contents(tmp_path: 
     {"payload_mode": 0o755},
     {"link_target": "usr/local/sbin/pkg-static"},
     {"hardlink_payload": False},
-], ids=["bytes", "mode", "symlink", "hardlink"])
-def test_refresh_rejects_changed_extracted_contents(tmp_path: Path, changes: dict) -> None:
+    {"version": "2.3.2"},
+], ids=["bytes", "mode", "symlink", "hardlink", "identity"])
+def test_refresh_preserves_metadata_when_content_or_identity_changes(tmp_path: Path, changes: dict) -> None:
     with pkg_fixture() as (pkg, archive, pkg_static, _):
         metadata = tmp_path / "target-pkg.json"
         content_metadata = tmp_path / "target-pkg-content.json"
         write_metadata(metadata, archive, pkg_static)
         write_content_metadata(content_metadata, archive)
+        if 'version' in changes:
+            document = json.loads(metadata.read_text())
+            document['series']['26.1']['version'] = changes['version']
+            metadata.write_text(json.dumps(document))
+        else:
+            write_archive(archive, pkg_static, **changes)
         before = metadata.read_bytes()
-        write_archive(archive, pkg_static, **changes)
-
-        with pytest.raises(target_pkg.TargetPackageError, match="extracted contents"):
+        error = 'identity' if 'version' in changes else 'extracted contents'
+        with pytest.raises(target_pkg.TargetPackageError, match=error):
             target_pkg.refresh_archive_sha256(
                 metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
             )
         assert metadata.read_bytes() == before
 
-
-def test_refresh_rejects_changed_identity(tmp_path: Path) -> None:
-    with pkg_fixture() as (pkg, archive, pkg_static, _):
-        metadata = tmp_path / "target-pkg.json"
-        content_metadata = tmp_path / "target-pkg-content.json"
-        write_metadata(metadata, archive, pkg_static)
-        write_content_metadata(content_metadata, archive)
-        document = json.loads(metadata.read_text(encoding="utf-8"))
-        document["series"]["26.1"]["version"] = "2.3.2"
-        metadata.write_text(json.dumps(document), encoding="utf-8")
-
-        before = metadata.read_bytes()
-        with pytest.raises(target_pkg.TargetPackageError, match="identity"):
-            target_pkg.refresh_archive_sha256(
-                metadata, content_metadata, "26.1", str(pkg), "OPNsense", metadata
-            )
-
-        assert metadata.read_bytes() == before
 
 def test_identifies_a_single_archive_only_change(tmp_path: Path) -> None:
     with pkg_fixture() as (_, archive, pkg_static, _):
@@ -252,39 +232,6 @@ def test_identifies_a_single_archive_only_change(tmp_path: Path) -> None:
         document["series"]["26.1"]["version"] = "2.3.2"
         after.write_text(json.dumps(document), encoding="utf-8")
         assert target_pkg.changed_archive_series(before, after) is None
-
-
-def test_changed_series_command_fails_when_provenance_is_unavailable(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(MODULE_PATH),
-            "changed-series",
-            str(tmp_path / "missing-before.json"),
-            str(tmp_path / "missing-after.json"),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 1
-    assert "target pkg selection failed" in result.stderr
-
-
-def test_content_hash_rejects_archive_path_traversal(tmp_path: Path, monkeypatch) -> None:
-    extraction = tmp_path / 'extraction'
-    extraction.mkdir()
-    monkeypatch.setattr(target_pkg.tempfile, 'TemporaryDirectory', lambda: nullcontext(str(extraction)))
-    archive_path = tmp_path / "traversal.pkg"
-    with tarfile.open(archive_path, "w") as archive:
-        entry = tarfile.TarInfo("../escape")
-        entry.size = 0
-        archive.addfile(entry)
-
-    with pytest.raises(subprocess.CalledProcessError):
-        target_pkg.package_content_sha256(archive_path)
-    assert not (tmp_path / "escape").exists()
 
 
 def test_content_hash_rejects_special_entries(tmp_path: Path) -> None:

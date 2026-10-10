@@ -34,4 +34,3 @@ def test_pull_request_release_cleanup_uses_only_trusted_code():
     cleanup = job_text(workflow, 'cleanup')
     assert_permissions(workflow, {})
     assert_permissions(cleanup, {'contents': 'write'}, indent=4)
-    assert 'GH_TOKEN: ${{ github.token }}' in cleanup

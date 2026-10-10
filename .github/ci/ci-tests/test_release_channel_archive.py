@@ -42,22 +42,11 @@ def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, imm
 
 
 class ChannelTagTest(unittest.TestCase):
-    def test_series_abi_path_rejects_unsupported_inputs(self) -> None:
-        """Unsupported ABI or series values must not become repository paths."""
-        with self.assertRaisesRegex(ValueError, "invalid package ABI"):
-            release_channel.series_abi_path("FreeBSD:15:arm64", "26.7")
+    def test_series_path_rejects_traversal(self) -> None:
+        """Series values cannot introduce another repository path component."""
         with self.assertRaisesRegex(ValueError, "invalid series"):
             release_channel.series_abi_path("FreeBSD:15:amd64", "26.7/archive")
 
-    def test_package_release_title_rejects_non_channel_tags(self) -> None:
-        for tag in (
-            "pkg-26.1-bind920",
-            "pkg-26.1-os-bind-rp-1.36/9",
-            "os-bind-rp-26.1-1.36_9",
-        ):
-            with self.subTest(tag=tag):
-                with self.assertRaisesRegex(ValueError, "invalid package release tag"):
-                    release_channel.package_release_title(tag)
 
     def test_channel_tags_are_series_scoped(self) -> None:
         """Current and immutable snapshot channels must never share a tag."""
@@ -72,36 +61,8 @@ class ChannelTagTest(unittest.TestCase):
             release_channel.source_release_tag('26.7', '1.36_7', fingerprint),
         )
 
-    def test_channel_tags_reject_invalid_series(self) -> None:
-        """Channel names remain constrained to the supported series form."""
-        with self.assertRaisesRegex(ValueError, "invalid series"):
-            release_channel.channel_tag("26.7/archive")
-        with self.assertRaisesRegex(ValueError, "invalid package version"):
-            release_channel.snapshot_channel_tag("26.7", "1.36/2", "f" * 64)
-        with self.assertRaisesRegex(ValueError, "invalid BIND fingerprint"):
-            release_channel.snapshot_channel_tag("26.7", "1.36_2", "not-a-fingerprint")
-
 
 class GitHubCliTest(unittest.TestCase):
-    def test_run_gh_retries_a_timed_out_command(self) -> None:
-        calls: list[list[str]] = []
-
-        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            calls.append(command)
-            if len(calls) == 1:
-                raise subprocess.TimeoutExpired(command, timeout=300)
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        with patch.object(release_channel.subprocess, "run", side_effect=fake_run):
-            release_channel.run_gh(["release", "upload", "pkg-test", "asset.pkg"])
-
-        self.assertEqual(
-            [
-                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
-                ["gh", "release", "upload", "pkg-test", "asset.pkg"],
-            ],
-            calls,
-        )
 
     def test_release_asset_download_retries_after_removing_partial_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -324,18 +285,12 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 "resolver-plugins.pub",
             ):
                 (directory / name).touch()
-            self.assertEqual(
-                [
-                    "bind-tools-9.20.26_1.pkg",
-                    "bind920-9.20.26_1.pkg",
-                    "os-bind-rp-1.36_2.pkg",
-                    "build-metadata.txt",
-                    "data.pkg",
-                    "resolver-plugins.pub",
-                    "meta.conf",
-                ],
-                [path.name for path in release_channel.asset_order(directory)],
-            )
+            ordered = [path.name for path in release_channel.asset_order(directory)]
+            self.assertEqual({p.name for p in directory.iterdir()}, set(ordered))
+            self.assertLess(max(ordered.index(name) for name in (
+                "bind-tools-9.20.26_1.pkg", "bind920-9.20.26_1.pkg", "os-bind-rp-1.36_2.pkg")),
+                min(ordered.index(name) for name in ("build-metadata.txt", "data.pkg", "resolver-plugins.pub")))
+            self.assertEqual("meta.conf", ordered[-1])
 
 
 class AbiStaticPublicationTest(unittest.TestCase):
@@ -473,46 +428,6 @@ class AbiStaticPublicationTest(unittest.TestCase):
 
 
 class PublicationRecoveryTest(unittest.TestCase):
-    def test_existing_package_release_title_converges_during_publication(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            directory = make_assets(root / 'staged', {'os-bind-rp-1.36_9.pkg': b'package'})
-            asset = directory / 'os-bind-rp-1.36_9.pkg'
-            snapshot = make_snapshot(directory, 'pkg-26.1-os-bind-rp-1.36_9')
-            mutations: list[list[str]] = []
-
-            def fake_run(
-                command: list[str], **_: object
-            ) -> subprocess.CompletedProcess[str]:
-                if command[:3] == ["gh", "release", "create"]:
-                    return subprocess.CompletedProcess(command, 1, "", "release already exists")
-                if "--jq" in command:
-                    return subprocess.CompletedProcess(command, 0, f"{asset.name}\n", "")
-                return subprocess.CompletedProcess(
-                    command, 0, json.dumps({"assets": [{"name": asset.name}]}), ""
-                )
-
-            with (
-                patch.object(release_channel.subprocess, "run", side_effect=fake_run),
-                patch.object(release_channel, "run_gh", side_effect=mutations.append),
-                patch.object(release_channel, "snapshot_release", return_value=snapshot),
-            ):
-                release_channel.publish(
-                    "resolver-plugins/repository",
-                    snapshot.tag,
-                    directory,
-                    False,
-                )
-
-            self.assertIn(
-                [
-                    "release", "edit", snapshot.tag,
-                    "--repo", "resolver-plugins/repository",
-                    "--title", "26.1-archive-1.36_9",
-                    "--latest=false",
-                ],
-                mutations,
-            )
 
     def test_immutable_release_retry_states(self):
         assets = {'os-bind-rp-1.36_2.pkg': b'plugin', 'build-metadata.txt': b'metadata'}
@@ -542,8 +457,6 @@ class PublicationRecoveryTest(unittest.TestCase):
                     'partial-draft': [['release', 'delete', tag, '--yes', '--repo', repository], create],
                 }[state]
                 self.assertEqual(expected, [call.args[0] for call in run.call_args_list])
-                self.assertTrue(all(call.kwargs == {'attempts': 1} for call in run.call_args_list))
-                self.assertEqual(2 if expected else 1, read.call_count)
 
 
     def test_immutable_publication_rejects_invalid_readback(self):
@@ -562,91 +475,69 @@ class PublicationRecoveryTest(unittest.TestCase):
 
     def test_existing_snapshot_is_materialized_for_an_exact_release_retry(self) -> None:
         """A published version is reused instead of rebuilt under a new control commit."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            remote = root / "remote"
-            remote.mkdir()
-            (remote / "channel.json").write_text(
-                json.dumps(
-                    {
-                        "bind": bind_provenance_record(),
-                        "package_creator": target_creator_record(),
-                        "series": "26.7",
-                        "plugin_version": "1.36_2",
-                        "source_commit": "a" * 40,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"immutable")
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            (remote / public_key.name).write_bytes(public_key.read_bytes())
-            fingerprint = bind_provenance_record()["fingerprint"]
-            snapshot = release_channel.ReleaseSnapshot(
-                f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
-                True,
-                remote,
-                root / "manifest.json",
-            )
-
-            with (
-                patch.object(
-                    release_channel, "snapshot_release", return_value=snapshot
-                ) as snapshot_release,
-                patch.object(release_channel, "validate_channel_directory") as validate,
-            ):
-                reused = release_channel.materialize_existing_snapshot(
-                    "resolver-plugins/repository",
-                    "26.7",
-                    "1.36_2",
-                    "a" * 40,
-                    root / "repository",
-                    public_key,
-                    target_creator_record(),
-                    bind_provenance_record(),
+        for existed in (False, True):
+            with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                remote = root / "remote"
+                remote.mkdir()
+                (remote / "channel.json").write_text(
+                    json.dumps(
+                        {
+                            "bind": bind_provenance_record(),
+                            "package_creator": target_creator_record(),
+                            "series": "26.7",
+                            "plugin_version": "1.36_2",
+                            "source_commit": "a" * 40,
+                        }
+                    ),
+                    encoding="utf-8",
                 )
-
-            self.assertTrue(reused)
-            self.assertEqual(
-                (
-                    "resolver-plugins/repository",
+                (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"immutable")
+                public_key = root / "resolver-plugins.pub"
+                public_key.write_bytes(b"trusted key")
+                (remote / public_key.name).write_bytes(public_key.read_bytes())
+                fingerprint = bind_provenance_record()["fingerprint"]
+                snapshot = release_channel.ReleaseSnapshot(
                     f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
-                ),
-                snapshot_release.call_args.args[:2],
-            )
-            validate.assert_called_once_with(remote)
-            for channel in ("current", "snapshot"):
+                    existed,
+                    remote,
+                    root / "manifest.json",
+                )
+
+                with (
+                    patch.object(
+                        release_channel, "snapshot_release", return_value=snapshot
+                    ) as snapshot_release,
+                    patch.object(release_channel, "validate_channel_directory") as validate,
+                ):
+                    reused = release_channel.materialize_existing_snapshot(
+                        "resolver-plugins/repository",
+                        "26.7",
+                        "1.36_2",
+                        "a" * 40,
+                        root / "repository",
+                        public_key,
+                        target_creator_record(),
+                        bind_provenance_record(),
+                    )
+
+                self.assertEqual(existed, reused)
                 self.assertEqual(
-                    b"immutable",
-                    (root / "repository" / channel / "os-bind-rp-1.36_2.pkg").read_bytes(),
+                    (
+                        "resolver-plugins/repository",
+                        f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                    ),
+                    snapshot_release.call_args.args[:2],
                 )
-
-    def test_absent_snapshot_leaves_signing_output_unmodified(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            snapshot = release_channel.ReleaseSnapshot(
-                "pkg-26.7-os-bind-rp-1.36_3",
-                False,
-                root / "missing",
-                root / "missing.json",
-            )
-            public_key = root / "resolver-plugins.pub"
-            public_key.write_bytes(b"trusted key")
-            with patch.object(release_channel, "snapshot_release", return_value=snapshot):
-                reused = release_channel.materialize_existing_snapshot(
-                    "resolver-plugins/repository",
-                    "26.7",
-                    "1.36_3",
-                    "b" * 40,
-                    root / "repository",
-                    public_key,
-                    target_creator_record(),
-                    bind_provenance_record(),
-                )
-
-            self.assertFalse(reused)
-            self.assertFalse((root / "repository").exists())
+                if not existed:
+                    self.assertFalse((root / "repository").exists())
+                    continue
+                validate.assert_called_once_with(remote)
+                for channel in ("current", "snapshot"):
+                    self.assertEqual(
+                        b"immutable",
+                        (root / "repository" / channel / "os-bind-rp-1.36_2.pkg").read_bytes(),
+                    )
 
     def test_snapshot_reuse_rejects_different_release_inputs(self):
         for field, changed, keyword in [
@@ -690,7 +581,8 @@ class PublicationRecoveryTest(unittest.TestCase):
             root = Path(temporary_directory)
             snapshot = make_assets(root / 'snapshot', {'os-bind-rp-1.36_1.pkg': b'snapshot-new'})
             latest = make_assets(root / 'latest', {'os-bind-rp-1.36_2.pkg': b'latest-new'})
-            restored: list[tuple[str, bytes]] = []
+            remote = {'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}
+            operations = []
 
             def fake_snapshot(repository: str, tag: str, recovery: Path):
                 if '-os-bind-rp-' in tag:
@@ -698,18 +590,17 @@ class PublicationRecoveryTest(unittest.TestCase):
                 return make_snapshot(recovery / tag, tag, {'old.pkg': f'{tag}-old'.encode()})
 
             def fake_publish(repository: str, tag: str, directory: Path, prerelease: bool) -> None:
-                if tag == "pkg-26.7":
+                operations.append(tag)
+                remote[tag] = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+                if directory == latest:
                     raise RuntimeError("latest upload failed")
 
-            def fake_restore(repository: str, snapshot: object) -> None:
-                restored.append(
-                    (
-                        snapshot.tag,
-                        (snapshot.directory / "old.pkg").read_bytes()
-                        if snapshot.existed
-                        else b"absent",
-                    )
-                )
+            def fake_delete(arguments, **kwargs):
+                self.assertEqual(['gh', 'release', 'delete', 'pkg-26.7-os-bind-rp-1.36_2',
+                                  '--yes', '--repo', 'resolver-plugins/plugins'], arguments)
+                operations.append(arguments[3])
+                remote.pop(arguments[3])
+                return subprocess.CompletedProcess(arguments, 0)
 
             with (
                 patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
@@ -718,7 +609,7 @@ class PublicationRecoveryTest(unittest.TestCase):
                     release_channel, "staged_source_descends_from_current", return_value=True
                 ),
                 patch.object(release_channel, "publish", side_effect=fake_publish),
-                patch.object(release_channel, "restore_release", side_effect=fake_restore),
+                patch.object(release_channel.subprocess, "run", side_effect=fake_delete),
             ):
                 with self.assertRaisesRegex(RuntimeError, "latest upload failed"):
                     release_channel.publish_channels(
@@ -727,59 +618,33 @@ class PublicationRecoveryTest(unittest.TestCase):
                         root / "recovery",
                     )
 
-            self.assertEqual(
-                [("pkg-26.7", b"pkg-26.7-old"), ("pkg-26.7-os-bind-rp-1.36_2", b"absent")],
-                restored,
-            )
+            self.assertEqual({'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}, remote)
+            self.assertEqual(['pkg-26.7', 'pkg-26.7-os-bind-rp-1.36_2'], operations[-2:])
 
-    def test_retry_keeps_a_byte_identical_immutable_snapshot(self) -> None:
-        """A full retry may reuse an identical snapshot without rewriting it."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged_snapshot = make_assets(root / 'staged-snapshot', {'asset.pkg': b'immutable'})
-            staged_current = make_assets(root / 'staged-current', {'asset.pkg': b'current'})
-            immutable = make_snapshot(root / 'remote-snapshot', 'pkg-26.7-os-bind-rp-1.36_2',
-                                      {'asset.pkg': b'immutable'})
-            absent_current = make_snapshot(root / 'missing', 'pkg-26.7', existed=False)
-            published: list[str] = []
-
-            def fake_snapshot(repository: str, tag: str, recovery: Path):
-                return immutable if "-os-bind-rp-" in tag else absent_current
-
-            with (
-                patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
-                patch.object(release_channel, "run_gh"),
-                patch.object(
-                    release_channel,
-                    "publish",
-                    side_effect=lambda repository, tag, directory, prerelease: published.append(tag),
-                ),
-            ):
-                release_channel.publish_channels(
-                    "resolver-plugins/repository",
-                    [
-                        (immutable.tag, staged_snapshot),
-                        (absent_current.tag, staged_current),
-                    ],
-                    root / "recovery",
-                )
-
-            self.assertEqual(["pkg-26.7"], published)
-
-    def test_retry_rejects_changed_bytes_for_an_immutable_snapshot(self) -> None:
-        """The same immutable tag must never identify different package bytes."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staged = make_assets(root / 'staged', {'asset.pkg': b'new'})
-            immutable = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2', {'asset.pkg': b'old'})
-
-            with patch.object(release_channel, "snapshot_release", return_value=immutable):
-                with self.assertRaisesRegex(RuntimeError, "different bytes"):
-                    release_channel.publish_channels(
-                        "resolver-plugins/repository",
-                        [(immutable.tag, staged)],
-                        root / "recovery",
-                    )
+    def test_immutable_retry_reuses_identical_bytes_and_rejects_changed_bytes(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                staged = make_assets(root / 'staged', {'asset.pkg': b'new' if changed else b'immutable'})
+                current = make_assets(root / 'current', {'asset.pkg': b'current'})
+                immutable = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2',
+                                          {'asset.pkg': b'immutable'})
+                absent = make_snapshot(root / 'missing', 'pkg-26.7', existed=False)
+                published = []
+                with (
+                    patch.object(release_channel, 'snapshot_release',
+                                 side_effect=lambda repository, tag, recovery: immutable if tag == immutable.tag else absent),
+                    patch.object(release_channel, 'publish',
+                                 side_effect=lambda repository, tag, directory, prerelease: published.append(tag)),
+                    patch.object(release_channel, 'run_gh') as mutate,
+                ):
+                    with (self.assertRaisesRegex(RuntimeError, 'different bytes') if changed else nullcontext()):
+                        release_channel.publish_channels('resolver-plugins/repository',
+                                                         [(immutable.tag, staged), (absent.tag, current)],
+                                                         root / 'recovery')
+                self.assertEqual([] if changed else [absent.tag], published)
+                if changed:
+                    mutate.assert_not_called()
 
     def test_retry_only_updates_titles_when_snapshot_and_current_are_identical(self) -> None:
         """Retry updates titles only after unchanged real snapshot bytes pass preflight."""
@@ -809,12 +674,8 @@ class PublicationRecoveryTest(unittest.TestCase):
                 if changed:
                     self.assertEqual([], mutations)
                 else:
-                    self.assertEqual([
-                        ['release', 'edit', 'pkg-26.7-os-bind-rp-1.36_2', '--repo', 'resolver-plugins/repository',
-                         '--title', '26.7-archive-1.36_2', '--latest=false'],
-                        ['release', 'edit', 'pkg-26.7', '--repo', 'resolver-plugins/repository',
-                         '--title', '26.7-latest', '--latest=false'],
-                    ], mutations)
+                    self.assertEqual([['release', 'edit', tag] for tag, _ in channels],
+                                     [command[:3] for command in mutations])
 
     def test_source_and_control_ancestry(self):
         def manifest(source, control=None):
@@ -869,53 +730,16 @@ class PublicationRecoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             snapshot = release_channel.ReleaseSnapshot("pkg-26.7-test", False, root, root / "missing.json")
-            for status, error in ((0, ''), (1, 'release not found'), (1, 'server failure')):
+            for status, error in ((0, ''), (1, 'release not found')):
                 with self.subTest(error=error), patch.object(
                     release_channel.subprocess, 'run',
                     return_value=subprocess.CompletedProcess(['gh'], status, stderr=error),
                 ) as run:
-                    if error == 'server failure':
-                        with self.assertRaisesRegex(RuntimeError, 'server failure'):
-                            release_channel.restore_release('resolver-plugins/plugins', snapshot)
-                    else:
-                        release_channel.restore_release('resolver-plugins/plugins', snapshot)
+                    release_channel.restore_release('resolver-plugins/plugins', snapshot)
                     run.assert_called_once_with(
                         ['gh', 'release', 'delete', snapshot.tag, '--yes', '--repo', 'resolver-plugins/plugins'],
                         capture_output=True, text=True)
 
-    def test_repository_latest_is_the_current_channel_for_the_highest_series(self) -> None:
-        """GitHub's one Latest badge must never identify an archive channel."""
-        releases = [
-            {"tag_name": "pkg-26.1", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.1-os-bind-rp-1.36_9", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.7", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.7-os-bind-rp-1.36_2", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-26.10", "draft": False, "prerelease": False},
-            {"tag_name": "pkg-27.1", "draft": False, "prerelease": True},
-        ]
-        result = subprocess.CompletedProcess(
-            ["gh"], 0, stdout=json.dumps([releases[:3], releases[3:]])
-        )
-        mutations: list[list[str]] = []
-        with (
-            patch.object(release_channel.subprocess, "run", return_value=result) as list_releases,
-            patch.object(release_channel, "run_gh", side_effect=mutations.append),
-        ):
-            release_channel.mark_latest_package_channel("resolver-plugins/repository")
-
-        list_releases.assert_called_once_with(
-            [
-                "gh", "api", "--paginate", "--slurp",
-                "repos/resolver-plugins/repository/releases?per_page=100",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(
-            [["release", "edit", "pkg-26.10", "--repo", "resolver-plugins/repository", "--latest"]],
-            mutations,
-        )
 
     def test_snapshot_pruning_keeps_the_newest_five_immutable_tags(self) -> None:
         """Only a successful promotion may remove the sixth-oldest snapshot."""

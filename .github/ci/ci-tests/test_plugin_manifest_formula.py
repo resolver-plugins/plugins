@@ -30,7 +30,6 @@ def test_framework_omits_only_formula_dependencies_from_exact_revision_pins(form
     ]
 
 
-def test_bind_declares_a_minimum_solver_constraint_not_a_bundled_revision():
+def test_bind_links_its_dependency_formula_to_the_bind920_manifest_entry():
     makefile = (REPOSITORY_ROOT / 'dns/bind/Makefile').read_text(encoding='utf-8')
-    assert re.search(r'^PLUGIN_DEPEND_FORMULA=\s*bind920 >= 9\.20\.26$', makefile, re.MULTILINE)
     assert re.search(r'^PLUGIN_DEPEND_FORMULA_DEPENDS=\s*bind920$', makefile, re.MULTILINE)

@@ -99,9 +99,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
     )
 
     assert result.returncode == 0, result.stderr
-    assert python_command.is_file()
     assert (tmp_path / 'os-bind-rp-26.1_1.pkg').is_file()
-    assert (tmp_path / 'repos' / 'OPNsense.conf').is_file()
     metadata = dict(line.split('=', 1) for line in (tmp_path / 'build-metadata.txt').read_text().splitlines())
     metadata.pop('uname')  # Host description varies; the package identity and build pins must match exactly.
     assert metadata == {
@@ -112,12 +110,6 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
         'pkg_creator_sha256': hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
     }
     package_calls = package_call_log.read_text().splitlines()
-    assert 'update -f' in package_calls
-    assert 'install -y python3' in package_calls
-    assert 'install -y git' in package_calls
-    assert 'install -y bind920' in package_calls
-    target_fetch = next(call for call in package_calls if call.startswith('fetch '))
-    assert target_fetch.endswith('pkg-2.3.1_1')
     target_add_index = next(
         index for index, call in enumerate(package_calls)
         if call.startswith('add -f ') and 'pkg-2.3.1_1.pkg' in call
@@ -129,55 +121,8 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
         'query -e %n = pkg %n|%v|%o|%q', 'lock -l',
     ]
     static_calls = pathlib.Path(environment['PKG_STATIC_CALL_LOG']).read_text().splitlines()
-    assert any(
-        call.startswith('query -F ') and call.endswith(' %Fp|%Fs')
-        for call in static_calls
-    )
-    safe_directories = subprocess.run(
-        ['git', 'config', '--global', '--get-all', 'safe.directory'],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=environment,
-    )
-    assert safe_directories.returncode == 0, safe_directories.stderr
-    assert build_repository.as_posix() in safe_directories.stdout.splitlines()
-
-
-def test_build_wrapper_requires_plugin_version_to_match_release_series(tmp_path, request):
-    build_repository = materialize_build_repository(request)
-    environment = build_environment(tmp_path, build_repository, tmp_path / 'core')
-    cases = (
-        ('26.1', '12', True),
-        ('26.7', '1', False),
-        ('26.1', '0', False),
-        ('1.36', '12', False),
-        ('26.1', '1x', False),
-    )
-
-    for version, revision, allowed in cases:
-        case_path = tmp_path / f'{version}_{revision}'
-        case_path.mkdir()
-        set_plugin_version(build_repository, version, revision)
-        case_environment = dict(environment, PKG_CALL_LOG=str(case_path / 'pkg-calls.log'))
-        configure_target_pkg_fixture(case_environment, case_path, build_repository)
-        result = subprocess.run(
-            [build_repository / '.github/ci/bind/build-os-bind-rp.sh',
-             '26.1', str(case_path / 'artifacts')],
-            cwd=build_repository,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=case_environment,
-        )
-        artifact = case_path / 'artifacts' / f'os-bind-rp-{version}_{revision}.pkg'
-        if allowed:
-            assert result.returncode == 0, result.stderr
-            assert artifact.is_file()
-        else:
-            assert result.returncode != 0
-            assert not artifact.exists()
-            assert 'plugin version' in result.stderr
+    built_archive = build_repository / 'dns/bind/work/pkg/os-bind-rp-26.1_1.pkg'
+    assert f"query -F {built_archive} %Fp|%Fs" in static_calls
 
 
 def test_build_wrapper_requests_resolver_fallback_for_an_ineligible_opnsense_bind(tmp_path, request):

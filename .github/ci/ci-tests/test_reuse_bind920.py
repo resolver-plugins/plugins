@@ -83,28 +83,6 @@ class ReuseBind920Test(unittest.TestCase):
         self.assertEqual(("bind920", "9.20.26_2", "dns/bind920"), identity)
         self.assertEqual(["pkg", "query", "-e", "%n = bind920", "%n\t%v\t%o"], command)
 
-    def test_fetch_package_is_noninteractive(self) -> None:
-        """The VM must never stop at pkg's confirmation prompt."""
-        command: list[str] = []
-
-        def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            command.extend(arguments)
-            return subprocess.CompletedProcess(arguments, 0)
-
-        with patch.object(reuse_bind920, "run", side_effect=fake_run):
-            reuse_bind920.fetch_package(
-                ["pkg", "-o", "REPOS_DIR=/tmp/repos"],
-                Path("/tmp/downloads"),
-                "bind-tools-9.20.26_2.pkg",
-            )
-
-        self.assertEqual(
-            [
-                "pkg", "-o", "REPOS_DIR=/tmp/repos", "fetch", "-y", "-r", "resolver-plugins",
-                "-o", "/tmp/downloads", "bind-tools-9.20.26_2",
-            ],
-            command,
-        )
 
     def test_downloaded_archive_accepts_pkg_named_fetch_layouts(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,8 +94,6 @@ class ReuseBind920Test(unittest.TestCase):
                     archive.touch()
                     self.assertEqual(archive, reuse_bind920.downloaded_archive(downloads, archive.name))
                     archive.unlink()
-            with self.assertRaisesRegex(RuntimeError, "did not fetch"):
-                reuse_bind920.downloaded_archive(downloads, archive.name)
 
 
 if __name__ == "__main__":

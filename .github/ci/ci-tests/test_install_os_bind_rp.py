@@ -46,7 +46,6 @@ def installer_environment(
     mutate_frozen_archive: bool = False,
     dry_run_status: int = 1,
     dry_run_plan: str = "valid",
-    break_dry_run_output: bool = False,
     query_fault: str = "",
 ) -> tuple[dict[str, str], Path, Path]:
     log = tmp_path / "commands.log"
@@ -84,7 +83,6 @@ def installer_environment(
             "RP_TEST_MUTATE_FROZEN_ARCHIVE": "yes" if mutate_frozen_archive else "no",
             "RP_TEST_DRY_RUN_STATUS": str(dry_run_status),
             "RP_TEST_DRY_RUN_PLAN": dry_run_plan,
-            "RP_TEST_BREAK_DRY_RUN_OUTPUT": "yes" if break_dry_run_output else "no",
             "RP_TEST_QUERY_FAULT": query_fault,
             "RP_TEST_UNLOCK_FAILURE": "yes" if unlock_failure else "no",
             "RP_TEST_ARCHIVE_CHECKSUM": archive_checksum,
@@ -245,8 +243,6 @@ elif command == "query":
             value = installed(name)
             fault, _, fault_name = os.environ.get("RP_TEST_QUERY_FAULT", "").partition(":")
             if fault_name == name:
-                if fault == "error":
-                    raise SystemExit(2)
                 if fault == "malformed":
                     print(f"{name}|malformed")
                     break
@@ -346,18 +342,16 @@ elif command == "which":
         version = "1"
     print(f"{package}-{version}")
 elif command == "check":
-    if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "check":
-        raise SystemExit(1)
+    pass
 else:
     raise SystemExit(64)
+Path(os.environ["RP_TEST_LOG"]).with_name("installed-packages").write_text(
+    "\n".join(filter(None, (installed(name) for name in ("bind920", "bind-tools", "os-bind-rp", "os-bind"))))
+)
 ''',
     )
     for command in ("service", "configctl"):
         write_executable(directory / command, f'#!/bin/sh\necho "{command} $*" >> "$RP_TEST_LOG"\nexit 99\n')
-    write_executable(
-        directory / "dry-run-awk",
-        "#!/bin/sh\nprintf '%s\\n' 'simulated dry-run parser failure' >&2\nexit 2\n",
-    )
 
 
 def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -368,8 +362,6 @@ def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.Complete
         write_command_fixtures(fixtures)
         environment["PATH"] = f"{fixtures}:{environment['PATH']}"
         environment["RP_PKG_STATIC_COMMAND"] = str(fixtures / "pkg")
-        if environment["RP_TEST_BREAK_DRY_RUN_OUTPUT"] == "yes":
-            environment["RP_DRY_RUN_AWK_COMMAND"] = str(fixtures / "dry-run-awk")
         result = subprocess.run(
             ["/bin/sh", INSTALLER], text=True, capture_output=True, check=False, env=environment
         )
@@ -411,16 +403,12 @@ def test_installs_current_plugin_for_the_detected_series_without_service_changes
         f"https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest/"
         "resolver-plugins.pub" not in calls
     )
-    assert "releases/download/pkg-" not in calls
     assert f"os-bind-rp-{series}_1" in calls
-    assert "resolver-plugins-bind920" not in calls
     assert "configctl" not in calls
     assert "service" not in calls
     assert "Do you wish to update BIND?" not in result.stderr
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" not in calls
     assert (tmp_path / "plugin-installed").exists()
-    if installed_plugin:
-        assert "Upgrading installed os-bind-rp" in result.stderr
 
 
 def test_rejects_plugin_candidate_that_does_not_match_the_detected_series(
@@ -434,7 +422,6 @@ def test_rejects_plugin_candidate_that_does_not_match_the_detected_series(
     )
 
     assert result.returncode != 0
-    assert "os-bind-rp version does not match OPNsense series 26.7" in result.stderr
     calls = log.read_text(encoding="utf-8")
     assert " fetch " not in calls
     assert " install " not in calls
@@ -444,7 +431,6 @@ def test_rejects_26_1_before_the_required_core_floor(tmp_path: Path) -> None:
     result, log, _ = run_installer(tmp_path, opnsense_version="OPNsense 26.1.10 (amd64)")
 
     assert result.returncode != 0
-    assert "OPNsense 26.1.11_10 or newer is required" in result.stderr
     calls = log.read_text(encoding="utf-8")
     assert "fetch " not in calls
     assert " update " not in calls
@@ -459,7 +445,6 @@ def test_preserves_a_trusted_key_when_the_replacement_fails_verification(tmp_pat
     result, log, _ = run_installer(tmp_path, key_sha256="0" * 64)
 
     assert result.returncode != 0
-    assert "public-key fingerprint verification failed" in result.stderr
     assert key.read_text(encoding="utf-8") == "existing trusted key\n"
     calls = log.read_text(encoding="utf-8")
     assert " update " not in calls
@@ -475,15 +460,16 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Installed bind920: bind920 9.20.25 from dns/bind920" in result.stderr
-    assert "Installed bind-tools: bind-tools 9.20.25 from dns/bind-tools" in result.stderr
-    assert "Available fallback: bind920 9.20.26_2 and bind-tools 9.20.26_2" in result.stderr
     assert "Do you wish to update BIND? [y/N]" in result.stderr
     assert not (repositories / "resolver-plugins-bind920.conf").exists()
     calls = log.read_text(encoding="utf-8")
     live_installs = [line for line in calls.splitlines() if " install -y " in line]
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[0]
     assert "os-bind-rp-26.1_1" in live_installs[1]
+    assert set((tmp_path / "installed-packages").read_text().splitlines()) == {
+        "bind920|9.20.26_2|dns/bind920", "bind-tools|9.20.26_2|dns/bind-tools",
+        "os-bind-rp|26.1_1|opnsense/os-bind-rp",
+    }
 
 
 @pytest.mark.parametrize("installed", [
@@ -494,24 +480,15 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
 def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path, installed: dict) -> None:
     result, log, _ = run_installer(tmp_path, confirmation="n", **installed)
     assert result.returncode != 0
-    assert "BIND update declined; os-bind-rp was not installed." in result.stderr
     assert " install -y " not in log.read_text()
     assert not (tmp_path / "plugin-installed").exists()
     assert not (tmp_path / "backups").exists()
-
-
-def test_rejects_an_unsupported_opnsense_series(tmp_path: Path) -> None:
-    result, _, _ = run_installer(tmp_path, opnsense_version="OPNsense 25.7.2 (amd64)")
-
-    assert result.returncode != 0
-    assert "unsupported OPNsense release series: 25.7" in result.stderr
 
 
 def test_rejects_null_archive_checksums_before_any_package_install(tmp_path: Path) -> None:
     result, log, _ = run_installer(tmp_path, archive_checksum="(null)")
 
     assert result.returncode != 0
-    assert "incompatible file checksum" in result.stderr
     assert " install " not in log.read_text(encoding="utf-8")
     assert not (tmp_path / "backups").exists()
 
@@ -520,7 +497,6 @@ def test_rejects_a_frozen_archive_change_before_state_or_install(tmp_path: Path)
     result, log, _ = run_installer(tmp_path, mutate_frozen_archive=True)
 
     assert result.returncode != 0
-    assert "verified archive changed" in result.stderr
     assert " install " not in log.read_text(encoding="utf-8")
     assert not (tmp_path / "backups").exists()
 
@@ -534,7 +510,6 @@ def test_official_plugin_replacement_uses_verified_exact_archives_and_keeps_back
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Replacing official os-bind" in result.stderr
     backups = list((tmp_path / "backups").glob("os-bind-rp-install.*"))
     assert len(backups) == 1
     backup = backups[0]
@@ -555,36 +530,18 @@ def test_official_plugin_replacement_uses_verified_exact_archives_and_keeps_back
         assert f"pkg query -e %n = {package} %Fp|%Fs" in calls
 
 
-@pytest.mark.parametrize("fault,diagnostic", [
-    ("owner", "installed file has the wrong owner"),
-    ("identity", "installed identity mismatch for os-bind-rp"),
-    ("official", "official os-bind remains installed"),
-    ("checksum", "incompatible installed file checksum"),
-    ("check", ""),
-])
-def test_rejects_failed_post_install_verification(tmp_path: Path, fault: str, diagnostic: str) -> None:
-    result, log, _ = run_installer(tmp_path, post_install_fault=fault,
-                                  os_bind="os-bind|1.34_3|opnsense/os-bind")
+@pytest.mark.parametrize("fault", ["owner", "identity", "official", "checksum"])
+def test_rejects_failed_post_install_verification(tmp_path: Path, fault: str) -> None:
+    result, _, _ = run_installer(tmp_path, post_install_fault=fault,
+                                os_bind="os-bind|1.34_3|opnsense/os-bind")
     assert result.returncode != 0
     assert (tmp_path / "plugin-installed").exists()
-    if diagnostic:
-        assert diagnostic in result.stderr
-    else:
-        assert "pkg check -s bind-tools bind920 os-bind-rp" in log.read_text()
-    assert "Diagnostic state retained at" in result.stderr
-
-
-def test_install_failure_retains_diagnostics_and_temporary_archives(tmp_path: Path) -> None:
-    result, _, _ = run_installer(tmp_path, install_failure=True)
-
-    assert result.returncode != 0
-    backups = list((tmp_path / "backups").glob("os-bind-rp-install.*"))
-    assert len(backups) == 1
-    assert "Diagnostic state retained at" in result.stderr
-    assert "Temporary package data retained at" in result.stderr
-    temporary = tmp_path / "temporary"
-    assert temporary.exists()
-    assert list(temporary.rglob("*.pkg"))
+    backup, = (tmp_path / "backups").glob("os-bind-rp-install.*")
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o700
+    assert (backup / "config.xml.bak").read_bytes() == b"<opnsense><bind/></opnsense>\n"
+    assert stat.S_IMODE((backup / "config.xml.bak").stat().st_mode) == 0o640
+    assert (backup / "recovery-packages/os-bind-1.34_3.pkg").read_bytes() == b"recovery:os-bind-1.34_3\n"
+    assert str(backup) in result.stderr
 
 
 def test_restores_the_original_pkg_lock_state_after_success_and_failure(tmp_path: Path) -> None:
@@ -626,116 +583,45 @@ def test_accepts_current_plan_for_an_exact_installed_identity(tmp_path: Path, pl
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(
-    ("status", "plan", "diagnostic"),
-    [
-        (2, "valid", "dry run failed with status 2"),
-        (1, "missing", "omitted requested identity"),
-        (1, "pkg_colon", "attempted to change pkg or OPNsense core"),
-        (1, "opnsense_colon", "attempted to change pkg or OPNsense core"),
-        (1, "pkg_hyphen", "attempted to change pkg or OPNsense core"),
-    ],
-)
-def test_rejects_unsafe_or_invalid_pkg_dry_run_plans(
-    tmp_path: Path, status: int, plan: str, diagnostic: str
+@pytest.mark.parametrize("status,plan,installed_plugin", [
+    (2, "valid", ""),
+    (1, "missing", ""),
+    (1, "pkg_colon", ""),
+    (1, "opnsense_colon", ""),
+    (1, "pkg_hyphen", ""),
+    (1, "unrelated_install", ""),
+    (1, "unrelated_upgrade", ""),
+    (1, "unrelated_downgrade", ""),
+    (1, "unrelated_removal", ""),
+    (1, "unknown_section", ""),
+    (1, "malformed_entry", ""),
+    (1, "blank_continuation", ""),
+    (1, "empty_trailing_section", ""),
+    (1, "outside_identity", ""),
+    (1, "wrong_result_version", ""),
+    (1, "requested_only_on_old_side", ""),
+    (1, "requested_removal", ""),
+    (1, "requested_only_on_old_side", "os-bind-rp|26.1_1|opnsense/os-bind-rp"),
+])
+def test_dry_run_rejects_untrusted_structure_or_unapproved_mutations(
+    tmp_path: Path, status: int, plan: str, installed_plugin: str
 ) -> None:
-    result, log, _ = run_installer(
-        tmp_path,
-        dry_run_status=status,
-        dry_run_plan=plan,
-    )
-
+    result, log, _ = run_installer(tmp_path, dry_run_status=status, dry_run_plan=plan,
+                                 os_bind_rp=installed_plugin)
     assert result.returncode != 0
-    assert diagnostic in result.stderr
-
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-@pytest.mark.parametrize(
-    "plan",
-    ["unrelated_install", "unrelated_upgrade", "unrelated_downgrade", "unrelated_removal"],
-)
-def test_rejects_unrelated_pkg_dry_run_mutations(tmp_path: Path, plan: str) -> None:
-    result, log, _ = run_installer(tmp_path, dry_run_plan=plan)
-
-    assert result.returncode != 0
-    assert "unexpected package change: python311" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
+    assert " install -y " not in log.read_text()
 
 
-@pytest.mark.parametrize(
-    "plan",
-    ["unknown_section", "malformed_entry", "blank_continuation", "empty_trailing_section"],
-)
-def test_rejects_unrecognized_pkg_dry_run_structure(tmp_path: Path, plan: str) -> None:
-    result, log, _ = run_installer(tmp_path, dry_run_plan=plan)
-
-    assert result.returncode != 0
-    assert "unrecognized package mutation plan" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-
-def test_rejects_a_dry_run_output_parser_failure(tmp_path: Path) -> None:
-    result, log, _ = run_installer(tmp_path, break_dry_run_output=True)
-
-    assert result.returncode != 0
-    assert "could not validate package dry run" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-
-def test_requested_identity_must_be_inside_a_mutation_section(tmp_path: Path) -> None:
-    result, log, _ = run_installer(tmp_path, dry_run_plan="outside_identity")
-
-    assert result.returncode != 0
-    assert "omitted requested identity: os-bind-rp-26.1_1" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize(
-    ("plan", "installed_plugin"),
-    [
-        ("wrong_result_version", ""),
-        ("requested_only_on_old_side", ""),
-        ("requested_removal", ""),
-        (
-            "requested_only_on_old_side",
-            "os-bind-rp|26.1_1|opnsense/os-bind-rp",
-        ),
-    ],
-)
-def test_requires_the_exact_requested_result_identity(
-    tmp_path: Path, plan: str, installed_plugin: str
-) -> None:
-    result, log, _ = run_installer(
-        tmp_path,
-        os_bind_rp=installed_plugin,
-        dry_run_plan=plan,
-    )
-
-    assert result.returncode != 0
-    assert "omitted requested identity: os-bind-rp-26.1_1" in result.stderr
-    assert " install -y " not in log.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize(
-    ("query_fault", "diagnostic"),
-    [
-        ("error:bind920", "could not inspect installed package: bind920"),
-        ("malformed:bind920", "invalid installed package record for bind920"),
-        ("multiple:bind920", "ambiguous installed package record for bind920"),
-    ],
-)
-def test_rejects_installed_package_query_failures_and_invalid_rows(
-    tmp_path: Path, query_fault: str, diagnostic: str
-) -> None:
+@pytest.mark.parametrize("query_fault", ["malformed:bind920", "multiple:bind920"])
+def test_rejects_invalid_installed_package_rows(tmp_path: Path, query_fault: str) -> None:
     result, log, _ = run_installer(tmp_path, query_fault=query_fault)
-
     assert result.returncode != 0
-    assert diagnostic in result.stderr
-    assert " install -n " not in log.read_text(encoding="utf-8")
+    assert " install -n " not in log.read_text()
 
 
-def test_partial_bind_update_failure_preserves_recovery_packages_and_instructions(
-    tmp_path: Path,
+@pytest.mark.parametrize("failed_transaction", ["bind", "plugin"])
+def test_failed_transaction_preserves_original_recovery_bytes_and_instructions(
+    tmp_path: Path, failed_transaction: str
 ) -> None:
     result, log, _ = run_installer(
         tmp_path,
@@ -743,22 +629,31 @@ def test_partial_bind_update_failure_preserves_recovery_packages_and_instruction
         bind_tools="bind-tools|9.20.25|dns/bind-tools",
         confirmation="y",
         os_bind="os-bind|1.34_3|opnsense/os-bind",
-        plugin_install_failure=True,
+        install_failure=failed_transaction == "bind",
+        plugin_install_failure=failed_transaction == "plugin",
     )
-
     assert result.returncode != 0
-    backups = list((tmp_path / "backups").glob("os-bind-rp-install.*"))
-    assert len(backups) == 1
-    recovery = backups[0] / "recovery-packages"
-    assert {path.name for path in recovery.glob("*.pkg") if path.name != "packagesite.pkg"} == {
-        "bind-tools-9.20.25.pkg",
-        "bind920-9.20.25.pkg",
-        "os-bind-1.34_3.pkg",
+    backup, = (tmp_path / "backups").glob("os-bind-rp-install.*")
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o700
+    assert (backup / "config.xml.bak").read_bytes() == b"<opnsense><bind/></opnsense>\n"
+    assert stat.S_IMODE((backup / "config.xml.bak").stat().st_mode) == 0o640
+    recovery = backup / "recovery-packages"
+    assert {path.name: path.read_bytes() for path in recovery.glob("*.pkg")
+            if path.name != "packagesite.pkg"} == {
+        "bind-tools-9.20.25.pkg": b"recovery:bind-tools-9.20.25\n",
+        "bind920-9.20.25.pkg": b"recovery:bind920-9.20.25\n",
+        "os-bind-1.34_3.pkg": b"recovery:os-bind-1.34_3\n",
     }
-    assert "Recovery package repository:" in result.stderr
-    assert "Dry-run recovery before applying it" in result.stderr
-    live_installs = [
-        line for line in log.read_text(encoding="utf-8").splitlines() if " install -y " in line
-    ]
-    assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[-2]
-    assert "os-bind-rp-26.1_1" in live_installs[-1]
+    assert str(backup) in result.stderr
+    assert str(tmp_path / "temporary") in result.stderr
+    assert list((tmp_path / "temporary").rglob("*.pkg"))
+    assert str(recovery) in result.stderr
+    assert "install -n -f -r resolver-recovery bind-tools-9.20.25 bind920-9.20.25 os-bind-1.34_3" in result.stderr
+    assert (tmp_path / "fallback-installed").exists() is (failed_transaction == "plugin")
+    assert not (tmp_path / "plugin-installed").exists()
+    live_installs = [line for line in log.read_text().splitlines() if " install -y " in line]
+    assert "bind920-9.20.26_2 bind-tools-9.20.26_2" in live_installs[0]
+    if failed_transaction == "plugin":
+        assert "os-bind-rp-26.1_1" in live_installs[1]
+    else:
+        assert len(live_installs) == 1

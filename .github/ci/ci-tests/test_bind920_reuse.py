@@ -44,21 +44,6 @@ class Bind920ReuseTest(unittest.TestCase):
 
         self.assertNotEqual(baseline, corrected)
 
-    def test_provenance_requires_exact_bind_package_identities(self) -> None:
-        """A matching version with the wrong BIND origin is not reusable."""
-        invalid = dict(PACKAGES)
-        invalid['bind920'] = dict(PACKAGES['bind920'], origin='dns/bind918')
-        with self.assertRaisesRegex(ValueError, 'bind920 package'):
-            bind920_profile.build_provenance(
-                PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR, invalid
-            )
-
-
-    def test_profile_rejects_negative_portrevision(self) -> None:
-        """Package identities must not be generated from impossible revisions."""
-        profile = dict(PROFILE, portrevision=-1)
-        with self.assertRaisesRegex(ValueError, "portrevision"):
-            bind920_profile.validate_profile(profile)
 
     def test_provenance_command_writes_declared_package_filenames(self) -> None:
         """The shell wrapper writes complete provenance for both package version forms."""

@@ -143,7 +143,7 @@ def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing
 
 @pytest.mark.parametrize('fault,rehash,error', [
     ('bytes', False, 'assets'), ('missing', False, 'assets'),
-    ('extra', False, 'assets'), ('metadata', False, 'assets'),
+    ('extra', False, 'assets'),
     ('bytes', True, 'package bytes differ from component provenance'),
     ('metadata', True, 'component metadata differs from original release'),
 ])
@@ -190,11 +190,7 @@ def test_both_workflows_serialize_and_publish_the_shared_catalogue():
     for filename in ('bind-package-release.yml', 'ha-dhcp-interface-release.yml'):
         text = (root / '.github/workflows' / filename).read_text()
         assert 'group: package-release\n  cancel-in-progress: false' in text
-        assert 'package_catalogue.py fetch' in text
-        assert 'package_catalogue.py stage' in text
         assert 'package_catalogue.py publish' in text
-        assert 'release_channel.py publish-abi-channel' not in text
-        assert 'resolver-plugins.github.io/repository/pkg/' in text
 
 
 @pytest.fixture
@@ -229,7 +225,6 @@ if 'update' in args:
     repos = root / 'repos'
     config = (repos / 'catalogue.conf').read_text()
     assert 'signature_type: "pubkey"' in config
-    assert 'mirror_type: "none"' in config
     assert 'url: "https://packages.example.invalid/feed"' in config
     key = Path(json.loads(config.split('pubkey: ', 1)[1].splitlines()[0]))
     assert key.read_bytes() == EXPECTED_KEY

@@ -163,7 +163,7 @@ def test_review_preflights_assignability_before_publishing_refs(publication_repo
     assert github.published_commits == []
 
 
-def test_bootstrap_review_creates_sync_ref_before_target_and_assigns_pr(
+def test_review_publication_preserves_targets_and_recovers_assigned_prs(
     publication_repository,
 ):
     module = publisher_module()
@@ -189,6 +189,7 @@ def test_bootstrap_review_creates_sync_ref_before_target_and_assigns_pr(
     module.publish_plan(publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github)
     assert github.created_refs == []
     assert github.refs == expected_refs
+
     assert len(github.pulls) == 1
     assert github.pulls[0]['assignees'] == ['reviewer']
 
@@ -199,6 +200,27 @@ def test_bootstrap_review_creates_sync_ref_before_target_and_assigns_pr(
     assert existing_pull['assignees'] == ['reviewer']
     assert github.created_refs == []
     assert github.refs == expected_refs
+
+    repository = publication_repository['repository']
+    git(repository, 'checkout', 'upstream-26.7')
+    upstream = commit(repository, {'dns/bind/bind.conf': 'bind-v3\n'}, 'upstream update')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', upstream)
+    sync = f'sync/bind/26.7/{upstream[:12]}'
+    git(repository, 'checkout', '-b', sync, publication_repository['sync_commit'])
+    updated_sync = commit(repository, {
+        '.resolver-plugins/upstream.json': metadata('26.7', upstream),
+        'dns/bind/bind.conf': 'bind-v3\n',
+    }, 'review updated upstream')
+    update = dict(plan, action='update-review', source_release=plan['target_release'],
+                  upstream_commit=upstream, sync_branch=sync)
+    github.published_commits.clear()
+    module.publish_plan(repository, update, 'owner/plugins', 'reviewer', github)
+    assert github.created_refs == [sync]
+    assert github.published_commits == [updated_sync]
+    assert github.refs == dict(expected_refs, **{sync: updated_sync})
+    assert len(github.pulls) == 2
+    assert (github.pulls[-1]['head'], github.pulls[-1]['base'], github.pulls[-1]['assignees']) == (
+        sync, plan['target_release'], ['reviewer'])
 
 
 def test_retry_refuses_to_replace_a_different_existing_ref(publication_repository):
@@ -237,26 +259,6 @@ def test_publish_preflights_generated_tools_profile_before_remote_writes(
     assert github.pulls == []
 
 
-def test_recovery_creates_missing_pr_before_planning_again(publication_repository):
-    module = publisher_module()
-    repository = publication_repository['repository']
-    plan = publication_repository['plan']
-    github = remote_github(repository, {
-        plan['sync_branch']: publication_repository['sync_commit'],
-        plan['target_release']: publication_repository['target_commit'],
-    })
-
-    handled = module.recover_pending_reviews(
-        repository, 'owner/plugins', 'reviewer', github
-    )
-
-    assert handled is True
-    assert len(github.pulls) == 1
-    assert github.pulls[0]['head'] == plan['sync_branch']
-    assert github.pulls[0]['base'] == plan['target_release']
-    assert github.pulls[0]['assignees'] == ['reviewer']
-
-
 def test_recovery_rejects_existing_refs_with_malformed_tools_metadata(
     publication_repository,
 ):
@@ -278,30 +280,26 @@ def test_recovery_rejects_existing_refs_with_malformed_tools_metadata(
     assert github.created_refs == []
 
 
-def test_recovery_completes_sync_only_bootstrap_after_core_changes(
-    publication_repository,
+@pytest.mark.parametrize('target_present', [False, True])
+def test_recovery_uses_original_refs_and_assigns_missing_pr_after_core_changes(
+    publication_repository, target_present,
 ):
     module = publisher_module()
     repository = publication_repository['repository']
     plan = publication_repository['plan']
     original_target = publication_repository['target_commit']
     original_sync = publication_repository['sync_commit']
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        original_sync,
-    )
     git(repository, 'branch', '-D', plan['sync_branch'])
     git(repository, 'branch', '-D', plan['target_release'])
 
-    retry_target, retry_sync = bootstrap_pair(repository, plan, {
+    bootstrap_pair(repository, plan, {
         '.resolver-plugins/upstream.json': metadata(plan['series'], plan['upstream_commit'], 'f' * 40)
     }, 'retry')
-    assert retry_target != original_target
-    assert retry_sync != original_sync
 
-    github = FakeGitHub(refs={plan['sync_branch']: original_sync})
+    refs = {plan['sync_branch']: original_sync}
+    if target_present:
+        refs[plan['target_release']] = original_target
+    github = remote_github(repository, refs)
 
     handled = module.recover_pending_reviews(
         repository, 'owner/plugins', 'reviewer', github
@@ -310,7 +308,7 @@ def test_recovery_completes_sync_only_bootstrap_after_core_changes(
     assert handled is True
     assert github.refs[plan['sync_branch']] == original_sync
     assert github.refs[plan['target_release']] == original_target
-    assert github.created_refs == [plan['target_release']]
+    assert github.created_refs == ([] if target_present else [plan['target_release']])
     assert github.published_commits == []
     assert len(github.pulls) == 1
     assert github.pulls[0]['head'] == plan['sync_branch']

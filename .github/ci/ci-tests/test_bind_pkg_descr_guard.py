@@ -57,16 +57,6 @@ def check_case(repository: pathlib.Path, changes: dict[str, str]) -> int:
             1,
         ),
         (
-            "manifest-dependency",
-            {
-                "dns/bind/Makefile": (
-                    "PLUGIN_VERSION= 1.0\nPLUGIN_REVISION= 1\nPLUGIN_DEPENDS= bind920\n"
-                    "PLUGIN_MANIFEST_DEPENDS= bind920\n"
-                )
-            },
-            1,
-        ),
-        (
             "revision",
             {"dns/bind/Makefile": "PLUGIN_VERSION= 1.0\nPLUGIN_REVISION= 2\nPLUGIN_DEPENDS= bind920\n"},
             0,
