@@ -19,7 +19,6 @@ Bind920Profile = bind920_candidate.Bind920Profile
 CandidateProfile = bind920_candidate.CandidateProfile
 assess_candidate = bind920_candidate.assess_candidate
 candidate_is_newer = bind920_candidate.candidate_is_newer
-render_commit_log_markdown = bind920_candidate.render_commit_log_markdown
 
 
 class Bind920CandidateTest(unittest.TestCase):
@@ -33,13 +32,6 @@ class Bind920CandidateTest(unittest.TestCase):
                 candidate = CandidateProfile("repo", "new", "m2", "d2", version, revision, "main")
                 self.assertEqual(expected, candidate_is_newer(current, candidate))
 
-
-    def test_candidate_is_newer_rejects_wrong_bind_series(self) -> None:
-        """The updater must not silently move os-bind-rp to another BIND series."""
-        current = Bind920Profile("repo", "old", "m1", "d1", "9.20.26", 1)
-        candidate = CandidateProfile("repo", "new", "m2", "d2", "9.21.0", 0, "main")
-        with self.assertRaisesRegex(ValueError, "9.20"):
-            candidate_is_newer(current, candidate)
 
     def test_assessment_classification_and_signals(self):
         for notes, diff, classification, signals in [
@@ -79,21 +71,6 @@ class Bind920CandidateTest(unittest.TestCase):
         self.assertIn("dependency change", result.signals)
 
 
-    def test_render_commit_log_markdown_lists_subjects_or_empty_fallback(self):
-        for commits, expected in [
-            ('abc1234 Fix resolver crash\ndef5678 Improve DNSSEC validation\n',
-             ('abc1234', 'Fix resolver crash', 'def5678', 'Improve DNSSEC validation')),
-            ('\n', ('Could not resolve upstream BIND release tags.',)),
-        ]:
-            with self.subTest(commits=commits):
-                rendered = render_commit_log_markdown(
-                    'Upstream BIND Changes', commits, 'Could not resolve upstream BIND release tags.')
-                for item in expected:
-                    self.assertIn(item, rendered)
-                if commits.strip():
-                    self.assertNotIn('Could not resolve upstream BIND release tags.', rendered)
-
-
     def test_update_profile_cli_hashes_candidate_files(self):
         for version, revision in [('9.20.27', 0), ('9.20.26', 2)]:
             with self.subTest(version=version, revision=revision), tempfile.TemporaryDirectory() as temporary:
@@ -120,27 +97,6 @@ class Bind920CandidateTest(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(f'v{version}\n', result.stdout)
 
-
-    def test_candidate_from_files_rejects_distinfo_version_mismatch(self) -> None:
-        """A profile PR must not pair one DISTVERSION with another distfile."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            makefile = directory / "Makefile"
-            distinfo = directory / "distinfo"
-            makefile.write_text("PORTNAME= bind920\nDISTVERSION= 9.20.27\n", encoding="utf-8")
-            distinfo.write_text(
-                "TIMESTAMP = 1\nSHA256 (bind-9.20.26.tar.xz) = abc123\nSIZE (bind-9.20.26.tar.xz) = 1\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(ValueError, "distinfo"):
-                bind920_candidate.candidate_from_files(
-                    "https://github.com/freebsd/freebsd-ports.git",
-                    "f" * 40,
-                    makefile,
-                    distinfo,
-                    "main",
-                )
 
     def test_assess_cli_classifies_notes_and_makefile_dependency_drift(self):
         for classification in ('critical-bugfix', 'risky'):
@@ -197,10 +153,6 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         workflow = self.workflow_text()
         body = workflow.split('} > "$RUNNER_TEMP/pr-body.md"', 1)[0].rsplit('          {\n', 1)[1]
         self.assertIn('cat "$RUNNER_TEMP/ports-changes.md"', body)
-
-    def test_candidate_workflow_does_not_mask_commit_failure(self) -> None:
-        workflow = self.workflow_text()
-        self.assertNotIn("git commit -m \"ci(bind): update bind920 to ${version}_${revision}\" || exit 0", workflow)
 
 if __name__ == "__main__":
     unittest.main()

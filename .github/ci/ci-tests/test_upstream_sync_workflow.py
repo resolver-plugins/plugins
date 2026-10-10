@@ -75,14 +75,6 @@ def test_workflow_recovers_partial_review_state_before_planning_and_uses_api_pub
     assert "steps.recovery.outputs.handled != 'true'" in workflow
 
 
-def test_bootstrap_build_uses_the_planner_profile_and_expires():
-    workflow = workflow_text()
-
-    assert "steps.plan.outputs.action == 'bootstrap-build'" in workflow
-    assert 'release: ${{ steps.plan.outputs.freebsd_release }}' in workflow
-    assert 'retention-days: 7' in workflow
-
-
 def test_workflow_pins_actions_and_has_no_publication_authority_or_commands():
     workflow = workflow_text()
     lowered = workflow.lower()

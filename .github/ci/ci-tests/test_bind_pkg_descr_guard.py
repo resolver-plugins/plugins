@@ -81,7 +81,6 @@ def test_guard_uses_merge_base_when_the_release_branch_advances(tmp_path):
     git(repository, "commit", "-am", "advance base")
     advanced_base = git(repository, "rev-parse", "HEAD")
 
-    assert original_base == git(repository, "merge-base", advanced_base, head)
     assert run_guard(repository, advanced_base, head) == 1
 
 

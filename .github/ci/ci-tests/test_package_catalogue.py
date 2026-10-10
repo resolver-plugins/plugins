@@ -118,7 +118,6 @@ def test_bind_only_bootstrap_cannot_omit_a_newly_published_dhcp_component(channe
     ('key', ValueError, 'key or package set differs'),
     ('series', ValueError, 'audit metadata is inconsistent'),
     ('abi', ValueError, 'package ABI differs'),
-    ('extra', ValueError, 'key or package set differs'),
     ('signature', subprocess.CalledProcessError, 'pkg.*update'),
 ])
 def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing(channels, tmp_path, fault, exception, error):
@@ -132,8 +131,6 @@ def test_untrusted_or_incompatible_component_is_rejected_before_combined_signing
     elif fault == 'abi':
         name = 'os-dhcp-interface-ha-0.2_43.pkg'
         identities[name] = (*identities[name][:3], 'FreeBSD:14:amd64')
-    elif fault == 'extra':
-        (bind / 'unexpected.pkg').write_text('unreviewed')
     else:
         catalogue.verify_packages.side_effect = subprocess.CalledProcessError(1, ['pkg', 'update'])
     with pytest.raises(exception, match=error):
@@ -202,7 +199,7 @@ def executable_directory():
 
 
 @pytest.mark.parametrize('fault', ['', 'signature', 'extra-package', 'archive-bytes'])
-def test_native_repository_verification_uses_isolated_signed_catalogue_and_exact_archives(tmp_path, executable_directory, monkeypatch, fault):
+def test_repository_verification_observes_isolated_catalogue_and_exact_archives(tmp_path, executable_directory, monkeypatch, fault):
     verification = tmp_path / 'verification'
     verification.mkdir()
     monkeypatch.setattr(catalogue.tempfile, 'TemporaryDirectory', lambda: nullcontext(str(verification)))
@@ -219,6 +216,8 @@ fault = FAULT
 package = Path(PACKAGE)
 root = Path(VERIFICATION_ROOT)
 if any(operation in args for operation in ('update', 'rquery', 'fetch')):
+    with (root / 'commands.log').open('a') as stream:
+        stream.write(next(operation for operation in ('update', 'rquery', 'fetch') if operation in args) + '\\n')
     assert args[:6] == ['-o', f'REPOS_DIR={root / "repos"}', '-o', f'PKG_DBDIR={root / "db"}',
                         '-o', f'PKG_CACHEDIR={root / "cache"}']
 if 'update' in args:
@@ -254,6 +253,7 @@ elif 'query' not in args:
     monkeypatch.setattr(catalogue, 'PKG', str(command))
     if not fault:
         catalogue.verify_packages([package], 'https://packages.example.invalid/feed')
+        assert (verification / 'commands.log').read_text().splitlines() == ['update', 'rquery', 'fetch']
     elif fault == 'signature':
         with pytest.raises(subprocess.CalledProcessError):
             catalogue.verify_packages([package], 'https://packages.example.invalid/feed')

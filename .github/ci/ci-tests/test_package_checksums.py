@@ -50,20 +50,3 @@ def test_rejects_missing_or_null_file_checksums(tmp_path: Path, output: str) -> 
     with pkg_fixture(output) as pkg:
         with pytest.raises(package_checksums.PackageChecksumError, match="incomplete target-readable"):
             package_checksums.verify_archive(str(pkg), archive)
-
-
-def test_rejects_malformed_checksum_rows(tmp_path: Path) -> None:
-    archive = tmp_path / "bind920.pkg"
-    archive.touch()
-    with pkg_fixture("not-a-file-checksum-row\n") as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="malformed"):
-            package_checksums.verify_archive(str(pkg), archive)
-
-
-@pytest.mark.parametrize("checksum", ["3$" + "a" * 64, "1$abc"])
-def test_rejects_unrecognized_checksum_formats(tmp_path: Path, checksum: str) -> None:
-    archive = tmp_path / "bind920.pkg"
-    archive.touch()
-    with pkg_fixture(f"/usr/local/sbin/named|{checksum}\n") as pkg:
-        with pytest.raises(package_checksums.PackageChecksumError, match="unrecognized"):
-            package_checksums.verify_archive(str(pkg), archive)

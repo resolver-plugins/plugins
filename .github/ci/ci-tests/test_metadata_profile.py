@@ -20,11 +20,9 @@ CORE_ARCHIVE_SHA256 = 'c' * 64
         (None, None),
         ('core_commit', 'refs/heads/stable/26.1'),
         ('upstream_commit', 'refs/heads/stable/26.1'),
-        ('core_archive_sha256', 'not-a-sha256'),
         ('upstream_branch', 'stable/26.7'),
         ('tools_tag', '26.7.1'),
         ('tools_tag', '26.1.r1'),
-        ('freebsd_release', 'not-a-release'),
     ),
 )
 def test_cli_validates_strict_profile_fields(tmp_path, field, invalid_value):

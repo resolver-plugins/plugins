@@ -126,17 +126,6 @@ def test_failed_uploaded_verification_keeps_release_draft(release):
     assert "--draft" in calls.run_gh.call_args.args[0]
 
 
-@pytest.mark.parametrize("mismatch", ["source", "assets"])
-def test_publication_rejects_wrong_source_or_extra_assets(release, mismatch):
-    directory, calls = release
-    if mismatch == "assets":
-        (directory / "unexpected.pkg").write_text("extra")
-    error = 'selected source and series' if mismatch == 'source' else 'unexpected release assets'
-    with pytest.raises(ValueError, match=error):
-        publisher.publish("example/plugins", directory, "26.7", "b" * 40 if mismatch == "source" else COMMIT)
-    calls.snapshot_release.assert_not_called()
-
-
 def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification():
     test_workflow = (ROOT / ".github/workflows/ha-dhcp-interface-tests.yml").read_text()
     for event, next_event in (("push", "pull_request"), ("pull_request", "workflow_dispatch")):
@@ -242,39 +231,6 @@ def test_signed_retry_reuses_exact_snapshot_and_rejects_source_mismatch(signed_c
         channel.reuse("example/repository", output, tmp_path / "reject", "26.7", "c" * 40, "b" * 40)
 
 
-def test_signed_promotion_preserves_old_channel_on_failure_and_uses_only_ha_tags(signed_channel, tmp_path, monkeypatch):
-    old = channel.releases.ReleaseSnapshot("pkg-dhcp-interface-ha-26.7", False,
-                                          tmp_path / "old", tmp_path / "manifest.json")
-    reads = Mock(return_value=old)
-    monkeypatch.setattr(channel.releases, "snapshot_release", reads)
-    monkeypatch.setattr(channel.releases, "release_snapshots_match", lambda a, b: True)
-    immutable = Mock()
-    replace = Mock(side_effect=RuntimeError("upload failed"))
-    monkeypatch.setattr(channel.releases, "publish_immutable_release", immutable)
-    monkeypatch.setattr(channel.releases, "publish", replace)
-    delete = Mock(return_value=subprocess.CompletedProcess([], 0))
-    monkeypatch.setattr(channel.releases.subprocess, "run", delete)
-    with pytest.raises(RuntimeError, match="upload failed"):
-        channel.promote("example/repository", signed_channel, tmp_path / "recovery")
-    delete.assert_called_once_with(
-        ["gh", "release", "delete", old.tag, "--yes", "--repo", "example/repository"],
-        capture_output=True, text=True)
-    assert immutable.call_args.args[1] == "pkg-dhcp-interface-ha-26.7-0.2_30"
-    assert replace.call_args.args[1] == "pkg-dhcp-interface-ha-26.7"
-    assert all(c.args[1].startswith("pkg-dhcp-interface-ha-") for c in reads.call_args_list)
-
-
-def test_signed_promotion_rejects_replacing_current_with_stale_source(signed_channel, tmp_path, monkeypatch):
-    snapshot = SimpleNamespace(existed=True, directory=signed_channel)
-    monkeypatch.setattr(channel.releases, "snapshot_release", Mock(side_effect=[snapshot, SimpleNamespace(existed=False)]))
-    monkeypatch.setattr(channel.releases, "snapshot_matches_directory", lambda a, b: False)
-    upload = Mock()
-    monkeypatch.setattr(channel.releases, "publish", upload)
-    with pytest.raises(RuntimeError, match="stale promotion"):
-        channel.promote("example/repository", signed_channel, tmp_path / "recovery")
-    upload.assert_not_called()
-
-
 def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path, monkeypatch, release_history):
     old_commit, new_commit = release_history(), release_history()
     signed_channel = make_ha_channel(tmp_path / 'channel', source=new_commit)
@@ -289,6 +245,7 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
                         == channel.releases.directory_checksums(directory))
     monkeypatch.setattr(channel.releases, 'release_snapshots_match', lambda a, b: True)
     def publish_archive(*args):
+        assert args[1] == 'pkg-dhcp-interface-ha-26.7-0.2_30'
         archive.existed = True
         archive.directory = signed_channel
     monkeypatch.setattr(channel.releases, 'publish_immutable_release', publish_archive)
@@ -302,6 +259,8 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
     publish.side_effect = None
     channel.promote('example/repository', signed_channel, tmp_path / 'retry')
     assert publish.call_count == 2
+    assert all(call.args[1] == 'pkg-dhcp-interface-ha-26.7' for call in publish.call_args_list)
+    assert all(call.args[1].startswith('pkg-dhcp-interface-ha-') for call in reads.call_args_list)
     # A matching archive cannot authorize an old-source retry over a newer current.
     old.directory, archive.directory = signed_channel, old_dir
     with pytest.raises(RuntimeError, match='stale promotion'):

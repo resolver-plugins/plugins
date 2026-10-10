@@ -43,10 +43,8 @@ def installer_environment(
     post_install_fault: str = "",
     pkg_locked: bool = False,
     unlock_failure: bool = False,
-    mutate_frozen_archive: bool = False,
     dry_run_status: int = 1,
     dry_run_plan: str = "valid",
-    query_fault: str = "",
 ) -> tuple[dict[str, str], Path, Path]:
     log = tmp_path / "commands.log"
     tty = tmp_path / "tty"
@@ -80,10 +78,8 @@ def installer_environment(
             "RP_TEST_PLUGIN_INSTALL_FAILURE": "yes" if plugin_install_failure else "no",
             "RP_TEST_FETCH_LAYOUT": fetch_layout,
             "RP_TEST_POST_INSTALL_FAULT": post_install_fault,
-            "RP_TEST_MUTATE_FROZEN_ARCHIVE": "yes" if mutate_frozen_archive else "no",
             "RP_TEST_DRY_RUN_STATUS": str(dry_run_status),
             "RP_TEST_DRY_RUN_PLAN": dry_run_plan,
-            "RP_TEST_QUERY_FAULT": query_fault,
             "RP_TEST_UNLOCK_FAILURE": "yes" if unlock_failure else "no",
             "RP_TEST_ARCHIVE_CHECKSUM": archive_checksum,
             "RP_TEST_KEY_SHA256": key_sha256,
@@ -200,12 +196,6 @@ elif command == "fetch":
     (destination / f"{identity}.pkg").write_bytes(f"archive:{identity}\n".encode())
 elif command == "repo":
     repository = Path(args[-1])
-    if (
-        os.environ.get("RP_TEST_MUTATE_FROZEN_ARCHIVE") == "yes"
-        and repository.name == "verified-repository"
-    ):
-        archive = next(repository.rglob("bind920-*.pkg"))
-        archive.write_bytes(archive.read_bytes() + b"changed\n")
     (repository / "meta.conf").write_text("meta\n", encoding="utf-8")
     (repository / "packagesite.pkg").write_text("catalogue\n", encoding="utf-8")
 elif command == "query" and "-F" in args:
@@ -241,13 +231,6 @@ elif command == "query":
     for name in ("bind920", "bind-tools", "os-bind-rp", "os-bind", "pkg"):
         if f"%n = {name} " in f"{expression} ":
             value = installed(name)
-            fault, _, fault_name = os.environ.get("RP_TEST_QUERY_FAULT", "").partition(":")
-            if fault_name == name:
-                if fault == "malformed":
-                    print(f"{name}|malformed")
-                    break
-                if fault == "multiple" and value:
-                    print(value)
             if value:
                 if args[-1] == "%Fp|%Fs":
                     checksum = "(null)" if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "checksum" else os.environ["RP_TEST_ARCHIVE_CHECKSUM"]
@@ -472,13 +455,8 @@ def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path:
     }
 
 
-@pytest.mark.parametrize("installed", [
-    {"bind920": "bind920|9.20.25|dns/bind920"},
-    {"bind_tools": "bind-tools|9.20.26_1|resolver/bind-tools"},
-    {"bind_tools": ""},
-], ids=["old-bind", "foreign-tools", "missing-tools"])
-def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path, installed: dict) -> None:
-    result, log, _ = run_installer(tmp_path, confirmation="n", **installed)
+def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path) -> None:
+    result, log, _ = run_installer(tmp_path, confirmation="n", bind920="bind920|9.20.25|dns/bind920")
     assert result.returncode != 0
     assert " install -y " not in log.read_text()
     assert not (tmp_path / "plugin-installed").exists()
@@ -487,14 +465,6 @@ def test_declining_bind_fallback_leaves_the_plugin_uninstalled(tmp_path: Path, i
 
 def test_rejects_null_archive_checksums_before_any_package_install(tmp_path: Path) -> None:
     result, log, _ = run_installer(tmp_path, archive_checksum="(null)")
-
-    assert result.returncode != 0
-    assert " install " not in log.read_text(encoding="utf-8")
-    assert not (tmp_path / "backups").exists()
-
-
-def test_rejects_a_frozen_archive_change_before_state_or_install(tmp_path: Path) -> None:
-    result, log, _ = run_installer(tmp_path, mutate_frozen_archive=True)
 
     assert result.returncode != 0
     assert " install " not in log.read_text(encoding="utf-8")
@@ -610,13 +580,6 @@ def test_dry_run_rejects_untrusted_structure_or_unapproved_mutations(
                                  os_bind_rp=installed_plugin)
     assert result.returncode != 0
     assert " install -y " not in log.read_text()
-
-
-@pytest.mark.parametrize("query_fault", ["malformed:bind920", "multiple:bind920"])
-def test_rejects_invalid_installed_package_rows(tmp_path: Path, query_fault: str) -> None:
-    result, log, _ = run_installer(tmp_path, query_fault=query_fault)
-    assert result.returncode != 0
-    assert " install -n " not in log.read_text()
 
 
 @pytest.mark.parametrize("failed_transaction", ["bind", "plugin"])

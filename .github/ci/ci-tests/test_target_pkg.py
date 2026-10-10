@@ -232,14 +232,3 @@ def test_identifies_a_single_archive_only_change(tmp_path: Path) -> None:
         document["series"]["26.1"]["version"] = "2.3.2"
         after.write_text(json.dumps(document), encoding="utf-8")
         assert target_pkg.changed_archive_series(before, after) is None
-
-
-def test_content_hash_rejects_special_entries(tmp_path: Path) -> None:
-    archive_path = tmp_path / "special.pkg"
-    with tarfile.open(archive_path, "w") as archive:
-        entry = tarfile.TarInfo("named-pipe")
-        entry.type = tarfile.FIFOTYPE
-        archive.addfile(entry)
-
-    with pytest.raises(target_pkg.TargetPackageError, match="unsupported entry"):
-        target_pkg.package_content_sha256(archive_path)

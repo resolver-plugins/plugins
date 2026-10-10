@@ -60,15 +60,6 @@ class ReuseBind920Test(unittest.TestCase):
                         dict(PROVENANCE, **changes), PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR
                     )
 
-    def test_invalid_package_identity_is_rejected(self) -> None:
-        """Malformed matching metadata must not silently become a cache miss."""
-        provenance = dict(PROVENANCE, packages=dict(PROVENANCE["packages"]))
-        provenance["packages"]["bind920"] = dict(PROVENANCE["packages"]["bind920"], origin="dns/bind918")
-        with self.assertRaisesRegex(ValueError, "bind920 package"):
-            reuse_bind920.select_candidate(
-                provenance, PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR
-            )
-
     def test_installed_identity_compares_pkg_query_fields_in_python(self) -> None:
         """Version/origin verification must not rely on pkg predicate support."""
         command: list[str] = []

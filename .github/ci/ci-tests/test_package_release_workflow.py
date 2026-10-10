@@ -1,4 +1,4 @@
-from common_imports import *
+from git_fixtures import *
 
 from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs
 
@@ -13,17 +13,30 @@ def workflow_text() -> str:
     return WORKFLOW.read_text(encoding='utf-8')
 
 
-def test_workflow_selects_an_immutable_release_source():
-    workflow = workflow_text()
-    assert 'workflow_dispatch:' in workflow
-    assert 'refs/heads/release/bind-rp/$series' in workflow
-    assert 'refs/pull/$INPUT_PULL_NUMBER/head' in workflow
-    assert 'if [[ "$pr_base" == master ]]' in workflow
-    assert 'elif [[ "$pr_base" == "release/bind-rp/$series" ]]' in workflow
-    assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in workflow
+def run_selection(tmp_path, **inputs):
+    """Execute the real selector; only the remote GitHub read is simulated."""
+    gh = ('gh() {\ncase "$*" in\n'
+          '  *git/matching-refs/heads/release/bind-rp/*) printf "%s\\n" '
+          'refs/heads/release/bind-rp/26.7 refs/heads/release/bind-rp/26.10 '
+          'refs/heads/release/bind-rp/26.9 refs/heads/release/bind-rp/not-a-series;;\n'
+          '  *pulls/51*) printf "%s\\n" "$FIXTURE_PR_BASE";;\n'
+          '  *) return 64;;\nesac\n}\n')
+    output = tmp_path / 'selection'
+    environment = dict(os.environ,
+                       GITHUB_REPOSITORY='example/plugins', GITHUB_OUTPUT=str(output),
+                       EVENT_NAME='push', GITHUB_REF='refs/heads/master', GITHUB_SHA='a' * 40,
+                       BEFORE_SHA='', GITHUB_WORKFLOW_SHA='b' * 40, PR_MERGE_COMMIT='c' * 40,
+                       PR_BASE_REF='release/bind-rp/26.7', PR_MERGED='true', INPUT_MODE='production',
+                       INPUT_SERIES='26.7', INPUT_PULL_NUMBER='', FIXTURE_PR_BASE='master')
+    environment.update(inputs)
+    script = textwrap.dedent(job_text(workflow_text(), 'select').split('        run: |\n', 1)[1])
+    result = subprocess.run(['bash', '-c', gh + script], cwd=tmp_path, env=environment,
+                            text=True, capture_output=True)
+    selected = dict(line.split('=', 1) for line in output.read_text().splitlines()) if output.exists() else {}
+    return result, selected
 
 
-def test_merged_release_source_pr_publishes_its_exact_merge_commit():
+def test_merged_release_source_pr_publishes_its_exact_merge_commit(tmp_path):
     workflow = workflow_text()
     trigger = workflow.split('  pull_request_target:', 1)[1].split('  workflow_dispatch:', 1)[0]
     select = job_text(workflow, 'select')
@@ -32,18 +45,40 @@ def test_merged_release_source_pr_publishes_its_exact_merge_commit():
     for path in ("'.resolver-plugins/**'", "'dns/bind/**'", "'Mk/**'"):
         assert path in trigger
     assert "if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true" in select
-    assert 'source_ref="$PR_MERGE_COMMIT"' in select
-    assert 'control_ref="$GITHUB_WORKFLOW_SHA"' in select
+    assert 'PR_MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha }}' in select
+    assert 'GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}' in select
     assert 'github.event.pull_request.head.sha' not in workflow
+    result, selected = run_selection(tmp_path, EVENT_NAME='pull_request_target')
+    assert result.returncode == 0, result.stderr
+    assert selected == dict(mode='production', series='26.7', source_ref='c' * 40,
+                            control_ref='b' * 40, prerelease_tag='', pull_number='')
 
 
-def test_package_affecting_master_pushes_publish_the_newest_release_series():
+def test_package_affecting_master_pushes_publish_the_newest_release_series(tmp_path):
     workflow = workflow_text()
 
     assert 'push:\n    branches: [master]' in workflow
-    select = job_text(workflow, 'select')
-    assert 'git/matching-refs/heads/release/bind-rp/' in select
-    assert 'sort -V' in select
+    result, selected = run_selection(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert selected == dict(mode='production', series='26.10', source_ref='refs/heads/release/bind-rp/26.10',
+                            control_ref='a' * 40, prerelease_tag='', pull_number='')
+
+
+@pytest.mark.parametrize('base,source', [('master', 'refs/heads/release/bind-rp/26.7'),
+                                       ('release/bind-rp/26.7', 'refs/pull/51/head')])
+def test_development_selection_uses_the_pr_base_and_preserves_its_tag(tmp_path, base, source):
+    result, selected = run_selection(tmp_path, EVENT_NAME='workflow_dispatch', INPUT_MODE='development',
+                                     INPUT_PULL_NUMBER='51', FIXTURE_PR_BASE=base)
+    assert result.returncode == 0, result.stderr
+    assert selected == dict(mode='development', series='26.7', source_ref=source,
+                            control_ref='a' * 40, prerelease_tag='pr-51-26.7', pull_number='51')
+
+
+def test_production_selection_refuses_a_release_branch_control_plane(tmp_path):
+    result, selected = run_selection(tmp_path, EVENT_NAME='workflow_dispatch',
+                                     GITHUB_REF='refs/heads/release/bind-rp/26.7')
+    assert result.returncode != 0
+    assert selected == {}
 
 
 @pytest.mark.parametrize('paths,expected', [
@@ -95,37 +130,37 @@ def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
     assert result.returncode == 0, result.stderr
 
 
-def test_merging_a_repack_recovery_rebuilds_its_exact_series():
-    select = workflow_text().split('  select:', 1)[1].split('  profile:', 1)[0]
+def test_merging_a_repack_recovery_rebuilds_its_exact_series(tmp_path):
+    repository = init_repository(tmp_path)
+    target = '.resolver-plugins/target-pkg.json'
+    profile = json.loads((REPOSITORY_ROOT / target).read_text())
+    before = commit(repository, {target: json.dumps(profile)}, 'original archive')
+    profile['series']['26.1']['sha256'] = 'f' * 64
+    after = commit(repository, {target: json.dumps(profile)}, 'repacked 26.1 archive')
+    helper = '.github/ci/shared/target_pkg.py'
+    (repository / helper).parent.mkdir(parents=True)
+    shutil.copyfile(REPOSITORY_ROOT / helper, repository / helper)
+    result, selected = run_selection(tmp_path, BEFORE_SHA=before, GITHUB_SHA=after)
+    assert result.returncode == 0, result.stderr
+    assert selected == dict(mode='production', series='26.1', source_ref='refs/heads/release/bind-rp/26.1',
+                            control_ref=after, prerelease_tag='', pull_number='')
 
-    assert '[ "$changed" = .resolver-plugins/target-pkg.json ]' in select
-    assert 'target_pkg.py changed-series "$before" "$after"' in select
-    assert 'series=$recovered_series' in select
 
-
-def test_production_runs_only_from_the_master_control_plane():
+def test_build_jobs_checkout_the_selected_control_plane_and_release_inputs():
     workflow = workflow_text()
-    select = job_text(workflow, 'select')
+    assert '  workflow_dispatch:\n' in workflow.split('\njobs:', 1)[0]
     profile = job_text(workflow, 'profile')
     test = job_text(workflow, 'test')
     bind = job_text(workflow, 'bind')
     build = job_text(workflow, 'build')
-    assert '[[ "$GITHUB_REF" == refs/heads/master ]]' in select
-    assert 'control_ref=$GITHUB_SHA' in select
     assert 'ref: ${{ needs.select.outputs.control_ref }}' in profile
     for job in (test, bind, build):
         assert 'ref: ${{ needs.profile.outputs.control_commit }}' in job
-
-
-def test_workflow_selects_the_profile_freebsd_release():
-    workflow = workflow_text()
-    assert 'release: ${{ needs.profile.outputs.freebsd_release }}' in workflow
-
-
-def test_workflow_builds_the_plugin_with_the_selected_distribution_channel():
-    workflow = workflow_text()
-    assert 'RP_BIND920_CHANNEL_URL: https://github.com/resolver-plugins/repository/releases/download/pkg-${{ needs.select.outputs.series }}' in workflow
-    assert 'needs: [select, profile, test, bind]' in workflow
+    assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in build
+    for name in ('bind', 'build', 'sign', 'verify-development', 'verify', 'verify-published'):
+        assert 'release: ${{ needs.profile.outputs.freebsd_release }}' in job_text(workflow, name)
+    assert 'RP_BIND920_CHANNEL_URL: https://github.com/resolver-plugins/repository/releases/download/pkg-${{ needs.select.outputs.series }}' in bind
+    assert 'needs: [select, profile, test, bind]' in build
 
 
 def test_failed_production_bind_job_can_only_propose_a_content_identical_pkg_repack():

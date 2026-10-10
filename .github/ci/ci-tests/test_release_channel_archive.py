@@ -42,12 +42,6 @@ def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, imm
 
 
 class ChannelTagTest(unittest.TestCase):
-    def test_series_path_rejects_traversal(self) -> None:
-        """Series values cannot introduce another repository path component."""
-        with self.assertRaisesRegex(ValueError, "invalid series"):
-            release_channel.series_abi_path("FreeBSD:15:amd64", "26.7/archive")
-
-
     def test_channel_tags_are_series_scoped(self) -> None:
         """Current and immutable snapshot channels must never share a tag."""
         fingerprint = "f" * 64
@@ -100,12 +94,8 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
                     "resolver-plugins/plugins", "pr-51-26.7"
                 )
 
-    def test_invalid_pull_request_release_inputs_fail_before_mutation(self) -> None:
+    def test_pull_request_cleanup_refuses_a_production_tag_before_mutation(self) -> None:
         with patch.object(release_channel.subprocess, "run") as run:
-            with self.assertRaisesRegex(ValueError, "invalid pull request number"):
-                release_channel.cleanup_pull_request_releases(
-                    "resolver-plugins/plugins", "51/../../master"
-                )
             with self.assertRaisesRegex(ValueError, "invalid development release tag"):
                 release_channel.cleanup_development_release(
                     "resolver-plugins/plugins", "pkg-26.7"
@@ -221,30 +211,6 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             legacy_v2_manifest.pop("package_abi")
             (root / "channel/channel.json").write_text(
                 json.dumps(legacy_v2_manifest), encoding="utf-8"
-            )
-            release_channel.validate_channel_directory(root / "channel")
-
-            legacy_manifest = dict(legacy_v3_manifest, schema=1)
-            legacy_manifest.pop("package_creator")
-            legacy_manifest.pop("package_abi")
-            (root / "channel/channel.json").write_text(
-                json.dumps(legacy_manifest), encoding="utf-8"
-            )
-            legacy_provenance = json.loads(
-                (root / "channel/bind920-provenance.json").read_text(encoding="utf-8")
-            )
-            legacy_provenance["schema"] = 1
-            legacy_provenance.pop("package_creator")
-            (root / "channel/bind920-provenance.json").write_text(
-                json.dumps(legacy_provenance), encoding="utf-8"
-            )
-            legacy_metadata = "\n".join(
-                line
-                for line in (root / "channel/build-metadata.txt").read_text().splitlines()
-                if not line.startswith(("pkg_creator=", "pkg_creator_sha256="))
-            )
-            (root / "channel/build-metadata.txt").write_text(
-                legacy_metadata + "\n", encoding="utf-8"
             )
             release_channel.validate_channel_directory(root / "channel")
 

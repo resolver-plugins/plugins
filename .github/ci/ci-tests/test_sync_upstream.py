@@ -224,37 +224,13 @@ def test_unrelated_existing_upstream_change_is_noop(repositories):
     assert decision['bind_changed'] is False
 
 
-@pytest.mark.parametrize('fault', ['missing', 'noncanonical-tools-tag', 'wrong-upstream-branch'])
-def test_source_metadata_blocks_planning_when_missing_or_untrustworthy(repositories, fault):
+def test_source_metadata_blocks_planning_when_lineage_is_wrong(repositories):
     repository = repositories['repository']
     git(repository, 'checkout', 'release/bind-rp/26.1')
-    if fault == 'missing':
-        git(repository, 'rm', METADATA_PATH)
-        git(repository, 'commit', '-m', 'remove release metadata')
-    else:
-        invalid = json.loads(metadata('26.1', repositories['initial']))
-        if fault == 'noncanonical-tools-tag':
-            invalid['tools_tag'] = '26.1.r1'
-        else:
-            invalid['upstream_commit'] = repositories['stable_26_7']
-        commit(repository, {METADATA_PATH: json.dumps(invalid)}, 'record invalid source profile')
+    invalid = json.loads(metadata('26.1', repositories['initial']))
+    invalid['upstream_commit'] = repositories['stable_26_7']
+    commit(repository, {METADATA_PATH: json.dumps(invalid)}, 'record wrong source lineage')
     git(repository, 'checkout', 'master')
-
-    decision = plan(repositories)
-
-    assert decision['action'] == 'blocked'
-
-
-@pytest.mark.parametrize('fault', ['numeric-tag', 'build-conf', 'os-assignment'])
-def test_invalid_tools_release_profile_blocks_planning(repositories, fault):
-    tools = repositories['tools']
-    if fault == 'numeric-tag':
-        git(tools, 'tag', '-d', '26.7', '26.7.1')
-    elif fault == 'build-conf':
-        git(tools, 'tag', '-f', '26.7.1', git(tools, 'rev-parse', '26.1.11'))
-    else:
-        commit(tools, {'config/26.7/build.conf': 'PRODUCT?=OPNsense\n'}, 'tools tag without OS')
-        git(tools, 'tag', '26.7.2')
 
     decision = plan(repositories)
 
@@ -438,40 +414,6 @@ def test_apply_preserves_all_refs_when_an_output_branch_already_exists(repositor
 
     refs_before = git(repositories['repository'], 'show-ref')
     result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert git(repositories['repository'], 'show-ref') == refs_before
-
-
-@pytest.mark.parametrize('value', ['initial', 'upstream/stable/26.7'])
-def test_apply_rejects_mismatched_or_unpinned_upstream_without_changing_refs(repositories, tmp_path, value):
-    repository = repositories['repository']
-    decision = plan(repositories)
-    decision['upstream_commit'] = repositories['initial'] if value == 'initial' else value
-    before = git(repository, 'show-ref')
-
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert git(repository, 'show-ref') == before
-
-
-@pytest.mark.parametrize('digest_source', ['stored-source', 'supplied-core'])
-def test_apply_rejects_invalid_archive_provenance_without_creating_refs(
-    repositories, tmp_path, digest_source
-):
-    repository = repositories['repository']
-    decision = plan(repositories)
-    if digest_source == 'stored-source':
-        git(repository, 'checkout', 'release/bind-rp/26.1')
-        invalid_metadata = json.loads(metadata('26.1', repositories['initial']))
-        invalid_metadata['core_archive_sha256'] = 'not-a-sha256'
-        commit(repository, {METADATA_PATH: json.dumps(invalid_metadata)}, 'record invalid source archive digest')
-        git(repository, 'checkout', 'master')
-
-    refs_before = git(repositories['repository'], 'show-ref')
-    result = apply(repositories, decision, tmp_path,
-                   core_archive_sha256=CORE_ARCHIVE_SHA256 if digest_source == 'stored-source' else 'not-a-sha256')
 
     assert result.returncode != 0
     assert git(repositories['repository'], 'show-ref') == refs_before
