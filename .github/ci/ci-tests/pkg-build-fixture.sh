@@ -44,6 +44,7 @@ case "$1" in
         ;;
     query)
         case "$*" in
+        *'%k pkg'*) if [ -f "${PKG_LOCK_MARKER:?}" ]; then printf '1\n'; else printf '0\n'; fi ;;
         *'%n = pkg'*|*'pkg-2.3.1_1.pkg'*)
             printf '%s\n' 'pkg|2.3.1_1|ports-mgmt/pkg|FreeBSD:14:amd64'
             ;;

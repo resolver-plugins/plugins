@@ -233,7 +233,7 @@ def select_target_pkg(metadata: Path, series: str, pkg_command: str, repository:
             archive = fetch_target_pkg(target, pkg_command, repository, Path(directory))
             if query_identity(pkg_command, ['query', '-F', str(archive)]) != target.identity:
                 raise TargetPackageError('authenticated archive identity differs from selected recipe')
-            if any(row.startswith('pkg-') for row in run([pkg_command, 'lock', '-l']).stdout.splitlines()):
+            if run([pkg_command, 'query', '%k', 'pkg']).stdout.strip() == '1':
                 run([pkg_command, 'unlock', '-y', 'pkg'])
                 unlocked = True
             run([pkg_command, 'add', '-f', str(archive)])

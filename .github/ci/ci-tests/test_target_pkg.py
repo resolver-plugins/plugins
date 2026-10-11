@@ -90,12 +90,15 @@ elif operation == 'add':
     static.write_text(record['static']); static.chmod(0o755)
     record['manifest'] = hashlib.sha256(static.read_bytes()).hexdigest()
     installed.write_text(json.dumps(record))
+elif operation == 'query' and args[1:] == ['%k', 'pkg']:
+    print(int(locked.exists()))
 elif operation == 'query':
     record = json.loads(Path(args[args.index('-F') + 1]).read_text()) if '-F' in args else json.loads(installed.read_text())
     print('|'.join(record['identity']))
 elif operation == 'lock':
     if '-y' in args: locked.touch()
     elif locked.exists(): print('pkg-' + json.loads(installed.read_text())['identity'][1])
+    else: sys.exit(1)
 elif operation == 'unlock': locked.unlink()
 elif operation == 'which':
     assert Path(args[-1]) == static and static.is_file()
