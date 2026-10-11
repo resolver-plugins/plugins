@@ -8,6 +8,7 @@ sys.path.insert(0, str(CI))
 from ha_dhcp import dhcp_interface_ha_channel as channel
 from ha_dhcp import dhcp_interface_ha_release as selection
 from ha_fixtures import make_ha_channel
+from package_fixtures import write_resolved_target, creator_identity
 from workflow_fixtures import (assert_checkout_credentials, assert_permissions,
                                action_references, workflow_jobs)
 
@@ -174,6 +175,10 @@ def test_builder_retains_target_parser_and_native_installation_gates():
     for script in (builder, verifier, signer):
         assert script.index('dhcp_interface_ha_release.py') < script.index('setup-opnsense-repository.sh')
         assert 'export RP_OPNSENSE_SNAPSHOT' in script
+    for line in verifier.splitlines():
+        if 'target_pkg.py" install' in line or 'target_pkg.py" verify' in line:
+            assert '"$RP_READER_PKG_METADATA"' in line and '--role reader' in line and '--upstream "$RP_UPSTREAM_METADATA"' in line
+    assert 'RP_TARGET_PKG_METADATA=$RP_READER_PKG_METADATA "$ci/shared/setup-opnsense-repository.sh"' in verifier
     assert "printf 'repository_snapshot=%s\\n'" in builder
 
 @pytest.fixture
@@ -183,15 +188,9 @@ def signed_channel(tmp_path):
 
 @pytest.fixture
 def signing_target(signed_channel, monkeypatch):
-    target = channel.target_pkg.load_target(channel.TARGET, "26.7")
-    profile = {"core_commit": "c" * 40, "freebsd_release": "15.1"}
-    build_file = signed_channel / "build-metadata.txt"
-    with build_file.open("a") as stream:
-        stream.write(f"core_commit={profile['core_commit']}\nfreebsd_release=15.1\n"
-                     f"pkg_abi={target.identity.abi}\npkg_creator={target.identity.version}\n"
-                     f"pkg_creator_sha256={target.sha256}\n")
-    monkeypatch.setattr(channel.metadata_profile, "load_profile", lambda *a: profile)
-    return target
+    upstream = json.loads((signed_channel / 'upstream.json').read_text())
+    target_path = write_resolved_target(signed_channel.parent / 'creator-target.json', upstream)
+    return target_path
 
 
 def test_signed_channel_rejects_tampered_assets_and_foreign_key(signed_channel):
@@ -214,21 +213,29 @@ def test_signer_rejects_unreviewed_snapshot_without_invalidating_older_metadata(
     monkeypatch.setattr(channel.releases, "stage_selected_repository", sign)
     with pytest.raises(ValueError, match="provenance"):
         channel.stage(signed_channel, tmp_path / "signed", "26.7", COMMIT, "b" * 40,
-                      signed_channel / "upstream.json", tmp_path / "key")
+                      signed_channel / "upstream.json", tmp_path / "key", signing_target)
     sign.assert_not_called()
 
 
-def test_signed_retry_reuses_exact_snapshot_and_rejects_source_mismatch(signed_channel, tmp_path, monkeypatch):
-    snapshot = SimpleNamespace(existed=True, directory=signed_channel)
-    monkeypatch.setattr(channel.releases, "snapshot_release", Mock(return_value=snapshot))
-    output = tmp_path / "reuse"
-    assert channel.reuse("example/repository", signed_channel, output, "26.7", COMMIT, "b" * 40)
-    assert channel.releases.directory_checksums(output) == channel.releases.directory_checksums(signed_channel)
-    # The newly built metadata claims a different source for an existing version.
-    (output / "build-metadata.txt").write_text(
-        f"source_commit={'c' * 40}\nprofile_commit={'b' * 40}\nseries=26.7\nrepository_snapshot=26.7.4\nplugin_version=0.2_30\n")
-    with pytest.raises(ValueError, match="different source/profile"):
-        channel.reuse("example/repository", output, tmp_path / "reject", "26.7", "c" * 40, "b" * 40)
+def test_signed_retry_reuses_exact_snapshot_and_rejects_source_mismatch(signed_channel, signing_target, tmp_path, monkeypatch):
+    remote = tmp_path / 'remote'
+    shutil.copytree(signed_channel, remote)
+    snapshot = SimpleNamespace(existed=True, directory=remote)
+    monkeypatch.setattr(channel.releases, 'snapshot_release', Mock(return_value=snapshot))
+    output = tmp_path / 'reuse'
+    inputs = signed_channel / 'upstream.json', signing_target
+    assert channel.reuse('example/repository', signed_channel, output, '26.7', COMMIT, 'b' * 40, *inputs)
+    assert channel.releases.directory_checksums(output) == channel.releases.directory_checksums(remote)
+    channel.validate(output, target_metadata=signing_target, trusted_upstream=inputs[0])
+    build = signed_channel / 'build-metadata.txt'
+    original = build.read_text()
+    build.write_text(original.replace(f'source_commit={COMMIT}', f"source_commit={'c' * 40}"))
+    with pytest.raises(ValueError, match='different source/profile'):
+        channel.reuse('example/repository', signed_channel, tmp_path / 'reject', '26.7', 'c' * 40, 'b' * 40, *inputs)
+    build.write_text(original.replace('pkg_creator=2.3.1_1', 'pkg_creator=2.4.0'))
+    with pytest.raises(ValueError, match='provenance'):
+        channel.reuse('example/repository', signed_channel, tmp_path / 'foreign', '26.7', COMMIT, 'b' * 40, *inputs)
+    assert not (tmp_path / 'foreign').exists()
 
 
 def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path, monkeypatch, release_history):
@@ -275,7 +282,7 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
 
 @pytest.mark.parametrize("fault", [None, "key", "identity"])
 def test_signer_verifies_package_and_public_key_before_signing(signed_channel, signing_target, tmp_path, monkeypatch, fault):
-    target = signing_target
+    target = channel.target_pkg.load_target(signing_target, "26.7")
     calls = Mock()
     calls.check_output.side_effect = ["0.2_30\n", channel.PUBLIC_KEY.read_bytes() if fault != "key" else b"foreign key"]
     calls.query_package.return_value = (("foreign-package" if fault == "identity" else channel.NAME, "0.2_30", f"opnsense/{channel.NAME}", target.identity.abi), set())
@@ -293,10 +300,10 @@ def test_signer_verifies_package_and_public_key_before_signing(signed_channel, s
     calls.stage.side_effect = fake_catalog
     monkeypatch.setattr(channel.releases, "stage_selected_repository", calls.stage)
     args = (signed_channel, tmp_path / "signed", "26.7", COMMIT, "b" * 40,
-            signed_channel / "upstream.json", tmp_path / "private-key")
+            signed_channel / "upstream.json", tmp_path / "private-key", signing_target)
     if fault is None:
         channel.stage(*args)
-        assert channel.validate(tmp_path / "signed")["plugin_version"] == "0.2_30"
+        assert channel.validate(tmp_path / "signed", target_metadata=signing_target, trusted_upstream=signed_channel / "upstream.json")["plugin_version"] == "0.2_30"
         calls.verify_archive.assert_called_once_with(channel.PKG, signed_channel / f"{channel.NAME}-0.2_30.pkg")
         calls.verify_target_pkg.assert_called_once_with(target, 'pkg')
         names = [c[0] for c in calls.mock_calls]

@@ -10,7 +10,6 @@ on:
       - '.github/workflows/ha-dhcp-interface-tests.yml'
       - '.github/workflows/ha-dhcp-interface-release.yml'
       - '.github/workflows/bind-package-release.yml'
-      - '.resolver-plugins/target-pkg.json'
   pull_request:
     paths:
       - '.github/ci/ha_dhcp/**'
@@ -20,7 +19,6 @@ on:
       - '.github/workflows/ha-dhcp-interface-tests.yml'
       - '.github/workflows/ha-dhcp-interface-release.yml'
       - '.github/workflows/bind-package-release.yml'
-      - '.resolver-plugins/target-pkg.json'
   workflow_dispatch:
   workflow_call:
 

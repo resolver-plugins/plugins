@@ -5,14 +5,10 @@ from __future__ import annotations
 
 from module_fixtures import *
 
-from package_fixtures import bind_channel_inputs, bind_records, package_creator, write_json, write_target_metadata
+from package_fixtures import bind_channel_inputs, bind_records, creator_identity, write_json, write_resolved_target, complete_bind_channel
 
 
 release_channel = load_module("release_channel", "shared/release_channel.py")
-
-
-def target_creator_record(digest: str = "a" * 64) -> dict[str, str]:
-    return package_creator(sha256=digest, pkg_static_sha256=digest)
 
 
 def bind_provenance_record(fingerprint: str = "f" * 64) -> dict[str, object]:
@@ -141,9 +137,10 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
     def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            creator = package_creator()
+            creator = creator_identity()
             packages = bind_channel_inputs(root / 'packages')
-            target_metadata = write_target_metadata(root / 'target-pkg.json')
+            from git_fixtures import upstream_profile
+            target_metadata = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7', '2' * 40))
             key = root / 'private.pem'
             key.touch()
 
@@ -182,7 +179,7 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
                 names,
             )
             manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
-            self.assertEqual(4, manifest["schema"])
+            self.assertEqual(5, manifest["schema"])
             self.assertEqual("c" * 40, manifest["control_commit"])
             self.assertEqual("26.7", manifest["series"])
             self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
@@ -192,6 +189,8 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             self.assertEqual("15.1", manifest["build"]["freebsd_release"])
             self.assertEqual("26.7.1", manifest["build"]["tools_tag"])
             self.assertEqual(creator, manifest["package_creator"])
+            self.assertEqual(dict(release='26.7.1', repository='https://github.com/opnsense/ports.git',
+                                  commit='4' * 40, path='ports-mgmt/pkg'), manifest['creator_source'])
             self.assertEqual(
                 hashlib.sha256((packages / "os-bind-rp-26.7_1.pkg").read_bytes()).hexdigest(),
                 manifest["packages"]["os-bind-rp-26.7_1.pkg"],
@@ -200,25 +199,12 @@ class SelfContainedRepositoryStageTest(unittest.TestCase):
             (root / "channel/packagesite.pkg").touch()
             release_channel.validate_channel_directory(root / "channel")
 
-            legacy_v3_manifest = dict(manifest, schema=3)
-            legacy_v3_manifest.pop("control_commit")
-            (root / "channel/channel.json").write_text(
-                json.dumps(legacy_v3_manifest), encoding="utf-8"
-            )
-            release_channel.validate_channel_directory(root / "channel")
-
-            legacy_v2_manifest = dict(legacy_v3_manifest, schema=2)
-            legacy_v2_manifest.pop("package_abi")
-            (root / "channel/channel.json").write_text(
-                json.dumps(legacy_v2_manifest), encoding="utf-8"
-            )
-            release_channel.validate_channel_directory(root / "channel")
-
     def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             packages = bind_channel_inputs(root / 'packages')
-            target_metadata = write_target_metadata(root / 'target-pkg.json')
+            from git_fixtures import upstream_profile
+            target_metadata = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7', '2' * 40))
             key = root / 'private.pem'
             key.touch()
             with patch.object(
@@ -445,26 +431,13 @@ class PublicationRecoveryTest(unittest.TestCase):
             with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary_directory:
                 root = Path(temporary_directory)
                 remote = root / "remote"
-                remote.mkdir()
-                (remote / "channel.json").write_text(
-                    json.dumps(
-                        {
-                            "bind": bind_provenance_record(),
-                            "package_creator": target_creator_record(),
-                            "series": "26.7",
-                            "plugin_version": "1.36_2",
-                            "source_commit": "a" * 40,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                (remote / "os-bind-rp-1.36_2.pkg").write_bytes(b"immutable")
+                complete_bind_channel(remote)
                 public_key = root / "resolver-plugins.pub"
                 public_key.write_bytes(b"trusted key")
                 (remote / public_key.name).write_bytes(public_key.read_bytes())
                 fingerprint = bind_provenance_record()["fingerprint"]
                 snapshot = release_channel.ReleaseSnapshot(
-                    f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                    f"pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint}",
                     existed,
                     remote,
                     root / "manifest.json",
@@ -474,16 +447,15 @@ class PublicationRecoveryTest(unittest.TestCase):
                     patch.object(
                         release_channel, "snapshot_release", return_value=snapshot
                     ) as snapshot_release,
-                    patch.object(release_channel, "validate_channel_directory") as validate,
                 ):
                     reused = release_channel.materialize_existing_snapshot(
                         "resolver-plugins/repository",
                         "26.7",
-                        "1.36_2",
+                        "26.7_1",
                         "a" * 40,
                         root / "repository",
                         public_key,
-                        target_creator_record(),
+                        creator_identity(),
                         bind_provenance_record(),
                     )
 
@@ -491,29 +463,30 @@ class PublicationRecoveryTest(unittest.TestCase):
                 self.assertEqual(
                     (
                         "resolver-plugins/repository",
-                        f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
+                        f"pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint}",
                     ),
                     snapshot_release.call_args.args[:2],
                 )
                 if not existed:
                     self.assertFalse((root / "repository").exists())
                     continue
-                validate.assert_called_once_with(remote)
-                for channel in ("current", "snapshot"):
-                    self.assertEqual(
-                        b"immutable",
-                        (root / "repository" / channel / "os-bind-rp-1.36_2.pkg").read_bytes(),
-                    )
+                from git_fixtures import upstream_profile
+                upstream = write_json(root / 'upstream.json', upstream_profile('26.7'))
+                target = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7'))
+                release_channel.validate_channel_directory(root / 'repository/current', target_metadata=target, upstream=upstream)
+                expected = {p.name: p.read_bytes() for p in remote.iterdir()}
+                for channel in ('current', 'snapshot'):
+                    self.assertEqual(expected, {p.name: p.read_bytes() for p in (root / 'repository' / channel).iterdir()})
 
     def test_snapshot_reuse_rejects_different_release_inputs(self):
         for field, changed, keyword in [
             ('source_commit', 'b' * 40, 'source'),
             ('bind', bind_provenance_record('b' * 64), 'bind'),
-            ('package_creator', target_creator_record('b' * 64), 'creator'),
+            ('package_creator', creator_identity(version='2.4.0'), 'creator'),
         ]:
             with self.subTest(input=keyword), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                manifest = dict(bind=bind_provenance_record(), package_creator=target_creator_record(),
+                manifest = dict(bind=bind_provenance_record(), package_creator=creator_identity(),
                                 series='26.7', plugin_version='1.36_2', source_commit='a' * 40)
                 manifest[field] = changed
                 snapshot = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2', {
@@ -525,19 +498,15 @@ class PublicationRecoveryTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'does not match requested release'):
                         release_channel.materialize_existing_snapshot(
                             'resolver-plugins/repository', '26.7', '1.36_2', 'a' * 40,
-                            root / 'repository', public_key, target_creator_record(), bind_provenance_record())
+                            root / 'repository', public_key, creator_identity(), bind_provenance_record())
                 self.assertFalse((root / 'repository').exists())
 
 
     def test_recovery_channel_rejects_an_audit_checksum_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            directory = bind_channel_inputs(root / 'channel')
-            write_json(directory / 'channel.json', dict(
-                schema=1, series='26.7', plugin_version='26.7_1', source_commit='a' * 40,
-                build={}, bind={}, packages={p.name: '0' * 64 for p in directory.glob('*.pkg')}))
-            for name in ('resolver-plugins.pub', 'meta.conf', 'packagesite.pkg'):
-                (directory / name).touch()
+            directory = complete_bind_channel(root / 'channel')
+            (directory / 'os-bind-rp-26.7_1.pkg').write_bytes(b'changed archive')
             with self.assertRaisesRegex(ValueError, 'checksum'):
                 release_channel.validate_channel_directory(directory)
 
@@ -644,28 +613,23 @@ class PublicationRecoveryTest(unittest.TestCase):
                                      [command[:3] for command in mutations])
 
     def test_source_and_control_ancestry(self):
-        def manifest(source, control=None):
-            data = dict(schema=4 if control else 3, source_commit=source * 40)
-            if control:
-                data['control_commit'] = control * 40
-            return data
+        def manifest(source, control):
+            return dict(schema=5, source_commit=source * 40, control_commit=control * 40)
 
-        for name, current, staged, statuses, expected, pairs in [
-            ('schema-migration', manifest('a'), manifest('a', 'c'), [], True, []),
-            ('control-advance', manifest('a', 'b'), manifest('a', 'c'), [0], True, [('b', 'c')]),
-            ('identical-inputs', manifest('a', 'b'), manifest('a', 'b'), [], False, []),
-            ('control-rollback', manifest('a', 'd'), manifest('b', 'c'), [0, 1], False, [('a', 'b'), ('d', 'c')]),
-            ('schema-downgrade', manifest('a', 'c'), manifest('b'), [], False, []),
+        for name, current, staged, statuses, expected in [
+            ('current-control-advance', manifest('a', 'b'), manifest('a', 'c'), [0], True),
+            ('source-advance', manifest('a', 'c'), manifest('b', 'c'), [0], True),
+            ('identical-inputs', manifest('a', 'b'), manifest('a', 'b'), [], False),
+            ('control-rollback', manifest('a', 'd'), manifest('b', 'c'), [0, 1], False),
         ]:
             with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 for directory, data in [('current', current), ('staged', staged)]:
                     make_assets(root / directory, {'channel.json': json.dumps(data).encode()})
                 results = [subprocess.CompletedProcess(['git'], status) for status in statuses]
-                with patch.object(release_channel.subprocess, 'run', side_effect=results) as run:
+                with patch.object(release_channel.subprocess, 'run', side_effect=results):
                     self.assertEqual(expected, release_channel.staged_source_descends_from_current(root / 'current', root / 'staged'))
-                self.assertEqual([['git', 'merge-base', '--is-ancestor', old * 40, new * 40] for old, new in pairs],
-                                 [call.args[0] for call in run.call_args_list])
+
 
 
     def test_stale_retry_cannot_replace_current_with_or_without_a_snapshot(self):

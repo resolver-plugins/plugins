@@ -10,12 +10,11 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ha_dhcp import dhcp_interface_ha_channel as dhcp
-from shared import package_checksums, target_pkg
+from shared import metadata_profile, package_checksums, target_pkg
 from shared import release_channel as releases
 
 ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_KEY = ROOT / 'docs/package-repository/resolver-plugins.pub'
-TARGET = ROOT / '.resolver-plugins/target-pkg.json'
 PKG = '/usr/local/sbin/pkg-static'
 COMPONENTS = ('bind', 'dhcp')
 CATALOGUE_FILES = {'data.pkg', 'packagesite.pkg'}
@@ -34,10 +33,10 @@ def component_packages(directory, component, series):
     else:
         data = dhcp.validate(directory)
         packages = [directory / f"{dhcp.NAME}-{data['plugin_version']}.pkg"]
-    if (data['series'] != series or data.get('package_creator') != target_pkg.load_target(TARGET, series).record()
+    if (data['series'] != series or 'package_creator' not in data
             or (directory / 'resolver-plugins.pub').read_bytes() != PUBLIC_KEY.read_bytes()
             or {p.name for p in packages} != {p.name for p in directory.glob('*.pkg') if p.name not in CATALOGUE_FILES}):
-        raise ValueError('component series, package creator, key or package set differs from trusted inputs')
+        raise ValueError('component series, creator provenance, key or package set differs from trusted inputs')
     return packages
 
 
@@ -56,7 +55,9 @@ def fetch(repository, component, series, output):
         shutil.copytree(snapshot.directory, output)
 
 
-def verify_packages(packages, url):
+def verify_packages(packages, url, target_metadata, upstream, *, role="reader"):
+    target = target_pkg.load_target(target_metadata, json.loads(upstream.read_text())["series"], upstream=upstream, role=role)
+    target_pkg.verify_target_pkg(target, PKG, pkg_static_path=Path(PKG))
     """Verify signatures, the complete catalogue and exact fetched archive bytes."""
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -73,7 +74,10 @@ def verify_packages(packages, url):
         command = [PKG, '-o', f'REPOS_DIR={repos}', '-o', f'PKG_DBDIR={root / "db"}',
                    '-o', f'PKG_CACHEDIR={root / "cache"}']
         subprocess.run([*command, 'update', '-f', '-r', 'catalogue'], check=True)
-        expected = sorted('|'.join(releases.query_package(p, PKG)[0]) for p in packages)
+        identities = [releases.query_package(p, PKG)[0] for p in packages]
+        if any(identity[3] != target.identity.abi for identity in identities):
+            raise ValueError('component package ABI differs from trusted reader')
+        expected = sorted('|'.join(identity) for identity in identities)
         observed = subprocess.check_output(
             [*command, 'rquery', '-U', '-a', '-r', 'catalogue', '%n|%v|%o|%q'], text=True).splitlines()
         if sorted(observed) != expected:
@@ -86,8 +90,8 @@ def verify_packages(packages, url):
                 raise ValueError('signed catalogue archive differs from selected bytes')
 
 
-def stage(bind, dhcp_channel, output, series, key):
-    target = target_pkg.load_target(TARGET, series)
+def stage(bind, dhcp_channel, output, series, key, target_metadata, upstream):
+    target = target_pkg.load_target(target_metadata, series, upstream=upstream, role="creator")
     target_pkg.verify_target_pkg(target, 'pkg')
     if subprocess.check_output(['openssl', 'pkey', '-in', str(key), '-pubout']) != PUBLIC_KEY.read_bytes():
         raise ValueError('signing key does not match the committed public key')
@@ -107,7 +111,7 @@ def stage(bind, dhcp_channel, output, series, key):
                                                    f'opnsense/{dhcp.NAME}', target.identity.abi):
                 raise ValueError('HA DHCP package identity differs from its component')
             package_checksums.verify_archive(PKG, package)
-        verify_packages(selected, directory.resolve().as_uri())
+        verify_packages(selected, directory.resolve().as_uri(), target_metadata, upstream, role="creator")
         packages.extend(selected)
         records[component] = {'tag': tag(component, series), 'assets': releases.directory_checksums(directory),
                               'packages': {p.name: releases.sha256(p) for p in selected}}
@@ -130,7 +134,7 @@ def validate(directory):
             or data['kind'] != 'combined' or data['schema'] != 1
             or set(data['components']) not in ({'bind'}, {'bind', 'dhcp'})
             or ('dhcp' in data['components'] and data['series'] != '26.7')
-            or data['package_abi'] != target_pkg.load_target(TARGET, data['series']).identity.abi
+            or releases.PACKAGE_ABI_PATTERN.fullmatch(data['package_abi']) is None
             or (directory / 'resolver-plugins.pub').read_bytes() != PUBLIC_KEY.read_bytes()):
         raise ValueError('invalid combined catalogue identity')
     actual = releases.directory_checksums(directory)
@@ -152,6 +156,26 @@ def validate(directory):
         for name in ('channel.json', 'build-metadata.txt', 'bind920-provenance.json' if component == 'bind' else 'upstream.json'):
             if name not in record['assets'] or actual.get(f'{component}-{name}') != record['assets'][name]:
                 raise ValueError('combined component metadata differs from original release')
+        channel = json.loads((directory / f'{component}-channel.json').read_text())
+        if channel.get('series') != data['series'] or 'package_creator' not in channel:
+            raise ValueError('combined component series or creator is inconsistent')
+        if component == 'bind':
+            metadata = releases.read_build_metadata(directory / 'bind-build-metadata.txt')
+            provenance = json.loads((directory / 'bind-bind920-provenance.json').read_text())
+            releases.validate_bind_component(channel, provenance, metadata)
+            creator = target_pkg.normalize_creator(channel['package_creator'])
+            if channel['packages'] != record['packages']:
+                raise ValueError('combined BIND package lineage is inconsistent')
+        else:
+            # Parse the prefixed sidecar directly; its original catalogue is not this catalogue.
+            metadata = dhcp.read_metadata(directory / 'dhcp-build-metadata.txt')
+            upstream = metadata_profile.load_profile(directory / 'dhcp-upstream.json', data['series'])
+            creator = dhcp.validate_component(channel, metadata, upstream)
+            for name, digest in record['packages'].items():
+                if channel['assets'].get(name) != digest:
+                    raise ValueError('combined HA package lineage is inconsistent')
+        if creator['abi'] != data['package_abi']:
+            raise ValueError('combined component ABI is inconsistent')
     if ({p.name for p in directory.glob('*.pkg') if p.name not in CATALOGUE_FILES} != set(expected)
             or 'meta.conf' not in actual or not CATALOGUE_FILES.intersection(actual)):
         raise ValueError('combined catalogue is incomplete or contains extra packages')
@@ -190,15 +214,21 @@ if __name__ == '__main__':
     parser.add_argument('--key', type=Path)
     parser.add_argument('--url')
     parser.add_argument('--recovery', type=Path)
+    parser.add_argument('--target-pkg-metadata', type=Path)
+    parser.add_argument('--reader-target', type=Path)
+    parser.add_argument('--upstream', type=Path)
     args = parser.parse_args()
     if args.command == 'fetch':
         fetch(args.repository, args.component, args.series, args.output)
     elif args.command == 'stage':
-        stage(args.bind_channel, args.dhcp_channel, args.output, args.series, args.key)
+        stage(args.bind_channel, args.dhcp_channel, args.output, args.series, args.key, args.target_pkg_metadata, args.upstream)
     elif args.command == 'publish':
         publish(args.repository, args.directory, args.recovery)
     else:
         data = validate(args.directory)
         if args.command == 'verify':
             packages = [args.directory / name for record in data['components'].values() for name in record['packages']]
-            verify_packages(packages, args.url)
+            target = target_pkg.load_target(args.reader_target, data['series'], upstream=args.upstream, role="reader")
+            if target.identity.abi != data['package_abi']:
+                raise ValueError('combined catalogue ABI differs from trusted reader')
+            verify_packages(packages, args.url, args.reader_target, args.upstream)

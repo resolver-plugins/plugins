@@ -36,7 +36,7 @@ def installer_environment(
     os_bind_rp_candidate_version: str | None = None,
     confirmation: str | None = None,
     key_sha256: str = PUBLIC_KEY_SHA256,
-    archive_checksum: str = "2$" + "a" * 64,
+    archive_checksum: str = "1$" + "a" * 64,
     install_failure: bool = False,
     plugin_install_failure: bool = False,
     fetch_layout: str = "all",
@@ -224,8 +224,8 @@ elif command == "query" and "-F" in args:
         print(f"{name}|{version}|{origin}")
     elif output_format == "%Fp|%Fs":
         checksum = os.environ["RP_TEST_ARCHIVE_CHECKSUM"]
-        print(f"/usr/local/{name}/one|{checksum}")
-        print(f"/usr/local/{name}/two|{checksum}")
+        print(f"/usr/local/{name}/{version}/one|{checksum}")
+        print(f"/usr/local/{name}/{version}/two|{checksum}")
 elif command == "query":
     expression = " ".join(args)
     for name in ("bind920", "bind-tools", "os-bind-rp", "os-bind", "pkg"):
@@ -234,8 +234,9 @@ elif command == "query":
             if value:
                 if args[-1] == "%Fp|%Fs":
                     checksum = "(null)" if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "checksum" else os.environ["RP_TEST_ARCHIVE_CHECKSUM"]
-                    print(f"/usr/local/{name}/one|{checksum}")
-                    print(f"/usr/local/{name}/two|{checksum}")
+                    version = value.split("|")[1]
+                    print(f"/usr/local/{name}/{version}/one|{checksum}")
+                    print(f"/usr/local/{name}/{version}/two|{checksum}")
                 else:
                     print(value)
 elif command == "info":
@@ -320,6 +321,8 @@ elif command == "which":
     if not value:
         raise SystemExit(1)
     package, version, _ = value.split("|")
+    if path.split("/")[4] != version:
+        raise SystemExit(1)
     if os.environ["RP_TEST_POST_INSTALL_FAULT"] == "owner":
         package = "wrong-owner"
         version = "1"
@@ -352,23 +355,25 @@ def run_installer(tmp_path: Path, **kwargs: object) -> tuple[subprocess.Complete
 
 
 @pytest.mark.parametrize(
-    ("opnsense_version", "pkg_abi", "series", "installed_plugin", "checksum", "layout", "dry_run_status"),
+    ("opnsense_version", "pkg_abi", "series", "installed_plugin", "checksum", "layout", "dry_run_status", "bind_version"),
     (
         ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "",
-         "1$" + "b" * 64, "direct", 0),
+         "1$" + "b" * 64, "direct", 0, "9.20.26_2"),
         ("OPNsense 26.7.1_1 (amd64)", "FreeBSD:15:amd64", "26.7", "",
-         "2$" + "c" * 64, "all", 1),
+         "2$" + "y" * 103, "all", 1, "9.20.29"),
         ("OPNsense 26.1.11_10 (amd64)", "FreeBSD:14:amd64", "26.1", "os-bind-rp|1.36_9|opnsense/os-bind-rp",
-         "2$" + "c" * 64, "all", 1),
+         "1$" + "c" * 64, "all", 1, "9.20.26_2"),
     ),
 )
 def test_installs_current_plugin_for_the_detected_series_without_service_changes(
     tmp_path: Path, opnsense_version: str, pkg_abi: str, series: str, installed_plugin: str,
-    checksum: str, layout: str, dry_run_status: int
+    checksum: str, layout: str, dry_run_status: int, bind_version: str
 ) -> None:
     result, log, repositories = run_installer(
         tmp_path, opnsense_version=opnsense_version, pkg_abi=pkg_abi, os_bind_rp=installed_plugin,
-        archive_checksum=checksum, fetch_layout=layout, dry_run_status=dry_run_status
+        archive_checksum=checksum, fetch_layout=layout, dry_run_status=dry_run_status,
+        bind920=f"bind920|{bind_version}|dns/bind920",
+        bind_tools=f"bind-tools|{bind_version}|dns/bind-tools"
     )
 
     assert result.returncode == 0, result.stderr
@@ -392,6 +397,10 @@ def test_installs_current_plugin_for_the_detected_series_without_service_changes
     assert "Do you wish to update BIND?" not in result.stderr
     assert "bind920-9.20.26_2 bind-tools-9.20.26_2" not in calls
     assert (tmp_path / "plugin-installed").exists()
+    assert (tmp_path / "installed-packages").read_text().splitlines() == [
+        f"bind920|{bind_version}|dns/bind920", f"bind-tools|{bind_version}|dns/bind-tools",
+        f"os-bind-rp|{series}_1|opnsense/os-bind-rp"
+    ]
 
 
 def test_rejects_plugin_candidate_that_does_not_match_the_detected_series(

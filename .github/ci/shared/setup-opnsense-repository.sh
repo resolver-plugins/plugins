@@ -14,8 +14,12 @@ if [ -z "${RP_UPSTREAM_METADATA:-}" ]
 then
     fail 'RP_UPSTREAM_METADATA is required'
 fi
+[ -n "${RP_TARGET_PKG_METADATA:-}" ] || fail 'RP_TARGET_PKG_METADATA is required'
 
 script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+target_release=$(python3 "$script_directory/target_pkg.py" field \
+    "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA") || \
+    fail 'invalid target/upstream profile'
 metadata_field() {
     python3 "$script_directory/metadata_profile.py" \
         "$RP_UPSTREAM_METADATA" "$series" "$1"
@@ -69,7 +73,17 @@ grep -Fq 'signature_type: "fingerprints"' "$repository_source" || \
 
 mkdir -p "$repository_directory" "$fingerprint_directory"
 install -m 0644 "$repository_source" "$repository_directory/OPNsense.conf"
-printf '%s\n' 'FreeBSD: {' '  enabled: no' '}' > "$repository_directory/FreeBSD.conf"
+# Only explicit target-pkg commands load this release archive configuration.
+mkdir -p "$repository_directory/target-pkg"
+sed \
+    -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|g' \
+    -e "s|%%CORE_ABI%%|$series/MINT/$target_release|g" \
+    -e 's/^OPNsense:/OPNsense-creator:/' \
+    "$repository_template" > "$repository_directory/target-pkg/OPNsense-creator.conf"
+for repository in FreeBSD FreeBSD-kmods FreeBSD-ports FreeBSD-ports-kmods FreeBSD-base
+do
+    printf '%s\n' "$repository: {" '  enabled: no' '}'
+done > "$repository_directory/FreeBSD.conf"
 
 for group in trusted revoked
 do

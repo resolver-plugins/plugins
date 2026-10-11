@@ -5,14 +5,14 @@ from __future__ import annotations
 
 from module_fixtures import *
 
-from package_fixtures import BIND_PROFILE as PROFILE, bind_records, package_creator
+from package_fixtures import BIND_PROFILE as PROFILE, bind_records, creator_identity
 
 reuse_bind920 = load_module("reuse_bind920", "bind/reuse_bind920.py")
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "ci-local"
 
 
 PACKAGES = bind_records()
-PACKAGE_CREATOR = package_creator("FreeBSD:14:amd64")
+PACKAGE_CREATOR = creator_identity("FreeBSD:14:amd64")
 PROVENANCE = reuse_bind920.bind920_profile.build_provenance(
     PROFILE, "26.1", "14.3", "x86_64", PACKAGE_CREATOR, PACKAGES
 )
@@ -49,16 +49,22 @@ class ReuseBind920Test(unittest.TestCase):
 
     def test_compatibility_drift_is_an_ordinary_cache_miss(self) -> None:
         """Compatibility drift selects a fresh build rather than an old BIND pair."""
-        for changes, diagnostic in [
-            ({'fingerprint': '0' * 64}, 'fingerprint differs'),
-            ({'package_creator': dict(PACKAGE_CREATOR, sha256='c' * 64)}, 'creator differs'),
-            ({'schema': 2}, 'schema differs'),
-        ]:
-            with self.subTest(diagnostic=diagnostic):
-                with self.assertRaisesRegex(reuse_bind920.CacheMiss, diagnostic):
-                    reuse_bind920.select_candidate(
-                        dict(PROVENANCE, **changes), PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR
-                    )
+        cases = [
+            (PROFILE, '26.1', '14.3', dict(PACKAGE_CREATOR, version='2.4.0'), PROVENANCE),
+            (PROFILE, '26.7', '15.0', creator_identity(), PROVENANCE),
+            (PROFILE, '26.1', '14.4', PACKAGE_CREATOR, PROVENANCE),
+            (dict(PROFILE, makefile_sha256='0' * 64), '26.1', '14.3', PACKAGE_CREATOR, PROVENANCE),
+        ]
+        for profile, series, os_release, creator, provenance in cases:
+            with self.subTest(series=series, os_release=os_release, creator=creator):
+                with self.assertRaises(reuse_bind920.CacheMiss):
+                    reuse_bind920.select_candidate(provenance, profile, series, os_release, 'x86_64', creator)
+        with tempfile.TemporaryDirectory() as temporary:
+            recipe = Path(temporary) / 'build-bind920.sh'
+            recipe.write_bytes(reuse_bind920.bind920_profile.BUILD_RECIPE_PATH.read_bytes() + b'\n# changed build policy\n')
+            with patch.object(reuse_bind920.bind920_profile, 'BUILD_RECIPE_PATH', recipe):
+                with self.assertRaisesRegex(reuse_bind920.CacheMiss, 'fingerprint differs'):
+                    reuse_bind920.select_candidate(PROVENANCE, PROFILE, '26.1', '14.3', 'x86_64', PACKAGE_CREATOR)
 
     def test_installed_identity_compares_pkg_query_fields_in_python(self) -> None:
         """Version/origin verification must not rely on pkg predicate support."""

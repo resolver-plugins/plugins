@@ -104,7 +104,7 @@ unchanged package archives and a freshly signed aggregate catalogue. Its separat
 `channel.json` format (`kind=combined`, schema 1) records component tags, complete
 input asset hashes, selected package hashes and output asset hashes. Prefixed
 component metadata sidecars preserve both provenance records without filename
-collisions. Input signatures, package manifests, ABIs, pinned package creators,
+collisions. Input signatures, package manifests, ABIs, release-derived package creators,
 file-checksum completeness and archive bytes are verified before aggregate signing.
 
 Normal package operations use the current channel. An administrator rolls
@@ -145,20 +145,23 @@ baseline.
    its provenance matches, or builds the pinned pair once on a cache miss. It
    does so in a clean BIND-materialization environment rather than installing
    a competing BIND package over the normal plugin build environment.
-4. Builders select and lock the immutable per-series target package manager,
-   record `pkg_creator` and `pkg_creator_sha256` in plugin build metadata and
-   the full `package_creator` record in BIND/channel provenance, and reject any
-   archive whose file checksums are not fully readable by that target. The
-   trusted signing job then stages one complete current channel, writes
-   `channel.json`, runs `pkg repo` with the private key, and copies those exact
-   signed bytes to the immutable snapshot publication path. Immutable package
-   and source release tags contain the full BIND compatibility fingerprint, so
-   a BIND-only or package-creator change receives a new identity even when the
-   plugin package version is unchanged. Schema 4 channels also record the
-   trusted `master` control commit. When the release-source commit is unchanged,
-   promotion requires the staged control commit to descend from the current
-   one; this permits BIND-only updates without allowing stale workflow retries
-   to roll the channel back.
+4. The profile job resolves the creator from its exact numeric OPNsense Ports
+   release tag and separately resolves the minimum reader. Its immutable target
+   artifact and digest outputs bind build/sign/verify jobs to those records.
+   Builders authenticate and lock the selected creator identity; upstream archive
+   or binary reissues with that same identity remain compatible. Build metadata
+   records `pkg_creator` and the three `creator_*` recipe references. BIND
+   provenance schema 4 fingerprints the four-field identity and existing build
+   inputs; channel schema 5 adds `creator_source`, and HA channel schema 2 does
+   likewise. Every packaged file must have a checksum readable by the selected
+   minimum reader before publication. The trusted signing job stages the current
+   channel and copies its exact signed bytes to the immutable snapshot path.
+   Immutable BIND package/source tags retain the full compatibility fingerprint.
+   BIND channel 5 records the trusted master control commit; an unchanged source
+   requires forward control ancestry. Normal CI reads only current-format
+   component channels and BIND provenance. A one-time local cutover handles the
+   existing BIND channels before normal release automation is enabled; historical
+   snapshots retain their original bytes and remain installable through `pkg`.
 5. It verifies that the generated catalogue, public key, manifest checksums,
    and package dependency graph exactly match the intended set. Both workflows
    also assemble and verify the shared catalogue while retaining the other
@@ -214,8 +217,8 @@ current channel exists, it must also be byte-identical; a mismatch is a hard
 failure so an older retry cannot roll current back.
 If the snapshot is absent and current differs, the staged source and control
 commits must each be equal to or descend from the commits recorded by current,
-and at least one lineage must advance. The one-time migration from a legacy
-channel without control lineage to schema 4 permits an equal source commit.
+and at least one lineage must advance. Initial migration of existing BIND channels
+is handled by temporary local cutover tooling, outside normal release CI.
 This preserves BIND-only and source promotions while rejecting stale runs
 after recovery or pruning.
 

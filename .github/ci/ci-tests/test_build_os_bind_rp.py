@@ -1,6 +1,6 @@
 from git_fixtures import *
 
-from package_fixtures import package_creator, write_target_metadata
+from package_fixtures import write_resolved_target
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -13,11 +13,9 @@ TARGET_STATIC_BYTES = (pathlib.Path(__file__).with_name('pkg-static-fixture.sh')
 def configure_target_pkg_fixture(
     environment: dict[str, str], directory: pathlib.Path, executable_directory: pathlib.Path
 ) -> None:
-    metadata = directory / 'target-pkg.json'
-    write_target_metadata(metadata, package_creator(
-        sha256=hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
-        pkg_static_sha256=hashlib.sha256(TARGET_STATIC_BYTES).hexdigest(),
-    ))
+    metadata = directory / 'creator-target.json'
+    profile = json.loads(pathlib.Path(environment['RP_UPSTREAM_METADATA']).read_text())
+    write_resolved_target(metadata, profile)
     environment['RP_TARGET_PKG_METADATA'] = str(metadata)
     environment['RP_PKG_STATIC_COMMAND'] = str(executable_directory / 'pkg-static')
     environment['PKG_STATIC_PATH'] = str(executable_directory / 'pkg-static')
@@ -107,19 +105,13 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path, request):
         'bind_source': 'opnsense', 'opnsense': '26.1.11_10', 'opnsense_core_commit': core_commit,
         'upstream_commit': UPSTREAM_COMMIT, 'core_commit': core_commit, 'tools_tag': '26.1.11',
         'freebsd_release': FREEBSD_RELEASE, 'source_commit': 'unknown', 'pkg_creator': '2.3.1_1',
-        'pkg_creator_sha256': hashlib.sha256(TARGET_ARCHIVE_BYTES).hexdigest(),
+        'creator_release': '26.1.11', 'creator_ports_commit': '4' * 40,
+        'creator_recipe_path': 'ports-mgmt/pkg',
     }
     package_calls = package_call_log.read_text().splitlines()
-    target_add_index = next(
-        index for index, call in enumerate(package_calls)
-        if call.startswith('add -f ') and 'pkg-2.3.1_1.pkg' in call
-    )
-    assert target_add_index < package_calls.index('install -y bind920')
-    build_index = package_calls.index('make package')
-    assert package_calls[build_index - 1] == 'lock -l'
-    assert package_calls[build_index + 1:build_index + 3] == [
-        'query -e %n = pkg %n|%v|%o|%q', 'lock -l',
-    ]
+    assert 'creator verified at build' in package_calls
+    assert pathlib.Path(environment['PKG_LOCK_MARKER']).is_file()
+    assert pathlib.Path(environment['PKG_STATIC_PATH']).read_bytes() == TARGET_STATIC_BYTES
     static_calls = pathlib.Path(environment['PKG_STATIC_CALL_LOG']).read_text().splitlines()
     built_archive = build_repository / 'dns/bind/work/pkg/os-bind-rp-26.1_1.pkg'
     assert f"query -F {built_archive} %Fp|%Fs" in static_calls
