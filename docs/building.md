@@ -103,9 +103,11 @@ library dependencies from the configured OPNsense repository, then invokes the
 two BIND builds with `NO_DEPENDS=yes`. It therefore compiles only the pinned
 BIND source instead of recursively rebuilding ordinary Ports dependencies,
 while retaining OPNsense-compatible linked libraries.
-OPNsense supplies its LMDB library as `lmdb`; the pinned FreeBSD Ports recipe
-uses the package name `lmdb0`. The wrapper installs OPNsense's `lmdb`, and Ports records the
-installed library provider in the output package dependencies.
+The wrapper selects dependencies explicitly from OPNsense and repository setup
+disables the default FreeBSD repositories, including the renamed Ports and
+kernel-module feeds in FreeBSD 15.1. OPNsense 26.1 supplies LMDB as `lmdb`, while
+26.7 supplies the same library as `lmdb0`. Ports records the installed library
+provider in the output package dependencies.
 
 The runner installs `python3` first when the clean FreeBSD environment does
 not provide it; Python is required to validate the immutable metadata before

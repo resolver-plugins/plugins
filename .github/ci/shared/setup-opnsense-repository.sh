@@ -80,7 +80,10 @@ sed \
     -e 's/^OPNsense:/OPNsense-creator:/' \
     -e 's|enabled: yes|enabled: no|' \
     "$repository_template" > "$repository_directory/OPNsense-creator.conf"
-printf '%s\n' 'FreeBSD: {' '  enabled: no' '}' > "$repository_directory/FreeBSD.conf"
+for repository in FreeBSD FreeBSD-kmods FreeBSD-ports FreeBSD-ports-kmods FreeBSD-base
+do
+    printf '%s\n' "$repository: {" '  enabled: no' '}'
+done > "$repository_directory/FreeBSD.conf"
 
 for group in trusted revoked
 do

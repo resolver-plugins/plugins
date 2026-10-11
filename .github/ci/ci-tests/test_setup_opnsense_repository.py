@@ -54,7 +54,9 @@ def test_checks_out_exact_pinned_core_commit_and_installs_fingerprints(tmp_path,
     config = (tmp_path / 'repos/OPNsense.conf').read_text()
     assert f'https://pkg.opnsense.org/${{ABI}}/{repository_series}/latest' in config
     assert 'signature_type: "fingerprints"' in config
-    assert (tmp_path / 'repos/FreeBSD.conf').read_text() == 'FreeBSD: {\n  enabled: no\n}\n'
+    assert (tmp_path / 'repos/FreeBSD.conf').read_text() == ''.join(
+        f'{name}: {{\n  enabled: no\n}}\n'
+        for name in ('FreeBSD', 'FreeBSD-kmods', 'FreeBSD-ports', 'FreeBSD-ports-kmods', 'FreeBSD-base'))
     assert (tmp_path / 'fingerprints/OPNsense/trusted/pkg.opnsense.org.fixture').read_bytes() == pinned_fingerprint
     assert (tmp_path / 'fingerprints/OPNsense/revoked/old.fixture').read_bytes() == b'revoked fixture\n'
     creator = (tmp_path / 'repos/OPNsense-creator.conf').read_text()
