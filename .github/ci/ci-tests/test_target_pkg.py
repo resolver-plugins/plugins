@@ -69,12 +69,18 @@ from pathlib import Path
 root = Path(__file__).parent
 args = sys.argv[1:]
 with (root / 'calls').open('a') as log: log.write(' '.join(args) + '\\n')
+scoped = args[0] == '-R'
+if scoped:
+    assert 'enabled: yes' in (Path(args[1]) / 'OPNsense-creator.conf').read_text()
+    args = args[2:]
 operation = args[0]
 if (root / 'fault').exists() and (root / 'fault').read_text() == operation:
     sys.exit('fixture ' + operation + ' failure')
 installed = root / 'installed.json'
 locked = root / 'locked'
 static = root / 'pkg-static'
+if operation in ('update', 'rquery', 'fetch'):
+    assert (args[args.index('-r') + 1] == 'OPNsense-creator') == scoped, 'archive feed must be scoped'
 if operation == 'update': pass
 elif operation in ('rquery', 'fetch'):
     record = json.loads((root / 'feeds.json').read_text())[args[args.index('-r') + 1]]
@@ -137,6 +143,7 @@ def test_installs_recipe_targets_and_same_version_reissues(tmp_path, monkeypatch
         env = dict(os.environ, RP_UPSTREAM_METADATA=str(upstream), OPNSENSE_CORE_REPOSITORY=str(core),
                    PKG_REPOS_DIR=str(tmp_path / 'repos'), PKG_FINGERPRINTS_DIR=str(tmp_path / 'fingerprints'))
         env.pop('RP_OPNSENSE_SNAPSHOT', None)
+        monkeypatch.setenv('PKG_REPOS_DIR', env['PKG_REPOS_DIR'])
         first, reissue = publication(expected['creator'], 'A'), publication(expected['creator'], 'B')
         feeds = root / 'feeds.json'
         feeds.write_text(json.dumps({'OPNsense': first, 'OPNsense-creator': reissue}))

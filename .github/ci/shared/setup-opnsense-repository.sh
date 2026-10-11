@@ -73,13 +73,13 @@ grep -Fq 'signature_type: "fingerprints"' "$repository_source" || \
 
 mkdir -p "$repository_directory" "$fingerprint_directory"
 install -m 0644 "$repository_source" "$repository_directory/OPNsense.conf"
-# This disabled feed serves only the resolved role's exact release.
+# Only explicit target-pkg commands load this release archive configuration.
+mkdir -p "$repository_directory/target-pkg"
 sed \
     -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|g' \
     -e "s|%%CORE_ABI%%|$series/MINT/$target_release|g" \
     -e 's/^OPNsense:/OPNsense-creator:/' \
-    -e 's|enabled: yes|enabled: no|' \
-    "$repository_template" > "$repository_directory/OPNsense-creator.conf"
+    "$repository_template" > "$repository_directory/target-pkg/OPNsense-creator.conf"
 for repository in FreeBSD FreeBSD-kmods FreeBSD-ports FreeBSD-ports-kmods FreeBSD-base
 do
     printf '%s\n' "$repository: {" '  enabled: no' '}'

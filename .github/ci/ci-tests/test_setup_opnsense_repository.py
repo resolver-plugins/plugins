@@ -59,8 +59,9 @@ def test_checks_out_exact_pinned_core_commit_and_installs_fingerprints(tmp_path,
         for name in ('FreeBSD', 'FreeBSD-kmods', 'FreeBSD-ports', 'FreeBSD-ports-kmods', 'FreeBSD-base'))
     assert (tmp_path / 'fingerprints/OPNsense/trusted/pkg.opnsense.org.fixture').read_bytes() == pinned_fingerprint
     assert (tmp_path / 'fingerprints/OPNsense/revoked/old.fixture').read_bytes() == b'revoked fixture\n'
-    creator = (tmp_path / 'repos/OPNsense-creator.conf').read_text()
+    assert not (tmp_path / 'repos/OPNsense-creator.conf').exists()
+    creator = (tmp_path / 'repos/target-pkg/OPNsense-creator.conf').read_text()
     release = json.loads(target.read_text())['release']
     assert f'/{series}/MINT/{release}/latest' in creator
-    assert 'OPNsense-creator:' in creator and 'enabled: no' in creator
+    assert 'OPNsense-creator:' in creator and 'enabled: yes' in creator
     assert 'signature_type: "fingerprints"' in creator

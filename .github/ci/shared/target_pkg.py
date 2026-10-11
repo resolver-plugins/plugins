@@ -194,12 +194,15 @@ def downloaded_archive(directory: Path, filename: str) -> Path:
 
 def fetch_target_pkg(target: TargetPackage, pkg_command: str, repository: str, output: Path) -> Path:
     for selected in (repository, 'OPNsense-creator'):
-        run([pkg_command, 'update', '-f', '-r', selected])
-        rows = run([pkg_command, 'rquery', '-U', '-r', selected, '-e', '%n = pkg', '%n|%v|%o|%q']).stdout.splitlines()
+        command = [pkg_command]
+        if selected == 'OPNsense-creator':
+            command += ['-R', str(Path(os.environ.get('PKG_REPOS_DIR', '/usr/local/etc/pkg/repos')) / 'target-pkg')]
+        run([*command, 'update', '-f', '-r', selected])
+        rows = run([*command, 'rquery', '-U', '-r', selected, '-e', '%n = pkg', '%n|%v|%o|%q']).stdout.splitlines()
         if any(len(row.split('|')) != 4 or not all(row.split('|')) for row in rows):
             raise TargetPackageError('malformed authenticated pkg catalogue identity')
         if '|'.join(asdict(target.identity).values()) in rows:
-            run([pkg_command, 'fetch', '-U', '-y', '-r', selected, '-o', str(output),
+            run([*command, 'fetch', '-U', '-y', '-r', selected, '-o', str(output),
                  target.filename.removesuffix('.pkg')])
             return downloaded_archive(output, target.filename)
     raise TargetPackageError(f'{target.role} release {target.release}: {target.record()} absent from {selected}')

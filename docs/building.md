@@ -140,8 +140,11 @@ creator archive or binary bytes.
 
 Repository setup loads the pinned core's trusted and revoked fingerprints.
 Selection first queries the authenticated ordinary OPNsense feed for the exact
-recipe identity. A successful query with no match permits the disabled
-`OPNsense-creator` feed at `<series>/MINT/<resolved-release>/latest`. Update,
+recipe identity. A successful query with no match permits the isolated
+`OPNsense-creator` feed at `<series>/MINT/<resolved-release>/latest`. Its enabled
+configuration lives under `repos/target-pkg` and is loaded only by explicit
+`pkg -R` selection commands. This lets older pkg versions refresh its database
+without adding the archive to ordinary dependency installation. Update,
 query and fetch errors stop selection; there is no raw-download or latest-version
 fallback. The ordinary dependency snapshot remains independent, including HA's
 reviewed `26.7.4` snapshot.
@@ -165,7 +168,7 @@ python3 .github/ci/shared/target_pkg.py verify "$RP_TARGET_PKG_METADATA" "$serie
 
 Installation qualification uses the separate reader record with `--role reader`
 and the same upstream profile. Set `RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA"`
-on repository setup for that VM, so its disabled feed selects the reader release.
+on repository setup for that VM, so its isolated feed selects the reader release.
 Do not resolve tags again in consumer jobs.
 
 New BIND provenance uses schema 4 and channels use schema 5; HA channels use
