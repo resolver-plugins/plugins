@@ -29,11 +29,10 @@ def pkg_fixture(output: str) -> Iterator[Path]:
         yield executable
 
 
-@pytest.mark.parametrize("prefix", ["", "1$", "2$"])
-def test_accepts_complete_target_readable_file_checksums(tmp_path: Path, prefix: str) -> None:
+@pytest.mark.parametrize("checksum", ["a" * 64, "1$" + "a" * 64, "2$" + "y" * 103])
+def test_accepts_complete_target_readable_file_checksums(tmp_path: Path, checksum: str) -> None:
     archive = tmp_path / "bind920.pkg"
     archive.touch()
-    checksum = prefix + "a" * 64
     with pkg_fixture(f"/usr/local/sbin/named|{checksum}\n") as pkg:
         rows = package_checksums.verify_archive(str(pkg), archive)
 

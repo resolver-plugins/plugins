@@ -409,23 +409,23 @@ jobs:
             python3 .github/ci/shared/release_channel.py validate-build-metadata --metadata "$output/build-metadata.txt" --upstream .resolver-plugins/upstream.json --provenance "$output/bind920-provenance.json" --series "$series" --source-commit '${{ needs.profile.outputs.source_commit }}' --target-pkg-metadata "$RP_TARGET_PKG_METADATA"
             RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            pkg install -y -r OPNsense opnsense os-bind
+            pkg install -y -r OPNsense pkg opnsense os-bind
+            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             install -d -m 0750 /conf
             if [ ! -e /conf/config.xml ]; then
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             dependencies=$(
               for package in "$output"/*.pkg; do
                 /usr/local/sbin/pkg-static query -F "$package" '%dn'
               done | awk '$0 != "bind-tools" && $0 != "bind920" && $0 != "os-bind-rp" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
-              pkg install -y -r OPNsense $dependencies
+              /usr/local/sbin/pkg-static install -y -r OPNsense $dependencies
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             python3 .github/ci/shared/package_checksums.py \
               --pkg-command /usr/local/sbin/pkg-static \
               "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg "$output"/os-bind-rp-*.pkg
@@ -439,16 +439,25 @@ jobs:
             }
             EOF
             /usr/local/sbin/pkg-static update -r resolver-plugins-development
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            /usr/local/sbin/pkg-static install -y -r resolver-plugins-development bind-tools bind920 os-bind-rp
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            set --
+            for archive in "$output"/bind-tools-*.pkg "$output"/bind920-*.pkg "$output"/os-bind-rp-*.pkg; do
+              set -- "$@" "$(/usr/local/sbin/pkg-static query -F "$archive" '%n-%v')"
+            done
+            /usr/local/sbin/pkg-static install -f -y -r resolver-plugins-development "$@"
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            [ -z "$(/usr/local/sbin/pkg-static query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
-              pkg query -e "%n = $package" '%n-%v'
-              pkg query -e "%n = $package" '%Fp|%Fs' |
+              set -- "$output/$package"-*.pkg
+              [ "$#" -eq 1 ] && [ -f "$1" ]
+              expected_identity=$(/usr/local/sbin/pkg-static query -F "$1" '%n|%v|%o')
+              installed_identity=$(/usr/local/sbin/pkg-static query -e "%n = $package" '%n|%v|%o')
+              [ "$installed_identity" = "$expected_identity" ]
+              printf '%s\n' "$installed_identity"
+              /usr/local/sbin/pkg-static query -e "%n = $package" '%Fp|%Fs' |
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
-            pkg check -s bind-tools bind920 os-bind-rp
+            /usr/local/sbin/pkg-static check -s bind-tools bind920 os-bind-rp
             .github/ci/bind/verify-bind-runtime.sh
 
   publish-development:
@@ -729,14 +738,14 @@ jobs:
             done
             RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            pkg install -y -r OPNsense opnsense os-bind
+            pkg install -y -r OPNsense pkg opnsense os-bind
+            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             install -d -m 0750 /conf
             if [ ! -e /conf/config.xml ]; then
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             dependencies=$(
               for package in \
                 "$root"/current/bind-tools-*.pkg \
@@ -747,9 +756,9 @@ jobs:
               done | awk '$0 != "bind-tools" && $0 != "bind920" && $0 != "os-bind-rp" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
-              pkg install -y -r OPNsense $dependencies
+              /usr/local/sbin/pkg-static install -y -r OPNsense $dependencies
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             python3 .github/ci/shared/package_checksums.py \
               --pkg-command /usr/local/sbin/pkg-static \
               "$root"/current/bind-tools-*.pkg "$root"/current/bind920-*.pkg \
@@ -767,20 +776,29 @@ jobs:
               enabled: yes
             }
             EOF
-            pkg update -r resolver-plugins
+            /usr/local/sbin/pkg-static update -r resolver-plugins
             for package in bind-tools bind920 os-bind-rp; do
-              pkg rquery -r resolver-plugins -e "%n = $package" '%n-%v'
+              /usr/local/sbin/pkg-static rquery -r resolver-plugins -e "%n = $package" '%n-%v'
             done
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            /usr/local/sbin/pkg-static install -y -r resolver-plugins bind-tools bind920 os-bind-rp
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            set --
+            for archive in "$root/current"/bind-tools-*.pkg "$root/current"/bind920-*.pkg "$root/current"/os-bind-rp-*.pkg; do
+              set -- "$@" "$(/usr/local/sbin/pkg-static query -F "$archive" '%n-%v')"
+            done
+            /usr/local/sbin/pkg-static install -f -y -r resolver-plugins "$@"
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            [ -z "$(/usr/local/sbin/pkg-static query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
-              pkg query -e "%n = $package" '%n-%v'
-              pkg query -e "%n = $package" '%Fp|%Fs' |
+              set -- "$root/current/$package"-*.pkg
+              [ "$#" -eq 1 ] && [ -f "$1" ]
+              expected_identity=$(/usr/local/sbin/pkg-static query -F "$1" '%n|%v|%o')
+              installed_identity=$(/usr/local/sbin/pkg-static query -e "%n = $package" '%n|%v|%o')
+              [ "$installed_identity" = "$expected_identity" ]
+              printf '%s\n' "$installed_identity"
+              /usr/local/sbin/pkg-static query -e "%n = $package" '%Fp|%Fs' |
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
-            pkg check -s bind-tools bind920 os-bind-rp
+            /usr/local/sbin/pkg-static check -s bind-tools bind920 os-bind-rp
             .github/ci/bind/verify-bind-runtime.sh
             cat > /usr/local/etc/pkg/repos/resolver-plugins-rollback.conf <<EOF
             resolver-plugins-rollback: {
@@ -791,13 +809,13 @@ jobs:
               enabled: yes
             }
             EOF
-            pkg update -r resolver-plugins-rollback
+            /usr/local/sbin/pkg-static update -r resolver-plugins-rollback
             for package in bind-tools bind920 os-bind-rp; do
-              pkg rquery -r resolver-plugins-rollback -e "%n = $package" '%n-%v'
+              /usr/local/sbin/pkg-static rquery -r resolver-plugins-rollback -e "%n = $package" '%n-%v'
             done
             /usr/local/sbin/pkg-static install -f -y -r resolver-plugins-rollback os-bind-rp
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            pkg query -e '%n = os-bind-rp' '%n-%v'
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            /usr/local/sbin/pkg-static query -e '%n = os-bind-rp' '%n-%v'
 
   verify-published:
     if: needs.select.outputs.mode == 'production'
@@ -864,8 +882,8 @@ jobs:
             repository_url="https://resolver-plugins.github.io/repository/pkg/\${ABI}/$series/latest"
             RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
             pkg update -f
-            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            pkg install -y -r OPNsense opnsense os-bind
+            pkg install -y -r OPNsense pkg opnsense os-bind
+            python3 .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
             export SSL_CERT_FILE
             test -r "$SSL_CERT_FILE"
@@ -874,7 +892,7 @@ jobs:
               printf '%s\n' '<opnsense/>' > /conf/config.xml
               chmod 0640 /conf/config.xml
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             expected_identities=$(
               for archive in \
                 "$root"/bind-tools-*.pkg \
@@ -908,24 +926,24 @@ jobs:
               enabled: yes
             }
             EOF
-            pkg update -f -r resolver-plugins
+            /usr/local/sbin/pkg-static update -f -r resolver-plugins
             channel_identities=$(
               for package in bind-tools bind920 os-bind-rp; do
-                pkg rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o'
+                /usr/local/sbin/pkg-static rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o'
               done | sort
             )
             [ "$channel_identities" = "$expected_identities" ]
             dependencies=$(
               for package in bind-tools bind920 os-bind-rp; do
-                pkg rquery -r resolver-plugins -e "%n = $package" '%dn'
+                /usr/local/sbin/pkg-static rquery -r resolver-plugins -e "%n = $package" '%dn'
               done | awk '$0 != "bind-tools" && $0 != "bind920" && $0 != "os-bind-rp" && !seen[$0]++'
             )
             if [ -n "$dependencies" ]; then
               printf '%s\n' "$dependencies" | while IFS= read -r dependency; do
-                pkg install -y -r OPNsense "$dependency"
+                /usr/local/sbin/pkg-static install -y -r OPNsense "$dependency"
               done
             fi
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
             shim="$PWD/.published-channel-bin"
             approval="$PWD/.published-channel-approval"
             install -d -m 0755 "$shim"
@@ -950,9 +968,28 @@ jobs:
             exec /usr/local/sbin/pkg-static "$@"
             EOF
             chmod 0755 "$shim/observe-pkg-static"
+            expected_installed=$expected_identities
+            preserve_bind=yes
+            for package in bind-tools bind920; do
+              set -- "$root"/"$package"-*.pkg
+              candidate_version=$(/usr/local/sbin/pkg-static query -F "$1" '%v')
+              native_version=$(/usr/local/sbin/pkg-static query -e "%n = $package" '%v')
+              case "$(/usr/local/sbin/pkg-static version -t "$native_version" "$candidate_version")" in
+                '='|'>') ;;
+                *) preserve_bind=no ;;
+              esac
+            done
+            if [ "$preserve_bind" = yes ]; then
+              expected_installed=$(
+                /usr/local/sbin/pkg-static query -e '%n = bind-tools || %n = bind920' '%n|%v|%o'
+                /usr/local/sbin/pkg-static query -F "$root"/os-bind-rp-*.pkg '%n|%v|%o'
+              )
+              expected_installed=$(printf '%s\n' "$expected_installed" | sort)
+            fi
             RP_STATE_DIRECTORY="$state_directory" RP_TEMPORARY_DIRECTORY="$transaction_directory" \
               RP_PUBLISHED_PKG_LOG="$pkg_log" \
               PATH="$shim:$PATH" RP_TTY_PATH="$approval" \
+              RP_PKG_COMMAND=/usr/local/sbin/pkg-static \
               RP_PKG_STATIC_COMMAND="$shim/observe-pkg-static" scripts/install-os-bind-rp.sh
             test "$(stat -f %Lp "$state_directory")" = 700
             test "$(sha256 -q "$state_directory/config.xml.bak")" = "$config_sha256"
@@ -971,8 +1008,8 @@ jobs:
                 if (index($0, " os-bind-rp-")) installed = 1
               }
               END { if (!planned || !installed) exit 1 }' "$pkg_log"
-            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader
-            [ -z "$(pkg query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
+            python3 .github/ci/shared/target_pkg.py verify "$RP_READER_PKG_METADATA" "$series" --upstream .resolver-plugins/upstream.json --role reader --pkg-command /usr/local/sbin/pkg-static
+            [ -z "$(/usr/local/sbin/pkg-static query -e '%n = os-bind' '%n' 2>/dev/null || true)" ]
             for package in bind-tools bind920 os-bind-rp; do
               case "$package" in
                 bind-tools) expected_origin=dns/bind-tools ;;
@@ -982,17 +1019,19 @@ jobs:
               set -- "$root"/"$package"-*.pkg
               [ "$#" -eq 1 ] && [ -f "$1" ]
               archive=$1
-              expected_identity=$(pkg query -F "$archive" '%n|%v|%o')
-              channel_identity=$(pkg rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o')
-              installed_identity=$(pkg query -e "%n = $package" '%n|%v|%o')
+              expected_identity=$(/usr/local/sbin/pkg-static query -F "$archive" '%n|%v|%o')
+              channel_identity=$(/usr/local/sbin/pkg-static rquery -r resolver-plugins -e "%n = $package" '%n|%v|%o')
+              installed_identity=$(/usr/local/sbin/pkg-static query -e "%n = $package" '%n|%v|%o')
               [ "$channel_identity" = "$expected_identity" ]
               [ "${channel_identity##*|}" = "$expected_origin" ]
-              [ "$installed_identity" = "$channel_identity" ]
+              [ "${installed_identity##*|}" = "$expected_origin" ]
               printf '%s\n' "$installed_identity"
-              pkg query -e "%n = $package" '%Fp|%Fs' |
+              /usr/local/sbin/pkg-static query -e "%n = $package" '%Fp|%Fs' |
                 awk -F '|' 'NF != 2 || $2 == "" || $2 == "(null)" { exit 1 } END { if (NR == 0) exit 1 }'
             done
-            pkg check -s bind-tools bind920 os-bind-rp
+            installed_identities=$(/usr/local/sbin/pkg-static query -e '%n = bind-tools || %n = bind920 || %n = os-bind-rp' '%n|%v|%o' | sort)
+            [ "$installed_identities" = "$expected_installed" ]
+            /usr/local/sbin/pkg-static check -s bind-tools bind920 os-bind-rp
             .github/ci/bind/verify-bind-runtime.sh
 
   source-release:

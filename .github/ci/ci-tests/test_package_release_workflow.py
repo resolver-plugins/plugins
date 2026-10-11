@@ -1,4 +1,5 @@
 from git_fixtures import *
+from module_fixtures import load_module
 
 from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs
 
@@ -230,12 +231,13 @@ def test_published_channel_is_installed_from_github_in_freebsd():
     assert 'repository_url="https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest"' in verifier
     assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
     assert '[ "$channel_identities" = "$expected_identities" ]' in verifier
-    assert verifier.index('pkg install -y -r OPNsense opnsense os-bind') < verifier.index(
+    assert verifier.index('pkg install -y -r OPNsense pkg opnsense os-bind') < verifier.index(
         'RP_PKG_STATIC_COMMAND="$shim/observe-pkg-static" scripts/install-os-bind-rp.sh'
     )
     assert '[ "$channel_identity" = "$expected_identity" ]' in verifier
-    assert '[ "$installed_identity" = "$channel_identity" ]' in verifier
-    assert verifier.index('verify-abi-endpoint') < verifier.index('pkg update -f -r resolver-plugins')
+    assert '[ "$installed_identities" = "$expected_installed" ]' in verifier
+    assert 'RP_PKG_COMMAND=/usr/local/sbin/pkg-static' in verifier
+    assert verifier.index('verify-abi-endpoint') < verifier.index('/usr/local/sbin/pkg-static update -f -r resolver-plugins')
     assert 'test "$(stat -f %Lp "$state_directory")" = 700' in verifier
     assert '[ "$(sha256 -q "$root/$identity.pkg")" = "$digest" ]' in verifier
 
@@ -271,23 +273,28 @@ def test_source_release_contains_only_plugin_and_build_metadata():
 @pytest.mark.parametrize('job', ['verify-development', 'verify', 'verify-published'])
 def test_freebsd_install_gates_pin_verify_and_replace_official_packages(job):
     verifier = job_text(workflow_text(), job)
-    official = 'pkg install -y -r OPNsense opnsense os-bind'
+    reader = '/usr/local/sbin/pkg-static'
+    official = 'pkg install -y -r OPNsense pkg opnsense os-bind'
     checksums = 'package_checksums.py'
     runtime = '.github/ci/bind/verify-bind-runtime.sh'
     for required in (
         'target_pkg.py verify', '--pkg-command /usr/local/sbin/pkg-static',
-        "[ -z \"$(pkg query -e '%n = os-bind' '%n'",
-        "pkg query -e \"%n = $package\" '%Fp|%Fs'", '$2 == "(null)"',
+        f"[ -z \"$({reader} query -e '%n = os-bind' '%n'",
+        f"{reader} query -e \"%n = $package\" '%Fp|%Fs'", '$2 == "(null)"',
     ):
         assert required in verifier
     assert verifier.index('.github/ci/shared/setup-opnsense-repository.sh') < verifier.index(
-        'target_pkg.py install'
-    ) < verifier.index(official) < verifier.index(checksums)
+        official
+    ) < verifier.index('target_pkg.py install') < verifier.index(checksums)
     for line in verifier.splitlines():
         if 'target_pkg.py install' in line or 'target_pkg.py verify' in line:
             assert '"$RP_READER_PKG_METADATA"' in line and '--role reader' in line and '--upstream .resolver-plugins/upstream.json' in line
+            assert f'--pkg-command {reader}' in line
     assert 'RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=' in verifier
-    assert verifier.index('pkg check -s bind-tools bind920 os-bind-rp') < verifier.index(runtime)
+    assert verifier.index(f'{reader} check -s bind-tools bind920 os-bind-rp') < verifier.index(runtime)
+    if job != 'verify-published':
+        assert f'{reader} install -f -y -r ' in verifier and '"$@"' in verifier
+        assert '[ "$installed_identity" = "$expected_identity" ]' in verifier
 
 
 @pytest.mark.parametrize('workflow', ['bind-package-release.yml', 'ha-dhcp-interface-release.yml'])
@@ -295,7 +302,7 @@ def test_freebsd_install_gates_pin_verify_and_replace_official_packages(job):
 def test_control_bundle_preflight_rejects_changed_records(tmp_path, workflow, changed):
     """Run the real signing preflight; valid substituted records must fail their digest."""
     from package_fixtures import write_resolved_target, write_json
-    from shared import target_pkg
+    target_pkg = load_module('workflow_target_pkg', 'shared/target_pkg.py', register=True)
     trusted = tmp_path / 'artifacts/trusted'
     trusted.mkdir(parents=True)
     upstream = write_json(trusted / 'upstream.json', upstream_profile('26.7'))

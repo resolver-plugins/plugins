@@ -190,8 +190,9 @@ attempts to restore that service before the installer reports the failure;
 confirm the actual service state before taking recovery action.
 
 After replacement, the installer requires the official package to be absent,
-checks exact Resolver package origins, verifies ownership of archive-listed
-paths, rejects null installed-file checksums, and runs a scoped
+checks exact Resolver package origins and retained BIND identities, verifies
+ownership of paths listed in archives installed by the transaction, rejects null
+installed-file checksums, and runs a scoped
 `pkg check -s`. The operator must still validate the generated configuration,
 all managed zones, authoritative answers, and the service state after package
 installation.
@@ -346,12 +347,16 @@ tooling. Retire that tooling after verification; keep historical snapshot assets
 unchanged and available to `pkg`. This preserves BIND-only and source promotions
 while rejecting stale runs even after snapshot pruning.
 
-After promotion, a fresh FreeBSD VM configures the pinned OPNsense repository,
-installs its matching core package, and runs `scripts/install-os-bind-rp.sh`
-against the published ABI-aware URL. It verifies the installed
-`bind-tools`, `bind920`, and `os-bind-rp` identities against the staged package
-archives and requires the public `channel.json` to match the staged bytes. The
-immutable source release is created only after this exact public-channel
+After promotion, a fresh FreeBSD VM configures the selected series' OPNsense
+repository, prepares its core and official `os-bind` with the current package
+manager, then selects the verified minimum `pkg-static` reader. It runs
+`scripts/install-os-bind-rp.sh` against the published ABI-aware URL. It compares
+catalogue identities with the staged archives and requires the exact plugin
+identity. For the BIND pair, it verifies either preservation of compatible
+upstream packages at or above the staged versions or installation of the staged
+pair, as the installer requires.
+It also requires the public `channel.json` to match the staged bytes. The
+immutable source release is created only after this verified public-channel
 installation succeeds, using the same verified plugin archive and build
 metadata from the signed channel artifact. Retrying that source release is a
 no-op when both assets are byte-identical; an existing tag with different
@@ -381,10 +386,14 @@ The published installation gate also checks the installer's mode-0700 durable
 state directory and the configuration backup's original bytes and mode. It keeps
 the caller-owned temporary archives, compares their recorded hashes with both
 the fetched and staged packages, and observes the isolated repository dry run
-before the installer's live transaction. It checks every installed package's file checksums.
+before the installer's live transaction. Archive ownership checks cover packages
+installed from those archives. Retained BIND packages must keep their original
+identities, and all three installed BIND/plugin packages pass file checksum checks.
 These observations qualify only the selected series in a successful native run;
 both 26.1 and 26.7 need successful runs before retiring the corresponding local
 official-replacement regression test.
+These stock FreeBSD VM checks cover packages, catalogues and BIND runtime;
+appliance UI and PHP plugin migrations require separate appliance qualification.
 
 If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
 the replacement public key, and republish every channel for every supported

@@ -14,7 +14,10 @@ class PackageChecksumError(ValueError):
     """A package archive has no complete target-readable file checksum set."""
 
 
-CHECKSUM_PATTERN = re.compile(r"(?:[12]\$)?[0-9a-fA-F]{64}")
+# pkg type 1 is SHA256 hex; type 2 is BLAKE2b encoded with z-base32.
+CHECKSUM_PATTERN = re.compile(
+    r"(?:1\$)?[0-9a-fA-F]{64}|2\$[ybndrfg8ejkmcpqxot1uwisza345h769]{103}"
+)
 
 
 def archive_file_checksums(

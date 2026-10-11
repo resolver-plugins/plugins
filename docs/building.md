@@ -170,6 +170,16 @@ Installation qualification uses the separate reader record with `--role reader`
 and the same upstream profile. Set `RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA"`
 on repository setup for that VM, so its isolated feed selects the reader release.
 Do not resolve tags again in consumer jobs.
+Native BIND qualification prepares OPNsense and official `os-bind` with the
+current OPNsense package manager before selecting the minimum reader. It then
+uses that reader's verified `pkg-static` for catalogue, installation and rollback
+operations. The shipped installer uses this same executable.
+Local qualification requests each built package's exact version and compares its
+installed identity with the archive. Public installer qualification also checks
+the supported behavior of keeping a newer compatible upstream BIND pair.
+File checksum validation accepts SHA256 hex and BLAKE2b z-base32, as supported
+by the [minimum reader's checksum implementation](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkg_checksum.c).
+Installed file contents still require a successful `pkg check -s`.
 
 New BIND provenance uses schema 4 and channels use schema 5; HA channels use
 schema 2. `package_creator` contains name, full version, origin and ABI.

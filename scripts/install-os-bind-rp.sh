@@ -5,6 +5,8 @@ set -eu
 readonly minimum_bind920_version=9.20.26
 readonly public_key_sha256=bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e
 readonly repository_base_url=https://resolver-plugins.github.io/repository/pkg
+# pkg uses legacy/SHA256 hex and type-2 BLAKE2b z-base32 file digests.
+readonly file_checksum_pattern='^((1\$)?[[:xdigit:]]{64}|2\$[ybndrfg8ejkmcpqxot1uwisza345h769]{103})$'
 
 state_directory=
 temporary_directory=
@@ -460,7 +462,7 @@ verify_archive_manifest() {
     while IFS='|' read -r file_path file_checksum extra
     do
         if [ -z "$file_path" ] || [ -n "${extra:-}" ] || \
-            ! printf '%s\n' "$file_checksum" | grep -Eq '^([12]\$)?[[:xdigit:]]{64}$'
+            ! printf '%s\n' "$file_checksum" | grep -Eq "$file_checksum_pattern"
         then
             fail "incompatible file checksum in $identity for ${file_path:-unknown}: ${file_checksum:-(null)}"
         fi
@@ -590,6 +592,11 @@ verify_archive_ownership() {
     while IFS='|' read -r identity file_path file_checksum archive
     do
         package_name=${identity%-*}
+        # Unused fallback archives do not describe retained upstream files.
+        if [ "$bind_update_required" = no ] && [ "$package_name" != os-bind-rp ]
+        then
+            continue
+        fi
         installed_identity=$(installed_record "$package_name")
         installed_version=$(package_field "$installed_identity" 2)
         expected_owner="$package_name-$installed_version"
@@ -609,7 +616,7 @@ verify_installed_checksums() {
     while IFS='|' read -r file_path file_checksum extra
     do
         if [ -z "$file_path" ] || [ -n "${extra:-}" ] || \
-            ! printf '%s\n' "$file_checksum" | grep -Eq '^([12]\$)?[[:xdigit:]]{64}$'
+            ! printf '%s\n' "$file_checksum" | grep -Eq "$file_checksum_pattern"
         then
             fail "incompatible installed file checksum in $package_name for ${file_path:-unknown}: ${file_checksum:-(null)}"
         fi
@@ -762,6 +769,9 @@ if [ "$bind_update_required" = yes ]
 then
     verify_installed_record "$candidate_bind920"
     verify_installed_record "$candidate_bind_tools"
+else
+    verify_installed_record "$bind920"
+    verify_installed_record "$bind_tools"
 fi
 verify_archive_ownership
 for installed_package in bind-tools bind920 os-bind-rp
