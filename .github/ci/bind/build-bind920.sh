@@ -49,7 +49,7 @@ pkg_creator_record=$("$python_command" "$script_directory/../shared/target_pkg.p
     --pkg-static "$pkg_static") || fail 'cannot select target package creator'
 [ -n "$pkg_creator_record" ] || fail 'target package creator record is empty'
 "$pkg_command" install -y autoconf automake fstrm gmake json-c libedit libidn2 \
-    libnghttp2 libtool liburcu libuv libxml2 lmdb0 pkgconf protobuf-c
+    libnghttp2 libtool liburcu libuv libxml2 lmdb pkgconf protobuf-c
 "$python_command" "$script_directory/../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
