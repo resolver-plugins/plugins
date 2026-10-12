@@ -37,7 +37,9 @@ def make_ports_recipe(directory, version='9.20.26_2'):
     from git_fixtures import init_repository, commit
     repository = init_repository(directory)
     distversion, _, revision = version.partition('_')
-    makefile = f'PORTNAME= bind\nDISTVERSION= {distversion}\nPORTREVISION= {revision or 0}\n'.encode()
+    makefile = (f'PORTNAME= bind\nDISTVERSION= {distversion}\n'
+                f'.if defined(BIND_TOOLS_SLAVE)\nPORTREVISION= {revision or 0}\n'
+                f'.else\nPORTREVISION= {revision or 0}\n.endif\n').encode()
     distinfo = f'SHA256 (bind-{distversion}.tar.xz) = {"c" * 64}\n'.encode()
     selected = commit(repository, {'dns/bind920/Makefile': makefile.decode(),
                                    'dns/bind920/distinfo': distinfo.decode()}, 'approved recipe')

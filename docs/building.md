@@ -27,7 +27,8 @@ The control commit's `dns/bind/Makefile` approves the runtime with
 FreeBSD Ports object and generates `bind920-profile.json` from its Makefile and
 distinfo Git blobs, including their SHA-256 hashes and declared version/revision.
 The recipe must already declare the approved native version; the builder does
-not rewrite PORTREVISION. Each plugin's release-source Makefile independently
+not rewrite PORTREVISION. Matching master and tools revision declarations are
+supported; conflicting revisions stop input selection. Each plugin's release-source Makefile independently
 owns its BIND minimum, official-plugin conflict and OPNsense floor.
 
 The controller also verifies the source profile against its exact numeric tools

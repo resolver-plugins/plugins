@@ -67,12 +67,15 @@ def profile_from_recipe(approval: dict[str, str], resolved_commit: str,
     declarations = {}
     for field in ("DISTVERSION", "PORTREVISION"):
         lines = [line for line in text.splitlines() if re.match(rf"\s*{field}\s*[?+:!]?=", line)]
-        if len(lines) > 1 or field == "DISTVERSION" and not lines:
+        if field == "DISTVERSION" and len(lines) != 1:
             raise ValueError(f"missing or ambiguous recipe {field}")
-        match = re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", lines[0]) if lines else None
-        if lines and match is None:
+        matches = [re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", line) for line in lines]
+        if any(match is None for match in matches):
             raise ValueError(f"recipe {field} must be literal")
-        declarations[field] = match[1].strip() if match else "0"
+        values = {match[1].strip() for match in matches}
+        if len(values) > 1:
+            raise ValueError(f"missing or ambiguous recipe {field}")
+        declarations[field] = next(iter(values), "0")
     if re.fullmatch(r"[0-9]+", declarations["PORTREVISION"]) is None:
         raise ValueError("invalid recipe PORTREVISION")
     profile = validate_profile(dict(
