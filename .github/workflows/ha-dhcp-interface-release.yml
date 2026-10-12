@@ -38,6 +38,7 @@ jobs:
       target_artifact_id: ${{ steps.pkg-targets.outputs.artifact-id }}
       creator_target_sha256: ${{ steps.profile.outputs.creator_target_sha256 }}
       reader_target_sha256: ${{ steps.profile.outputs.reader_target_sha256 }}
+      bind_inputs_sha256: ${{ steps.profile.outputs.bind_inputs_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -63,15 +64,20 @@ jobs:
           printf 'profile_commit=%s\nfreebsd_release=%s\n' "$profile_commit" "$freebsd_release" >> "$GITHUB_OUTPUT"
 
           python3 .github/ci/shared/target_pkg.py resolve --upstream "$RUNNER_TEMP/upstream.json" --series "$SERIES" --architecture x86_64 --output-directory artifacts/trusted
+          tools_tag=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" tools_tag)
+          git init --bare "$RUNNER_TEMP/opnsense-tools"
+          git -C "$RUNNER_TEMP/opnsense-tools" fetch --depth=1 https://github.com/opnsense/tools.git "refs/tags/$tools_tag:refs/tags/$tools_tag"
+          bind_inputs_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py bind-inputs \
+            --series "$SERIES" --directory artifacts/trusted --upstream "$RUNNER_TEMP/upstream.json" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" --control-commit "$(git rev-parse HEAD)")
+          printf 'bind_inputs_sha256=%s\n' "$bind_inputs_sha256" >> "$GITHUB_OUTPUT"
           printf 'creator_target_sha256=%s\nreader_target_sha256=%s\n' "$(sha256sum artifacts/trusted/creator-target.json | cut -d ' ' -f1)" "$(sha256sum artifacts/trusted/reader-target.json | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - id: pkg-targets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: steps.select.outputs.release == 'true'
         with:
           name: pkg-targets-dhcp-${{ steps.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/trusted/creator-target.json
-            artifacts/trusted/reader-target.json
+          path: artifacts/trusted
           if-no-files-found: error
           retention-days: 7
 
@@ -114,6 +120,9 @@ jobs:
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role reader
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-bind-inputs \
+            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/profile/upstream.json \
+            --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Build and verify in FreeBSD
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -190,6 +199,9 @@ jobs:
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-bind-inputs \
+            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
+            --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Bind source to trusted workflow
         env:
           SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
@@ -259,7 +271,9 @@ jobs:
             package_catalogue.authenticate_components(
                 Path('artifacts') / series / 'bind-runtime',
                 Path('artifacts') / series / 'bind-plugin', None,
-                series=series, reader_target=reader, upstream=upstream, pkg_command=pkg)
+                series=series, reader_target=reader, upstream=upstream, pkg_command=pkg,
+                approved_profile=Path('artifacts/trusted/bind920-profile.json'),
+                runtime_approval=Path('artifacts/trusted/runtime-approval.mk'))
             components.select_role(upstream, Path(os.environ['RP_TARGET_PKG_METADATA']), series, 'creator', pkg)
             PY
             umask 077
@@ -276,6 +290,7 @@ jobs:
               --runtime-channel "artifacts/$SERIES/bind-runtime" --plugin-channel "artifacts/$SERIES/bind-plugin" \
               --dhcp-channel "artifacts/$SERIES/repository/current" --output "artifacts/$SERIES/repository/combined" \
               --series "$SERIES" --key "$key" --creator-target "$RP_TARGET_PKG_METADATA" --upstream artifacts/trusted/upstream.json \
+              --approved-profile artifacts/trusted/bind920-profile.json --runtime-approval artifacts/trusted/runtime-approval.mk \
               --owner dhcp --composition-output "artifacts/$SERIES/repository/composition-inputs.json" --repository resolver-plugins/repository
             rm -f "$key"
       - name: Seal composition from signer artifact
@@ -341,6 +356,9 @@ jobs:
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-bind-inputs \
+            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
+            --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Verify signed installation
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
@@ -490,6 +508,9 @@ jobs:
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-bind-inputs \
+            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
+            --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Verify installation from public signed channel
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:

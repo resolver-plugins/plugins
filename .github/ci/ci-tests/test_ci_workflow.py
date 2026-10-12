@@ -11,7 +11,7 @@ def test_pr_workflow_runs_the_full_suite_without_publication_authority():
     assert re.search(r'^  pull_request:$', header, re.MULTILINE)
     assert not re.search(r'^  pull_request_target:', header, re.MULTILINE)
     patterns = trigger_paths(workflow, 'pull_request')
-    for path in ('.github/ci/example.py', '.github/workflows/example.yml', '.resolver-plugins/bind920.json',
+    for path in ('.github/ci/example.py', '.github/workflows/example.yml',
                  'dns/bind/Makefile', 'net/dhcp-interface-ha/Makefile', 'Mk/plugins.mk',
                  'Scripts/version.sh', 'Templates/plugin.in', 'scripts/install-os-bind-rp.sh',
                  'docs/package-repository/resolver-plugins.pub'):

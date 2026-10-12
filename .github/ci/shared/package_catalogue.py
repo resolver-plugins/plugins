@@ -122,7 +122,8 @@ def verify_repository(packages, url, *, pkg_command, unsigned=False):
 
 
 
-def authenticate_components(runtime, plugin, ha, *, series, reader_target, upstream, pkg_command):
+def authenticate_components(runtime, plugin, ha, *, series, reader_target, upstream,
+                            approved_profile, runtime_approval, pkg_command):
     target = target_pkg.load_target(reader_target,series,upstream=upstream,role="reader")
     target_pkg.verify_target_pkg(target,pkg_command,pkg_static_path=Path(pkg_command))
     directories = {"bind_runtime":runtime,"bind_plugin":plugin}
@@ -143,27 +144,29 @@ def authenticate_components(runtime, plugin, ha, *, series, reader_target, upstr
         verify_packages(selected,directory.resolve().as_uri(),reader_target,upstream,pkg_command=pkg_command)
         packages.extend(selected)
         records[component] = component_record(receipt(directory,component,series))
-    approved = bind.bind920_profile.load_profile(ROOT / ".resolver-plugins/bind920.json")
-    policy = bind.bind_compatibility.load_policy(ROOT / ".resolver-plugins/bind-compatibility.json")
+    approved = bind.bind920_profile.load_profile(approved_profile)
+    approval = bind.bind920_profile.approval_from_makefile(runtime_approval.read_text())
+    target_upstream = metadata_profile.validate_profile(json.loads(upstream.read_text()), series)
     version=bind.bind920_profile.package_version(approved)
-    if (json.loads((runtime / "bind920-profile.json").read_text()) != approved
-            or json.loads((runtime / "bind920-provenance.json").read_text())["freebsd_release"] != bind.bind_compatibility.freebsd_release(policy,series)
-            or not bind.bind_compatibility.is_eligible(policy,("bind920",version,"dns/bind920"),
-                ("bind-tools",version,"dns/bind-tools"),bind.compare_runtime_versions)):
-        raise ValueError("runtime differs from approved recipe or policy")
-    original_policy = json.loads((plugin / "bind-compatibility.json").read_text())
-    if bind.compare_runtime_versions(bind.bind920_profile.package_version(approved),original_policy["minimum_version"]) == "<":
+    if (approved["ports_commit"] != approval["ports_commit"] or version != approval["version"]
+            or json.loads((runtime / "bind920-profile.json").read_text()) != approved
+            or json.loads((runtime / "bind920-provenance.json").read_text())["freebsd_release"] != target_upstream["freebsd_release"]):
+        raise ValueError("runtime differs from approved recipe or upstream target")
+    requirement = bind.plugin_requirement_from_makefile((plugin / "plugin-package.mk").read_text())
+    if bind.compare_native_versions(pkg_command,version,requirement["minimum_version"]) == "<":
         raise ValueError("runtime does not satisfy retained plugin dependency")
     if len({path.name for path in packages}) != len(packages):
         raise ValueError("component package filenames collide")
     return packages,records
 
 
-def _stage(runtime, plugin, ha, output, *, series, key, creator_target, upstream, stack):
+def _stage(runtime, plugin, ha, output, *, series, key, creator_target, upstream,
+           approved_profile, runtime_approval, stack):
     reader_target=creator_target.parent / "reader-target.json"
     bind.select_role(upstream,reader_target,series,"reader",PKG)
     packages,records=authenticate_components(runtime,plugin,ha,series=series,
-        reader_target=reader_target,upstream=upstream,pkg_command=PKG)
+        reader_target=reader_target,upstream=upstream,approved_profile=approved_profile,
+        runtime_approval=runtime_approval,pkg_command=PKG)
     bind.select_role(upstream,creator_target,series,"creator",PKG)
     target=target_pkg.load_target(creator_target,series,upstream=upstream,role="creator")
     target_pkg.verify_target_pkg(target,PKG,pkg_static_path=Path(PKG))
@@ -189,13 +192,15 @@ def _stage(runtime, plugin, ha, output, *, series, key, creator_target, upstream
     return validate(output)
 
 
-def stage_bind_stack(runtime,plugin,output,*,series,key,creator_target,upstream):
-    return _stage(runtime,plugin,None,output,series=series,key=key,creator_target=creator_target,upstream=upstream,stack=True)
+def stage_bind_stack(runtime,plugin,output,*,series,key,creator_target,upstream,approved_profile,runtime_approval):
+    return _stage(runtime,plugin,None,output,series=series,key=key,creator_target=creator_target,upstream=upstream,
+                  approved_profile=approved_profile,runtime_approval=runtime_approval,stack=True)
 
 
-def stage(runtime,plugin,dhcp,output,*,series,key,creator_target,upstream,
+def stage(runtime,plugin,dhcp,output,*,series,key,creator_target,upstream,approved_profile,runtime_approval,
           owner=None,composition_output=None,repository=bind.REPOSITORY):
-    data = _stage(runtime,plugin,dhcp,output,series=series,key=key,creator_target=creator_target,upstream=upstream,stack=False)
+    data = _stage(runtime,plugin,dhcp,output,series=series,key=key,creator_target=creator_target,upstream=upstream,
+                  approved_profile=approved_profile,runtime_approval=runtime_approval,stack=False)
     if owner is not None:
         if owner != "dhcp" or composition_output is None or composition_output.name != "composition-inputs.json":
             raise ValueError("HA composition requires its external signer seal path")
@@ -259,7 +264,7 @@ def validate(directory):
         channel = json.loads((directory / f"{component}-channel.json").read_text())
         if component in bind.KINDS:
             names = bind.RUNTIME_SIDECARS if component == "bind_runtime" else bind.PLUGIN_SIDECARS
-            sidecars = {name:(directory / f"{component}-{name}").read_text() if name.endswith(".txt")
+            sidecars = {name:(directory / f"{component}-{name}").read_text() if name.endswith((".txt", ".mk"))
                         else json.loads((directory / f"{component}-{name}").read_text()) for name in names}
             bind.validate_component_record(channel,sidecars,packages,component,data["series"])
             component_creator = channel["package_creator"]
@@ -324,14 +329,17 @@ def main():
     parser.add_argument("--owner",choices=("dhcp",))
     parser.add_argument("--composition-sha256")
     parser.add_argument("--series")
-    for name in ("directory","output","runtime-channel","plugin-channel","dhcp-channel","creator-target","reader-target","upstream","key","recovery","repository-root","composition-output"):
+    for name in ("directory","output","runtime-channel","plugin-channel","dhcp-channel","creator-target","reader-target","upstream","approved-profile","runtime-approval","key","recovery","repository-root","composition-output"):
         parser.add_argument("--"+name,type=Path)
     parser.add_argument("--url")
     args = parser.parse_args()
     if args.command == "fetch":
         result = fetch(args.repository,args.component,args.series,args.output)
     elif args.command in ("stage","stage-stack"):
-        kwargs = dict(series=args.series,key=args.key,creator_target=args.creator_target,upstream=args.upstream)
+        if args.approved_profile is None or args.runtime_approval is None:
+            parser.error("composition requires --approved-profile and --runtime-approval")
+        kwargs = dict(series=args.series,key=args.key,creator_target=args.creator_target,upstream=args.upstream,
+                      approved_profile=args.approved_profile,runtime_approval=args.runtime_approval)
         result = stage_bind_stack(args.runtime_channel,args.plugin_channel,args.output,**kwargs) if args.command == "stage-stack" else stage(
             args.runtime_channel,args.plugin_channel,args.dhcp_channel,args.output,owner=args.owner,
             composition_output=args.composition_output,repository=args.repository,**kwargs)

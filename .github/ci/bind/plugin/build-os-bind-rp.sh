@@ -115,9 +115,13 @@ creator_release=$(creator_field release)
 creator_ports_commit=$(creator_field ports_commit)
 creator_recipe_path=$(creator_field recipe_path)
 opnsense_version=$("$pkg_static" rquery -r OPNsense -e '%n = opnsense' '%v')
-case "$("$pkg_static" version -t "$opnsense_version" 26.1.11_10)" in
+minimum_opnsense=$(
+    "$python_command" -I -c 'import pathlib,sys; sys.path.insert(0,sys.argv[1]); from bind.shared.components import plugin_requirement_from_makefile; print(plugin_requirement_from_makefile(pathlib.Path(sys.argv[2]).read_text())["minimum_opnsense_version"])' \
+        "$script_directory/../.." "$trusted/plugin-package.mk"
+)
+case "$("$pkg_static" version -t "$opnsense_version" "$minimum_opnsense")" in
     '='|'>') ;;
-    *) fail "OPNsense $opnsense_version is below the required 26.1.11_10" ;;
+    *) fail "OPNsense $opnsense_version is below the required $minimum_opnsense" ;;
 esac
 
 rm -rf "$repository_root/dns/bind/work"

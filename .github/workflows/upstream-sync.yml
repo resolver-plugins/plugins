@@ -61,23 +61,25 @@ jobs:
           set -euo pipefail
           python3 .github/ci/publish_upstream.py recover \
             --repository . \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" \
             --github-repository "$GITHUB_REPOSITORY" \
             --reviewer "$RP_SYNC_REVIEWER" \
             --output "$GITHUB_OUTPUT"
-      - name: Plan reconciliation
+      - name: Discover reconciliation inputs
         if: steps.recovery.outputs.handled != 'true'
         id: plan
         shell: bash
         run: |
           set -euo pipefail
-          python3 .github/ci/sync_upstream.py plan \
+          python3 .github/ci/sync_upstream.py discover \
             --repository . \
             --upstream upstream \
             --release-prefix release/bind-rp/ \
             --metadata-path .resolver-plugins/upstream.json \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" \
-            > "$RUNNER_TEMP/plan.json"
-          python3 - "$RUNNER_TEMP/plan.json" "$GITHUB_OUTPUT" <<'PY'
+            --control-commit "$(git rev-parse HEAD)" \
+            > "$RUNNER_TEMP/discovery.json"
+          python3 - "$RUNNER_TEMP/discovery.json" "$GITHUB_OUTPUT" <<'PY'
           import json
           import pathlib
           import sys
@@ -92,7 +94,6 @@ jobs:
               'upstream_commit',
               'source_release',
               'target_release',
-              'sync_branch',
               'tools_tag',
               'freebsd_release',
           )
@@ -101,7 +102,7 @@ jobs:
                   value = plan.get(field)
                   print(f'{field}={value if value is not None else ""}', file=output)
           PY
-      - name: Apply non-noop plan locally
+      - name: Seal reviewed core and reconciliation inputs
         if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
         shell: bash
         run: |
@@ -122,14 +123,23 @@ jobs:
           curl --fail --location --silent --show-error \
             --output "$RUNNER_TEMP/opnsense-core.tar.gz" "$core_archive_url"
           core_archive_sha256=$(sha256sum "$RUNNER_TEMP/opnsense-core.tar.gz" | awk '{print $1}')
+          python3 .github/ci/sync_upstream.py seal-plan \
+            --discovery "$RUNNER_TEMP/discovery.json" \
+            --core-commit "$core_commit" \
+            --core-archive-url "$core_archive_url" \
+            --core-archive-sha256 "$core_archive_sha256" \
+            --output "$RUNNER_TEMP/plan.json"
+      - name: Apply sealed plan locally
+        if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions
           git config user.email github-actions@github.com
           python3 .github/ci/sync_upstream.py apply \
             --repository . \
             --plan "$RUNNER_TEMP/plan.json" \
-            --core-commit "$core_commit" \
-            --core-archive-url "$core_archive_url" \
-            --core-archive-sha256 "$core_archive_sha256"
+            --tools-repository "$RUNNER_TEMP/opnsense-tools"
       - name: Publish validated plan state
         if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
         shell: bash
@@ -141,6 +151,7 @@ jobs:
           python3 .github/ci/publish_upstream.py publish \
             --repository . \
             --plan "$RUNNER_TEMP/plan.json" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" \
             --github-repository "$GITHUB_REPOSITORY" \
             --reviewer "$RP_SYNC_REVIEWER"
       - name: Check out bootstrap release
@@ -153,17 +164,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          control_commit='${{ github.workflow_sha }}'
+          control_commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["control_commit"])' \
+            "$RUNNER_TEMP/plan.json")
           profile_commit=$(git rev-parse HEAD)
+          git show "$control_commit:dns/bind/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
           git archive "$control_commit" .github/ci \
-            .resolver-plugins/bind920.json .resolver-plugins/bind-compatibility.json \
             docs/package-repository/resolver-plugins.pub | tar -x
           series='${{ steps.plan.outputs.series }}'
           python3 -I .github/ci/bind/shared/components.py inputs \
             --component bind_runtime --series "$series" --mode development \
             --upstream .resolver-plugins/upstream.json \
-            --profile .resolver-plugins/bind920.json \
-            --policy .resolver-plugins/bind-compatibility.json \
+            --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" \
             --recipe .github/ci/bind/runtime/build-bind920.sh \
             --control-commit "$control_commit" --profile-commit "$profile_commit" \
             --trusted-directory artifacts/trusted --intake-directory "artifacts/$series/intake" \

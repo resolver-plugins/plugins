@@ -12,7 +12,7 @@ conflict with it. A system must have one or the other installed, never both.
 
 The package build requires OPNsense `26.1.11_10` or newer. That floor includes
 the BIND version carrying the named DoT-related fix relied on by this fork.
-Resolver Plugins owns the `bind920` package pin used by `os-bind-rp` and may
+The master package Makefile owns the `bind920` approval used by `os-bind-rp` and may
 advance it independently of OPNsense after review. Candidate automation may
 prepare evidence and PRs, but signed package publication remains a separate
 maintainer-controlled boundary.
@@ -34,10 +34,10 @@ selected source commit. Treat a release branch as a stable, reviewed input to a
 package build; do not force-push or casually rewrite it. Each release branch
 carries a thin `.github/workflows/bind-tests.yml` caller that invokes the
 canonical read-only test workflow from `master`; new release bootstraps inherit
-it through the workflow overlay.
+it as an explicitly generated trusted caller.
 
-The synchronizer creates `sync/bind/<series>/<commit>` and
-`sync/bootstrap/<series>/<commit>` branches when human review is necessary.
+The synchronizer creates `sync/bind/<series>/<upstream-prefix>-<input-hash-prefix>` and
+`sync/bootstrap/<series>/<upstream-prefix>-<input-hash-prefix>` branches when human review is necessary.
 They are generated review inputs, not places for unrelated development.
 
 ## Current distribution boundary

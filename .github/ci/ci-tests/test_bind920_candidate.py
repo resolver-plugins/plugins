@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from module_fixtures import *
 
-from package_fixtures import BIND_PROFILE, write_json
+from package_fixtures import PLUGIN_PACKAGE, make_ports_recipe
 from workflow_fixtures import assert_pinned_actions
 
 
@@ -71,32 +71,31 @@ class Bind920CandidateTest(unittest.TestCase):
         self.assertIn("dependency change", result.signals)
 
 
-    def test_update_profile_cli_hashes_candidate_files(self):
-        for version, revision in [('9.20.27', 0), ('9.20.26', 2)]:
-            with self.subTest(version=version, revision=revision), tempfile.TemporaryDirectory() as temporary:
+    def test_update_approval_cli_preserves_plugin_and_generates_exact_recipe(self):
+        for package_version in ('9.20.27', '9.20.26_2'):
+            with self.subTest(version=package_version), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
-                current = write_json(directory / 'bind920.json', dict(BIND_PROFILE, portrevision=1))
-                makefile, distinfo = directory / 'Makefile', directory / 'distinfo'
-                makefile.write_text(f'PORTNAME= bind920\nDISTVERSION= {version}\n' +
-                                    (f'PORTREVISION= {revision}\n' if revision else ''))
-                distinfo.write_text(f'TIMESTAMP = 1\nSHA256 (bind-{version}.tar.xz) = abc123\nSIZE (bind-{version}.tar.xz) = 1\n')
+                old_ports, old_approval, old_profile = make_ports_recipe(directory / 'old', '9.20.26_1')
+                ports, approval, expected_profile = make_ports_recipe(directory / 'candidate', package_version)
+                current = directory / 'plugin.Makefile'
+                preserved = '# Runtime approval follows the package definition.\n' + PLUGIN_PACKAGE
+                current.write_text(preserved + old_approval)
                 result = subprocess.run([
-                    sys.executable, str(MODULE_PATH), 'update-profile', '--current', str(current),
-                    '--ports-repository', BIND_PROFILE['ports_repository'], '--ports-commit', 'f' * 40,
-                    '--makefile', str(makefile), '--distinfo', str(distinfo), '--output', str(current),
+                    sys.executable, str(MODULE_PATH), 'update-approval', '--makefile', str(current),
+                    '--ports-commit', expected_profile['ports_commit'], '--version', package_version,
                 ], capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stderr)
-                profile = json.loads(current.read_text())
-                self.assertEqual(dict(BIND_PROFILE, ports_commit='f' * 40, distversion=version, portrevision=revision,
-                                      makefile_sha256=hashlib.sha256(makefile.read_bytes()).hexdigest(),
-                                      distinfo_sha256=hashlib.sha256(distinfo.read_bytes()).hexdigest()), profile)
-                package_version = profile['distversion'] + (f"_{profile['portrevision']}" if profile['portrevision'] else '')
-                result = subprocess.run([
-                    sys.executable, str(MODULE_PATH), 'upstream-tag', '--version', package_version,
-                ], capture_output=True, text=True)
+                self.assertEqual(preserved + approval, current.read_text())
+                generated = bind920_candidate.bind920_profile.resolve_profile(
+                    bind920_candidate.bind920_profile.approval_from_makefile(current.read_text()), repository=ports)
+                self.assertEqual(expected_profile, generated)
+                old_input = directory / 'old-approval.mk'
+                old_input.write_text(old_approval)
+                self.assertEqual(old_profile, vars(bind920_candidate.current_from_approval(old_input, old_ports)))
+                result = subprocess.run([sys.executable, str(MODULE_PATH), 'upstream-tag',
+                    '--version', package_version], capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(f'v{version}\n', result.stdout)
-
+                self.assertEqual('v' + package_version.split('_')[0] + '\n', result.stdout)
 
     def test_assess_cli_classifies_notes_and_makefile_dependency_drift(self):
         for classification in ('critical-bugfix', 'risky'):
@@ -131,15 +130,6 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", workflow)
         self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", workflow)
         self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", workflow)
-
-    def test_bind_pull_request_workflow_checks_profile_only_candidates(self) -> None:
-        workflow = (REPOSITORY_ROOT / ".github/workflows/bind-tests.yml").read_text(encoding="utf-8")
-        helper_job = workflow.split("  ci-helpers:", 1)[1].split("  discover:", 1)[0]
-
-        self.assertIn("- '.resolver-plugins/bind920.json'", workflow)
-        self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", helper_job)
-        self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", helper_job)
-        self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", helper_job)
 
     def test_candidate_workflow_never_publishes_packages(self) -> None:
         """Candidate review PRs must not cross the publication boundary."""

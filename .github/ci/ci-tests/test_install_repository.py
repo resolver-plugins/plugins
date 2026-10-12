@@ -62,5 +62,5 @@ esac''',
             'resolver-plugins: {\n'
             f'  url: "https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest",\n'
             '  mirror_type: "none",\n  signature_type: "pubkey",\n'
-            f'  pubkey: "{key}",\n  enabled: yes\n}}\n'
+            f'  pubkey: "{key}",\n  priority: 20,\n  enabled: yes\n}}\n'
         )

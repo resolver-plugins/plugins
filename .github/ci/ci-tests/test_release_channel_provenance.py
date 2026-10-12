@@ -4,7 +4,8 @@ from module_fixtures import *
 
 from package_fixtures import (
     BIND_PROFILE as PROFILE, bind_records, creator_identity, make_bind_component,
-    write_resolved_target, write_build_metadata, write_json,
+    write_resolved_target, write_build_metadata, write_json, PLUGIN_PACKAGE,
+    make_ports_recipe, make_tools_repository, fixture_version_comparison,
 )
 
 release_channel = load_module('release_channel', 'shared/release_channel.py')
@@ -12,6 +13,7 @@ release_channel = load_module('release_channel', 'shared/release_channel.py')
 
 class StageProvenanceTest(unittest.TestCase):
     def test_component_stage_preserves_owned_output_and_original_reuse(self):
+        from contextlib import ExitStack
         from git_fixtures import init_repository, commit, upstream_profile, git
         from package_fixtures import make_bind_component
         from test_release_channel_archive import release_api_store, release_channel as publication
@@ -22,23 +24,25 @@ class StageProvenanceTest(unittest.TestCase):
                 root=Path(temporary)
                 history=init_repository(root / 'git')
                 profile=upstream_profile('26.7')
-                policy=json.loads((CI.parents[1] / '.resolver-plugins/bind-compatibility.json').read_text())
+                ports, approval, pin=make_ports_recipe(root / 'ports')
+                tools=make_tools_repository(root / 'tools',profile)
                 tracked={'.resolver-plugins/upstream.json':json.dumps(profile),
-                         '.resolver-plugins/bind920.json':json.dumps(PROFILE),
-                         '.resolver-plugins/bind-compatibility.json':json.dumps(policy),
+                         'dns/bind/Makefile':PLUGIN_PACKAGE,
                          '.github/ci/bind/runtime/build-bind920.sh':'runtime fixture recipe',
                          '.github/ci/bind/plugin/build-os-bind-rp.sh':'plugin fixture recipe'}
                 older=commit(history,tracked,'reviewed controller')
-                selected=commit(history,{'qualification':'candidate control'},'selected controller')
+                selected=commit(history,{'dns/bind/Makefile':PLUGIN_PACKAGE.replace('>= 9.20.26','>= 9.20.27')+approval},'selected controller')
+                source_definition=root / 'source-package.mk'
+                source_definition.write_bytes(subprocess.check_output(['git','-C',str(history),'show',f'{older}:dns/bind/Makefile']))
                 origin=root / 'origin.git'
                 git(root,'clone','--bare',history,origin)
                 git(origin,'update-ref','refs/heads/master',older)
                 git(history,'remote','add','origin',origin.as_uri())
                 runtime=make_bind_component('bind_runtime',root / 'runtime',series='26.7',creator=creator_identity(),
-                    source_commit=selected,control_commit=selected,profile=profile,version='9.20.26_2')
+                    source_commit=older,control_commit=selected,profile=profile,version='9.20.26_2',bind_profile=pin)
                 template=make_bind_component(kind,root / 'template',series='26.7',creator=creator_identity(),
-                    source_commit=selected,control_commit=selected,profile=profile,
-                    version='9.20.26_2' if kind=='bind_runtime' else '26.7_1')
+                    source_commit=older,control_commit=selected,profile=profile,
+                    version='9.20.26_2' if kind=='bind_runtime' else '26.7_1',bind_profile=pin)
                 creator=write_resolved_target(root / 'creator.json',profile)
                 reader=write_resolved_target(root / 'reader.json',profile,role='reader')
                 key=root / 'key'; key.write_bytes(b'fixture private key')
@@ -54,6 +58,8 @@ class StageProvenanceTest(unittest.TestCase):
                         return subprocess.CompletedProcess(command,0)
                     return original_run(command,**kwargs)
                 def output(command,**kwargs):
+                    if command[1:3]==['version','-t']:
+                        return fixture_version_comparison(*command[-2:])+'\n'
                     return components.PUBLIC_KEY.read_bytes() if command[0]=='openssl' else original_output(command,**kwargs)
                 def query(path,command):
                     data=json.loads(path.read_text())
@@ -62,19 +68,23 @@ class StageProvenanceTest(unittest.TestCase):
                 previous=Path.cwd()
                 try:
                     os.chdir(history)
-                    with patch.object(components.subprocess,'run',side_effect=run), \
-                         patch.object(components.subprocess,'check_output',side_effect=output), \
-                         patch.object(components.releases,'snapshot_release',return_value=SimpleNamespace(existed=True,draft=False,directory=runtime)), \
-                         patch.object(components.releases,'query_package',side_effect=query), \
-                         patch.object(components.releases,'read_package_manifest',return_value=dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'])), \
-                         patch.object(components.package_checksums,'verify_archive'), \
-                         patch.object(components,'_select_role'), \
-                         patch.object(package_catalogue,'verify_packages'), patch.object(package_catalogue,'verify_repository'):
+                    resolver=components.bind920_profile.resolve_profile
+                    with ExitStack() as providers:
+                        for provider in (patch.object(components.bind920_profile,'resolve_profile',side_effect=lambda value:resolver(value,repository=ports)),
+                            patch.object(components.subprocess,'run',side_effect=run),
+                            patch.object(components.subprocess,'check_output',side_effect=output),
+                            patch.object(components.releases,'snapshot_release',return_value=SimpleNamespace(existed=True,draft=False,directory=runtime)),
+                            patch.object(components.releases,'query_package',side_effect=query),
+                            patch.object(components.releases,'read_package_manifest',side_effect=lambda archive,command:dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp' if 'devel' in archive.name else 'os-bind-rp-devel'],deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}})),
+                            patch.object(components.package_checksums,'verify_archive'),
+                            patch.object(components,'_select_role'),
+                            patch.object(package_catalogue,'verify_packages'), patch.object(package_catalogue,'verify_repository')):
+                            providers.enter_context(provider)
                         trusted=root / 'trusted'
                         components.prepare_selection(trusted,component=kind,series='26.7',mode='production',
-                            control_commit=selected,profile_commit=selected,source_commit=selected if kind=='bind_plugin' else None,
-                            upstream=history / '.resolver-plugins/upstream.json',profile=history / '.resolver-plugins/bind920.json',
-                            policy=history / '.resolver-plugins/bind-compatibility.json',
+                            control_commit=selected,profile_commit=older,source_commit=older if kind=='bind_plugin' else None,
+                            upstream=history / '.resolver-plugins/upstream.json',runtime_approval=history / 'dns/bind/Makefile',
+                            package_definition=source_definition if kind=='bind_plugin' else None,tools_repository=tools,
                             recipe=history / ('.github/ci/bind/runtime/build-bind920.sh' if kind=='bind_runtime' else '.github/ci/bind/plugin/build-os-bind-rp.sh'),
                             repository='example/distribution',intake_directory=root / 'intake',creator_target=creator,reader_target=reader)
                         selection=json.loads((trusted / 'selection.json').read_text())
@@ -85,7 +95,7 @@ class StageProvenanceTest(unittest.TestCase):
                         if kind=='bind_runtime':
                             inputs=json.loads((trusted / 'producer-inputs.json').read_text())
                             write_json(raw / 'bind920-provenance.json',components.bind920_profile.build_provenance(
-                                PROFILE,'26.7','15.1','x86_64',creator_identity(),bind_records(),recipe_sha256=inputs['build_recipe_sha256']))
+                                pin,'26.7','15.1','x86_64',creator_identity(),bind_records(),recipe_sha256=inputs['build_recipe_sha256']))
                         else:
                             shutil.copyfile(trusted / 'producer-inputs.json',raw / 'plugin-build-inputs.json')
                         expected={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in raw.iterdir()}
@@ -108,10 +118,12 @@ class StageProvenanceTest(unittest.TestCase):
                         with patch.object(package_catalogue,'ROOT',history),patch.object(package_catalogue,'PKG','pkg-fixture'),patch.object(package_catalogue.bind,'select_role'), \
                              patch.object(package_catalogue.target_pkg,'verify_target_pkg'):
                             package_catalogue.stage_bind_stack(directories['bind_runtime'],directories['bind_plugin'],repository / 'stack/current',
-                                series='26.7',key=key,creator_target=trusted / 'creator-target.json',upstream=trusted / 'upstream.json')
+                                series='26.7',key=key,creator_target=trusted / 'creator-target.json',upstream=trusted / 'upstream.json',
+                                approved_profile=trusted / 'bind920-profile.json',runtime_approval=trusted / 'runtime-approval.mk')
                             shutil.copytree(repository / 'stack/current',repository / 'stack/snapshot')
                             package_catalogue.stage(directories['bind_runtime'],directories['bind_plugin'],None,repository / 'combined',
-                                series='26.7',key=key,creator_target=trusted / 'creator-target.json',upstream=trusted / 'upstream.json')
+                                series='26.7',key=key,creator_target=trusted / 'creator-target.json',upstream=trusted / 'upstream.json',
+                                approved_profile=trusted / 'bind920-profile.json',runtime_approval=trusted / 'runtime-approval.mk')
                         digest=components.write_composition(repository,component=kind,series='26.7',initialized=False,components=receipts)
                         peer='bind_runtime' if kind=='bind_plugin' else 'bind_plugin'
                         remote={tag:dict(assets={p.name:p.read_bytes() for p in retained.iterdir()},draft=False,
@@ -150,13 +162,13 @@ class StageProvenanceTest(unittest.TestCase):
                             self.assertEqual(receipts[peer]['assets'],{name:hashlib.sha256(content).hexdigest()
                                 for name,content in remote[receipts[peer]['current_tag']]['assets'].items()})
                         signing_calls=len(signatures)
-                        if kind=='bind_runtime':
+                        if kind=='bind_plugin':
                             receipt=components.component_receipt(staged / 'current',kind,'26.7')
                             write_json(trusted / 'cached-component.json',receipt)
                             selection['producer_action']='reuse'
                             components.seal_selection(trusted,selection)
                             selection=json.loads((trusted / 'selection.json').read_text())
-                            with patch.object(components.releases,'snapshot_release',return_value=SimpleNamespace(existed=True,draft=False,directory=staged / 'current')):
+                            with patch.object(components.releases,'snapshot_release',side_effect=lambda repository,tag,output:SimpleNamespace(existed=True,draft=False,directory=runtime if 'bind-runtime' in tag else staged / 'current')):
                                 components.stage_component(raw,selection,trusted,root / 'reused',None,pkg_command='pkg-fixture')
                             self.assertEqual(current,{p.name:p.read_bytes() for p in (root / 'reused/current').iterdir()})
                             self.assertEqual(signing_calls,len(signatures))

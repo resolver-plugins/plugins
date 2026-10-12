@@ -2,7 +2,8 @@
 from git_fixtures import *
 from module_fixtures import load_module
 from package_fixtures import (
-    BIND_PROFILE, creator_identity, make_bind_component, write_json, write_resolved_target,
+    creator_identity, make_bind_component, make_ports_recipe,
+    make_tools_repository, runtime_approval, write_json, write_resolved_target,
 )
 
 plugin = load_module('plugin_release', 'bind/plugin/plugin_release.py')
@@ -70,7 +71,11 @@ def native_command_fixture(path):
         elif command == 'config':
             print(target['abi'])
         elif command == 'version':
-            print('=')
+            def order(value):
+                base, _, revision = value.partition('_')
+                return tuple(map(int, base.split('.'))), int(revision or '0')
+            left, right = map(order, args[-2:])
+            print('<' if left < right else '>' if left > right else '=')
         elif command == 'lock':
             if '-l' in args:
                 if state.get('locked'):
@@ -131,38 +136,54 @@ def build_fixture(tmp_path):
     # Isolate command/CI copies while shared providers are owned by other workers.
     shutil.copytree(REPOSITORY_ROOT / '.github/ci', root / '.github/ci',
                     ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'))
-    for name in ('dns/bind', 'Mk', 'Scripts', 'Templates', '.resolver-plugins', 'docs/package-repository'):
+    for name in ('dns/bind', 'Mk', 'Scripts', 'Templates', 'docs/package-repository'):
         shutil.copytree(REPOSITORY_ROOT / name, root / name, ignore=shutil.ignore_patterns('work'))
     core_commit = create_core_repository(tmp_path / 'core')
     upstream = upstream_profile(core_commit=core_commit)
+    (root / '.resolver-plugins').mkdir()
     (root / '.resolver-plugins/upstream.json').write_text(json.dumps(upstream))
     makefile = root / 'dns/bind/Makefile'
-    makefile.write_text(re.sub(r'^PLUGIN_VERSION=.*$', 'PLUGIN_VERSION=\t26.1',
-        re.sub(r'^PLUGIN_REVISION=.*$', 'PLUGIN_REVISION=\t1', makefile.read_text(), flags=re.M), flags=re.M))
+    selected_definition = re.sub(r'^RP_BIND_.*\n', '', makefile.read_text(), flags=re.M)
+    selected_definition = re.sub(r'^PLUGIN_VERSION=.*$', 'PLUGIN_VERSION=\t26.1',
+        re.sub(r'^PLUGIN_REVISION=.*$', 'PLUGIN_REVISION=\t1', selected_definition, flags=re.M), flags=re.M)
+    if 'PLUGIN_MANIFEST_DEPENDS=' not in selected_definition:
+        selected_definition += '\nPLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }\n'
+    makefile.write_text(selected_definition)
     git(root, 'add', 'dns/bind', 'Mk', 'Scripts', 'Templates', '.resolver-plugins')
     git(root, 'commit', '-m', 'selected package inputs')
     source_commit = git(root, 'rev-parse', 'HEAD')
-    trusted = tmp_path / 'trusted'
-    trusted.mkdir()
-    shutil.copyfile(root / '.resolver-plugins/upstream.json', trusted / 'upstream.json')
-    write_resolved_target(trusted / 'creator-target.json', upstream)
-    write_resolved_target(trusted / 'reader-target.json', upstream, role='reader')
+    ports, approval, pin = make_ports_recipe(tmp_path / 'ports')
+    tools = make_tools_repository(tmp_path / 'tools', upstream)
+    # Master control intentionally differs; source has no RP approval block.
+    makefile.write_text(selected_definition.replace('PLUGIN_VERSION=\t26.1', 'PLUGIN_VERSION=\t1.99')
+        .replace('>= 9.20.26', '>= 9.20.27') + approval)
+    git(root, 'add', 'dns/bind/Makefile', '.github/ci/bind/plugin/build-os-bind-rp.sh')
+    git(root, 'commit', '-m', 'immutable control approval')
+    control_commit = git(root, 'rev-parse', 'HEAD')
     runtime = make_bind_component('bind_runtime', tmp_path / 'runtime', series='26.1',
         creator=creator_identity('FreeBSD:14:amd64'), source_commit='b' * 40,
-        control_commit='c' * 40, profile=upstream, version='9.20.26_2')
-    for name, source in [('bind920-profile.json', runtime / 'bind920-profile.json'),
-                         ('bind-compatibility.json', root / '.resolver-plugins/bind-compatibility.json')]:
-        shutil.copyfile(source, trusted / name)
-    inputs = dict(schema=1, source_commit=source_commit, series='26.1', package_abi='FreeBSD:14:amd64',
-        freebsd_release='14.3', package_creator=creator_identity('FreeBSD:14:amd64'),
-        build_recipe_sha256=hashlib.sha256((root / '.github/ci/bind/plugin/build-os-bind-rp.sh').read_bytes()).hexdigest(),
-        compatibility_policy_sha256=hashlib.sha256((trusted / 'bind-compatibility.json').read_bytes()).hexdigest())
-    write_json(trusted / 'producer-inputs.json', inputs)
-    write_json(trusted / 'runtime-selection.json', components.component_receipt(runtime, 'bind_runtime', '26.1'))
-    fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    digest = components.seal_selection(trusted, dict(schema=1, component='bind_plugin', series='26.1',
-        mode='production', control_commit='d' * 40, profile_commit=source_commit, source_commit=source_commit,
-        producer_action='build', expected_fingerprint=fingerprint))
+        control_commit='c' * 40, profile=upstream, version='9.20.26_2', bind_profile=pin)
+    role_root = tmp_path / 'roles'
+    role_root.mkdir()
+    creator = write_resolved_target(role_root / 'creator.json', upstream)
+    reader = write_resolved_target(role_root / 'reader.json', upstream, role='reader')
+    package = tmp_path / 'source-package.mk'
+    package.write_text(selected_definition)
+    trusted = tmp_path / 'trusted'
+    def frozen_component(repository, kind, series, output):
+        shutil.copytree(runtime, output)
+        return components.component_receipt(runtime, kind, series)
+    resolve = components.bind920_profile.resolve_profile
+    with patch.object(components.bind920_profile, 'resolve_profile', side_effect=lambda record: resolve(record, repository=ports)), \
+            patch.object(components, 'fetch_component', side_effect=frozen_component), \
+            patch.object(components, 'fetch_cached_component', return_value=None):
+        result = components.prepare_selection(trusted, component='bind_plugin', series='26.1', mode='production',
+            control_commit=control_commit, profile_commit=source_commit, source_commit=source_commit,
+            upstream=root / '.resolver-plugins/upstream.json', runtime_approval=makefile, package_definition=package,
+            tools_repository=tools, recipe=root / '.github/ci/bind/plugin/build-os-bind-rp.sh',
+            repository='example/distribution', intake_directory=tmp_path / 'intake',
+            creator_target=creator, reader_target=reader)
+    digest = result['selection_sha256']
     pkg = native_command_fixture(tmp_path / 'pkg-fixture')
     make = tmp_path / 'make-fixture'
     make.write_text(textwrap.dedent('''
@@ -178,7 +199,8 @@ def build_fixture(tmp_path):
         output.mkdir(parents=True)
         record = dict(name='os-bind-rp', version='26.1_1', origin='opnsense/os-bind-rp',
             abi='FreeBSD:14:amd64', dep_formula='bind920 >= 9.20.26',
-            conflicts=['os-bind', 'os-bind-devel', 'os-bind-rp-devel'])
+            conflicts=['os-bind', 'os-bind-devel', 'os-bind-rp-devel'],
+            deps={'opnsense': {'version': '26.1.11_10', 'origin': 'opnsense/opnsense'}})
         version = json.dumps(dict(product_hash=os.environ['SOURCE_COMMIT'])).encode()
         record['files'] = {'/usr/local/opnsense/version/bind-rp': '1$' + hashlib.sha256(version).hexdigest()}
         with tarfile.open(output / 'os-bind-rp-26.1_1.pkg', 'w') as package:
@@ -217,6 +239,10 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
         'upstream_commit': '1' * 40, 'core_commit': upstream['core_commit'], 'tools_tag': '26.1.11',
         'freebsd_release': '14.3', 'source_commit': environment['SOURCE_COMMIT'], 'pkg_creator': '2.3.1_1',
         'creator_release': '26.1.11', 'creator_ports_commit': '4' * 40, 'creator_recipe_path': 'ports-mgmt/pkg'}
+    assert (root / 'dns/bind/Makefile').read_bytes() == (trusted / 'plugin-package.mk').read_bytes()
+    assert b'RP_BIND_VERSION' not in (root / 'dns/bind/Makefile').read_bytes()
+    assert b'PLUGIN_VERSION=\t1.99' in (trusted / 'runtime-approval.mk').read_bytes()
+    assert '>= 9.20.27' in (trusted / 'runtime-approval.mk').read_text()
     assert (output / 'plugin-build-inputs.json').read_bytes() == (trusted / 'producer-inputs.json').read_bytes()
     state = json.loads(Path(environment['P_PKG_STATE']).read_text())
     assert state['locked'] and state['pkg']['version'] == '2.3.1_1'
@@ -224,6 +250,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
         record = json.loads(archive.read_text())
         assert state[record['name']] == record
     calls = [json.loads(line) for line in Path(environment['PKG_CALL_LOG']).read_text().splitlines()]
+    assert ['version', '-t', '9.20.26_2', '9.20.26'] in calls
     assert any(call[:2] == ['query', '-F'] and Path(call[2]).name == 'os-bind-rp-26.1_1.pkg'
                and call[-1] == '%Fp|%Fs' for call in calls)
 
@@ -258,7 +285,8 @@ def test_cached_plugin_copy_and_source_assets_preserve_original_build_record(tmp
         source_commit=environment['SOURCE_COMMIT'], control_commit='e' * 40, profile=upstream, version='26.1_1')
     archive = cached / 'os-bind-rp-26.1_1.pkg'
     record = json.loads(archive.read_text())
-    record.update(dep_formula='bind920 >= 9.20.26', conflicts=['os-bind', 'os-bind-devel'])
+    record.update(dep_formula='bind920 >= 9.20.26', conflicts=['os-bind', 'os-bind-devel', 'os-bind-rp-devel'],
+                  deps={'opnsense': {'version': '26.1.11_10', 'origin': 'opnsense/opnsense'}})
     write_json(archive, record)
     original = json.loads((cached / 'channel.json').read_text())
     original['packages'][archive.name] = original['assets'][archive.name] = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -267,7 +295,7 @@ def test_cached_plugin_copy_and_source_assets_preserve_original_build_record(tmp
     current = make_bind_component('bind_runtime', tmp_path / 'current', series='26.1', creator=creator,
         source_commit='b' * 40, control_commit='c' * 40, profile=upstream, version='9.20.27')
     shutil.copyfile(current / 'bind920-profile.json', trusted / 'bind920-profile.json')
-    shutil.copyfile(cached / 'bind-compatibility.json', trusted / 'bind-compatibility.json')
+    (trusted / 'runtime-approval.mk').write_text(runtime_approval('9.20.27'))
     shutil.copyfile(cached / 'plugin-build-inputs.json', trusted / 'producer-inputs.json')
     write_json(trusted / 'runtime-selection.json', components.component_receipt(current, 'bind_runtime', '26.1'))
     write_json(trusted / 'cached-component.json', components.component_receipt(cached, 'bind_plugin', '26.1'))
@@ -287,7 +315,7 @@ def test_cached_plugin_copy_and_source_assets_preserve_original_build_record(tmp
     tag = plugin.prepare_source_assets(cached, source, '26.1', selected)
     assert {path.name: path.read_bytes() for path in source.iterdir()} == {
         name: saved[name] for name in ('os-bind-rp-26.1_1.pkg', 'build-metadata.txt', 'plugin-build-inputs.json',
-                                     'upstream.json', 'creator-target.json', 'bind-compatibility.json', 'channel.json')}
+                                     'upstream.json', 'creator-target.json', 'plugin-package.mk', 'channel.json')}
     inputs = json.loads(saved['plugin-build-inputs.json'])
     fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     assert tag == 'os-bind-rp-26.1-26.1_1-plugin-' + fingerprint

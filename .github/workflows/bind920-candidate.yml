@@ -49,7 +49,15 @@ jobs:
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout init --cone
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout set dns/bind920
           git -C "$RUNNER_TEMP/freebsd-ports" checkout "$candidate_commit"
-          current_commit=$(python3 .github/ci/bind/runtime/bind920_profile.py .resolver-plugins/bind920.json ports_commit)
+          current_commit=$(python3 -I - <<'PYAPPROVAL'
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, str(Path('.github/ci').resolve()))
+          from bind.runtime import bind920_profile
+          print(bind920_profile.approval_from_makefile(Path('dns/bind/Makefile').read_text())['ports_commit'])
+          PYAPPROVAL
+          )
+          git -C "$RUNNER_TEMP/freebsd-ports" fetch --no-tags origin "$current_commit"
           git -C "$RUNNER_TEMP/freebsd-ports" show "$current_commit:dns/bind920/Makefile" > "$RUNNER_TEMP/current.Makefile"
           git -C "$RUNNER_TEMP/freebsd-ports" diff --no-ext-diff "$current_commit" "$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.diff"
           git -C "$RUNNER_TEMP/freebsd-ports" log --format='%h %s' "$current_commit..$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.log"
@@ -75,11 +83,11 @@ jobs:
           import sys
 
           sys.path.insert(0, ".github/ci")
-          from bind920_candidate import candidate_from_files, candidate_is_newer, load_current_profile
+          from bind920_candidate import candidate_from_files, candidate_is_newer, current_from_approval
 
           output_path = pathlib.Path(sys.argv[1])
           ports_dir = pathlib.Path(__import__("os").environ["PORTS_DIR"])
-          current = load_current_profile(pathlib.Path(".resolver-plugins/bind920.json"))
+          current = current_from_approval(pathlib.Path("dns/bind/Makefile"), ports_dir)
           candidate = candidate_from_files(
               __import__("os").environ["PORTS_REPOSITORY"],
               __import__("os").environ["CANDIDATE_COMMIT"],
@@ -106,7 +114,7 @@ jobs:
       - name: Stop when no newer candidate exists
         if: steps.candidate.outputs.newer != 'true'
         run: echo "No newer BIND 9.20 candidate found."
-      - name: Update profile and create assessment
+      - name: Update approval and create assessment
         if: steps.candidate.outputs.newer == 'true'
         shell: bash
         env:
@@ -126,13 +134,10 @@ jobs:
             printf '\nMaintainer-supplied notes:\n'
             cat "$RUNNER_TEMP/maintainer-notes.txt"
           } > "$RUNNER_TEMP/changelog.txt"
-          python3 .github/ci/bind920_candidate.py update-profile \
-            --current .resolver-plugins/bind920.json \
-            --ports-repository https://github.com/freebsd/freebsd-ports.git \
+          python3 .github/ci/bind920_candidate.py update-approval \
+            --makefile dns/bind/Makefile \
             --ports-commit "$CANDIDATE_COMMIT" \
-            --makefile "$PORTS_DIR/dns/bind920/Makefile" \
-            --distinfo "$PORTS_DIR/dns/bind920/distinfo" \
-            --output .resolver-plugins/bind920.json
+            --version '${{ steps.candidate.outputs.package_version }}'
           python3 .github/ci/bind920_candidate.py assess \
             --old-version '${{ steps.candidate.outputs.old_version }}' \
             --new-version '${{ steps.candidate.outputs.new_version }}' \
@@ -191,9 +196,9 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@github.com
           git checkout -B "$branch"
-          git add .resolver-plugins/bind920.json
+          git add dns/bind/Makefile
           if git diff --cached --quiet; then
-            echo "Candidate profile is unchanged."
+            echo "Candidate approval is unchanged."
             exit 0
           fi
           git commit -m "ci(bind): update bind920 to ${version}"

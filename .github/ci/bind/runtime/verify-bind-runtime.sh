@@ -102,6 +102,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
+rndc-confgen -a -c "$runtime_directory/rndc.key"
 cat > "$runtime_directory/named.conf" <<EOF
 options {
     directory "$runtime_directory";
@@ -112,7 +113,10 @@ options {
     pid-file "$runtime_directory/named.pid";
     session-keyfile "$runtime_directory/session.key";
 };
-controls { };
+include "$runtime_directory/rndc.key";
+controls {
+    inet 127.0.0.1 port 1953 allow { 127.0.0.1; } keys { "rndc-key"; };
+};
 zone "canary.invalid" {
     type primary;
     file "canary.invalid.zone";
@@ -144,6 +148,7 @@ do
     if drill -p 15353 canary.invalid @127.0.0.1 A > "$runtime_directory/answer.txt" 2>&1 && \
         grep -q '192\.0\.2\.53' "$runtime_directory/answer.txt"
     then
+        rndc -k "$runtime_directory/rndc.key" -s 127.0.0.1 -p 1953 status
         exit 0
     fi
     sleep 1

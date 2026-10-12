@@ -27,6 +27,7 @@ resolver-plugins: {
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "$public_key",
+  priority: 20,
   enabled: yes
 }
 EOF

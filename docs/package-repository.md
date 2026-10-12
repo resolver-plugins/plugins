@@ -131,6 +131,7 @@ resolver-plugins: {
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
+  priority: 20,
   enabled: yes
 }
 EOF
@@ -144,7 +145,9 @@ It reads `opnsense-version -a`, writes the literal `${ABI}` URL for that
 series, preserves the file's mode and owner, and atomically replaces only that
 known shape. A custom URL, alternate key, disabled repository, different
 mirror mode, symlink, or non-regular path is left byte-for-byte unchanged and
-produces a `manual migration` warning.
+produces a `manual migration` warning. Managed entries use repository-local
+priority 20; the provider recognizes both the old body and the priority-aware
+body. OPNsense repository settings and global solver policy are unchanged.
 
 The package also installs `bindRepositoryReconcile.py`. The upgrade hook only
 marks reconciliation pending and returns; it performs no network or package
@@ -165,10 +168,20 @@ the literal `${ABI}` plus series URL above, then run:
 pkg update -f -r resolver-plugins
 ```
 
-### Supported installer transition
+### Native plugin installation
 
-Use `scripts/install-os-bind-rp.sh` for the official `os-bind` to
-`os-bind-rp` transition. Before mutation, it fetches exact candidate archives,
+After configuring the repository, use `pkg install os-bind-rp`. Native package
+dependencies select BIND and its tools. Fresh installs must select this feed's
+approved pair; an already installed compatible OPNsense pair may remain because
+pkg preserves repository affinity. Qualification records the actual provider
+and installed file maps. A below-minimum BIND or core state must upgrade or
+refuse the plugin, never install an unsupported state. The reviewed source
+package emits its official-plugin conflict and core dependency, and its native
+pre-install hook checks the actual core version without mutating packages.
+
+The custom installer is retained only until the replacement native acceptance
+cases pass on both supported series. Before mutation, that retained harness
+fetches exact candidate archives,
 requires non-null per-file checksums, records their SHA-256 values, creates a
 local isolated repository, and dry-runs the frozen transaction. It locks the
 installed `pkg` package for the transaction, attempts to restore its original
@@ -253,6 +266,7 @@ resolver-plugins-rollback: {
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",
+  priority: 20,
   enabled: yes
 }
 EOF
@@ -284,12 +298,12 @@ the pull request before and after upload so closure cannot leave a stale build.
 
 ## Publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) builds or
-reuses only the pinned runtime pair. The
+The [runtime workflow](../.github/workflows/bind-runtime-release.yml) builds
+a fresh approved runtime pair on every selected run. The
 [plugin workflow](../.github/workflows/bind-plugin-release.yml) builds or reuses
 only `os-bind-rp` from the selected `release/bind-rp/<series>` source. Its
 controller requires an already published runtime matching the approved pin and
-compatibility policy, freezes the complete receipt, and authenticates that
+source package's minimum, freezes the complete receipt, and authenticates that
 pair before building. It never builds or dispatches the runtime workflow.
 For a new series or pin, publish the runtime first and retry the plugin if it
 was selected before that publication completed. A runtime bootstrap can publish
@@ -297,17 +311,16 @@ its isolated pair before a plugin exists; it cannot expose an incomplete
 combined feed. Once a complete feed exists, every writer retains all registered
 peers or fails.
 
-Automatic runtime production starts only when the approved `bind920.json` pin
+Automatic runtime production starts only when the approved `RP_BIND_VERSION` / `RP_BIND_PORTS_COMMIT` pair
 changes on `master`, targeting the newest numeric `release/bind-rp/<series>`
 branch. Plugin source, its helpers and workflow, and the `Mk`, `Scripts` and
-`Templates` framework trigger only the plugin workflow. Shared compatibility
-policy, BIND/shared helpers, installer and committed key can
+`Templates` framework trigger only the plugin workflow. Shared BIND helpers, installer and committed key can
 also trigger the plugin, without starting runtime production. Relevant merges
 into a release-source branch start only the plugin workflow for that series.
 Runtime helper and workflow changes run PR tests without starting a runtime
 release. HA-only helpers, tests, documentation and discovery tooling do not
 trigger BIND publication. `workflow_dispatch` remains available for development
-builds and explicit production retries or series selection; use the runtime
+builds and explicit production series selection; use the runtime
 workflow directly to publish the approved pair for another series. A production
 dispatch from any ref other than `master` is rejected. Release branches supply
 immutable build inputs only and never run publication helpers. Publication runs
@@ -315,7 +328,7 @@ share one global lock so automatic and manual promotions cannot replace or
 restore the same current channel concurrently.
 
 The `Propose bind920 candidate` workflow may open PRs that update only the
-pinned BIND profile. Those PRs provide review evidence and CI status and do not
+two runtime approval fields in the plugin package Makefile. Those PRs provide review evidence and CI status and do not
 alter a stable package channel while open. Merging a package-affecting candidate
 to `master` starts runtime production for the newest numeric release branch;
 maintainers can still dispatch another series explicitly.
@@ -373,24 +386,34 @@ immutable snapshot can safely advance an older mutable current channel.
 Partially populated drafts remain a distinct recoverable transaction state,
 not a valid cache hit. Stale selected peers fail before promotion and must be
 recomposed. If the Pages update fails, the previous feed remains intact while
-completed Release snapshots remain available; retry the workflow against the
-then-current peer receipts. Recovery artifacts preserve prior mutable bytes.
+completed Release snapshots remain available. Recover using the exact original
+owned signed component and then-current peer receipts; a new build is not a
+publication retry. Recovery artifacts preserve prior mutable bytes.
 Historical complete snapshots remain unchanged and installable through `pkg`.
 
-After promotion, a fresh FreeBSD VM configures the selected series' OPNsense
-repository and prepares its core with the current package manager, then selects
-the verified minimum `pkg-static` reader and prepares official `os-bind`. It runs
-`scripts/install-os-bind-rp.sh` against the published ABI-aware URL. It compares
-catalogue identities with the staged archives and requires the exact plugin
-identity. For the BIND pair, it verifies either preservation of compatible
-upstream packages at or above the staged versions or installation of the staged
-pair, as the installer requires.
-It also requires the public `channel.json` to match the staged bytes. The
+For a partial publication failure, use `gh run rerun RUN_ID --failed` within
+GitHub's 30-day rerun window. Runtime controller, producer, signed repository and
+recovery artifacts retain those original immutable IDs and external seals for
+30 days. Rerunning failed jobs uses the original qualified signed tree; a whole
+build rerun or same-pin manual dispatch can produce different bytes and is not
+this recovery operation. Expired artifacts or changed peers stop promotion.
+Never overwrite an immutable snapshot to make a rebuilt package fit.
+
+After promotion, a fresh FreeBSD VM configures the selected OPNsense core and
+minimum pkg reader, then runs repository setup and native
+`pkg install -y os-bind-rp` with all three BIND/plugin packages initially absent. Dependencies
+are not preinstalled for this checkpoint. It records the native dry run,
+transaction, providers and file maps, compares the plugin with the qualified
+archive, checks source-defined floors/conflicts, and runs the existing named,
+rndc and DNS canaries. Separate clean cases exercise official-plugin replacement
+with an eligible upstream pair and below-minimum runtime/core refusal or upgrade.
+The public `channel.json` must match the qualified bytes. The
 immutable source release is created only by the plugin workflow, after this
 verified public-channel installation succeeds. Its tag is
 `os-bind-rp-<series>-<plugin_version>-plugin-<plugin_fingerprint>` and its narrow
 asset set contains the original plugin archive and
-build/provenance records from the signed component. A runtime-only publication
+build/provenance records, including the raw source `plugin-package.mk`, from the
+signed component. A runtime-only publication
 does not mint a source release. Retrying a source release with the exact same
 assets is a no-op; an existing tag with different bytes is rejected.
 
@@ -406,8 +429,8 @@ force-install the complete plugin/runtime pair through the snapshot path. A
 runtime bootstrap verifies only its owned signed pair. Before publishing a new
 complete stack, native qualification checks and installs the staged current and
 its exact paired snapshot. After publication, a fresh public gate authenticates
-those published repositories against the qualified bytes, runs the public
-installer against the current feed, and checks installed identities and file
+those published repositories against the qualified bytes, runs the ordinary native
+installation checkpoint against the current feed, and checks installed identities and file
 checksums. Historical snapshots remain available for explicit administrator rollback.
 
 Development, staged, and published installation gates all finish by checking a

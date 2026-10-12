@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - '.resolver-plugins/bind920.json'
+      - 'dns/bind/Makefile'
   workflow_dispatch:
     inputs:
       mode:
@@ -89,10 +89,14 @@ jobs:
           git fetch --no-tags origin "$PROFILE_REF"
           profile_commit=$(git rev-parse FETCH_HEAD)
           git show "$profile_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
+          git show "$control_commit:dns/bind/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
+          tools_tag=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" tools_tag)
+          git init --bare "$RUNNER_TEMP/opnsense-tools"
+          git -C "$RUNNER_TEMP/opnsense-tools" fetch --depth=1 https://github.com/opnsense/tools.git "refs/tags/$tools_tag:refs/tags/$tools_tag"
           python3 -I .github/ci/bind/shared/components.py inputs \
             --component bind_runtime --series "$SERIES" --mode "$MODE" \
-            --upstream "$RUNNER_TEMP/upstream.json" --profile .resolver-plugins/bind920.json \
-            --policy .resolver-plugins/bind-compatibility.json --recipe .github/ci/bind/runtime/build-bind920.sh \
+            --upstream "$RUNNER_TEMP/upstream.json" --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" --recipe .github/ci/bind/runtime/build-bind920.sh \
             --control-commit "$control_commit" --profile-commit "$profile_commit" \
             --trusted-directory artifacts/trusted --intake-directory "artifacts/$SERIES/intake" \
             --repository resolver-plugins/repository --output "$RUNNER_TEMP/controller.json"
@@ -113,7 +117,7 @@ jobs:
           name: bind-runtime-trusted-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/trusted
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   test:
     needs: [select, profile]
@@ -161,31 +165,6 @@ jobs:
         run: |
           python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
-      - name: Fetch only the sealed runtime cache snapshot
-        if: needs.profile.outputs.producer_action == 'reuse'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SERIES: ${{ needs.select.outputs.series }}
-        run: |
-          python3 -I - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          import sys
-
-          sys.path.insert(0, str(Path('.github/ci').resolve()))
-          from bind.shared import components
-
-          trusted = Path('artifacts/trusted')
-          series = os.environ['SERIES']
-          selected = components.load_selection(trusted, component='bind_runtime', series=series,
-                                               selection_sha256=os.environ['RP_SELECTION_SHA256'])
-          if selected['producer_action'] != 'reuse':
-              raise SystemExit('runtime cache action differs from controller')
-          receipt = json.loads((trusted / 'cached-component.json').read_text())
-          components.fetch_frozen_component('resolver-plugins/repository', receipt,
-                                            Path('artifacts') / series / 'intake/cached_component')
-          PY
       - name: Produce the selected BIND runtime pair
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         with:
@@ -206,29 +185,15 @@ jobs:
             output="artifacts/$series/producer"
             python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$series" \
               --trusted-directory "$RP_TRUSTED_DIRECTORY" --selection-sha256 "$RP_SELECTION_SHA256"
-            case '${{ needs.profile.outputs.producer_action }}' in
-              build)
-                .github/ci/bind/runtime/build-bind920.sh "$series" "$output"
-                ;;
-              reuse)
-                RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
-                pkg update -f
-                python3 -I .github/ci/shared/target_pkg.py install "$RP_READER_PKG_METADATA" "$series" \
-                  --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
-                python3 -I .github/ci/bind/runtime/reuse_bind920.py "$series" "$output" \
-                  --component-directory "artifacts/$series/intake/cached_component" \
-                  --trusted-directory "$RP_TRUSTED_DIRECTORY" --selection-sha256 "$RP_SELECTION_SHA256" \
-                  --pkg-command /usr/local/sbin/pkg-static
-                ;;
-              *) exit 1 ;;
-            esac
+            test '${{ needs.profile.outputs.producer_action }}' = build
+            .github/ci/bind/runtime/build-bind920.sh "$series" "$output"
       - id: producer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: bind-runtime-producer-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/producer
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   sign:
     if: >-
@@ -324,7 +289,7 @@ jobs:
           name: bind-runtime-repository-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/repository
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   verify:
     if: needs.select.outputs.mode == 'production'
@@ -382,7 +347,7 @@ jobs:
           name: bind-runtime-local-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 30
 
   publish:
     if: >-
@@ -460,7 +425,7 @@ jobs:
           name: bind-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/recovery
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 30
 
   verify-published:
     if: needs.select.outputs.mode == 'production'
@@ -518,7 +483,7 @@ jobs:
           name: bind-runtime-public-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 30
 
   retention:
     if: >-
@@ -651,7 +616,7 @@ jobs:
           name: bind-runtime-preview-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 30
 
   publish-development:
     if: needs.select.outputs.mode == 'development' && github.event_name == 'workflow_dispatch' && inputs.mode == 'development'

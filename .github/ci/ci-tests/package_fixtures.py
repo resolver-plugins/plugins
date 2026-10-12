@@ -10,6 +10,50 @@ BIND_PROFILE = {
     'distversion': '9.20.26',
     'portrevision': 2,
 }
+PLUGIN_PACKAGE = '''PLUGIN_NAME= bind-rp
+PLUGIN_DEPENDS= bind920
+PLUGIN_DEPEND_FORMULA= bind920 >= 9.20.26
+PLUGIN_DEPEND_FORMULA_DEPENDS= bind920
+PLUGIN_CONFLICTS= bind
+PLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }
+'''
+
+
+def runtime_approval(version='9.20.26_2', ports_commit='1' * 40):
+    return f'RP_BIND_VERSION= {version}\nRP_BIND_PORTS_COMMIT= {ports_commit}\n'
+
+
+def fixture_version_comparison(left, right):
+    """Order the suite's numeric package versions, including native revisions."""
+    def key(version):
+        base, _, revision = version.partition('_')
+        return tuple(map(int, base.split('.'))), int(revision or '0')
+    left, right = key(left), key(right)
+    return '<' if left < right else '>' if left > right else '='
+
+
+def make_ports_recipe(directory, version='9.20.26_2'):
+    """A real immutable Ports tree with independent expected Git-blob hashes."""
+    from git_fixtures import init_repository, commit
+    repository = init_repository(directory)
+    distversion, _, revision = version.partition('_')
+    makefile = f'PORTNAME= bind\nDISTVERSION= {distversion}\nPORTREVISION= {revision or 0}\n'.encode()
+    distinfo = f'SHA256 (bind-{distversion}.tar.xz) = {"c" * 64}\n'.encode()
+    selected = commit(repository, {'dns/bind920/Makefile': makefile.decode(),
+                                   'dns/bind920/distinfo': distinfo.decode()}, 'approved recipe')
+    profile = dict(ports_repository=BIND_PROFILE['ports_repository'], ports_commit=selected,
+                   makefile_sha256=hashlib.sha256(makefile).hexdigest(),
+                   distinfo_sha256=hashlib.sha256(distinfo).hexdigest(),
+                   distversion=distversion, portrevision=int(revision or 0))
+    return repository, runtime_approval(version, selected), profile
+
+
+def make_tools_repository(directory, profile):
+    from git_fixtures import init_repository, commit, git
+    repository = init_repository(directory)
+    commit(repository, {f"config/{profile['series']}/build.conf": f"OS?= {profile['freebsd_release']}\n"}, 'tools environment')
+    git(repository, 'tag', profile['tools_tag'])
+    return repository
 
 
 def write_json(path, data):
@@ -50,7 +94,7 @@ def write_build_metadata(path, **changes):
 
 def make_bind_component(kind, directory, *, series, creator, source_commit,
                         control_commit, profile, version, recipe_sha256=None,
-                        runtime_receipt=None, policy_path=None):
+                        runtime_receipt=None, package_definition=None, bind_profile=None):
     """Two concrete original component records with independently saved bytes."""
     ci = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(ci))
@@ -67,7 +111,7 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
                     control_commit=control_commit)
     if kind == 'bind_runtime':
         distversion, _, revision = version.partition('_')
-        pin = dict(BIND_PROFILE, distversion=distversion, portrevision=int(revision or 0))
+        pin = dict(bind_profile or BIND_PROFILE, distversion=distversion, portrevision=int(revision or 0))
         records = bind_records(version)
         inputs = dict(schema=4, series=series, freebsd_release=profile['freebsd_release'],
                       architecture='x86_64', bind_profile=pin, build_recipe_sha256=recipe_sha256 or 'e' * 64,
@@ -81,15 +125,13 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
         manifest.update(profile_commit=source_commit, build_fingerprint=fingerprint)
         archives = [(name, version, record['origin']) for name, record in records.items()]
     else:
-        if policy_path is None:
-            policy = json.loads((ci.parents[1] / '.resolver-plugins/bind-compatibility.json').read_text())
-            write_json(directory / 'bind-compatibility.json', policy)
+        if package_definition is None:
+            (directory / 'plugin-package.mk').write_text(PLUGIN_PACKAGE)
         else:
-            shutil.copyfile(policy_path, directory / 'bind-compatibility.json')
+            shutil.copyfile(package_definition, directory / 'plugin-package.mk')
         inputs = dict(schema=1, source_commit=source_commit, series=series,
                       package_abi=creator['abi'], freebsd_release=profile['freebsd_release'],
-                      package_creator=creator, build_recipe_sha256=recipe_sha256 or 'd' * 64,
-                      compatibility_policy_sha256=hashlib.sha256((directory / 'bind-compatibility.json').read_bytes()).hexdigest())
+                      package_creator=creator, build_recipe_sha256=recipe_sha256 or 'd' * 64)
         write_json(directory / 'plugin-build-inputs.json', inputs)
         fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         runtime_version = '9.20.26_2'

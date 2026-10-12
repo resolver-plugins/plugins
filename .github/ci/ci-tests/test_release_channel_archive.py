@@ -7,7 +7,7 @@ from module_fixtures import *
 
 import pytest
 
-from package_fixtures import creator_identity, write_json, write_resolved_target, make_bind_component
+from package_fixtures import creator_identity, write_json, write_resolved_target, make_bind_component, runtime_approval
 from test_package_catalogue import publication_environment, directory_bytes, byte_hashes, assert_original_component
 from bind.shared import components
 from bind.plugin import plugin_release
@@ -39,7 +39,14 @@ def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, imm
 @contextmanager
 def release_api_store(remote, pages, failure, native_run):
     """Persist GitHub wire outcomes while running all Release/Pages decisions."""
-    objects={};sequence=[0]
+    objects={};sequence=[0];asset_sequence=[0]
+    def upload_asset(state,name,contents):
+        asset_sequence[0]+=1
+        state['assets'][name]=contents
+        state.setdefault('asset_ids',{})[name]=asset_sequence[0]
+    for state in remote.values():
+        for name,contents in list(state['assets'].items()):
+            upload_asset(state,name,contents)
     def object_sha(kind,value):
         sequence[0]+=1
         digest=hashlib.sha1((kind+str(sequence[0])+repr(value)).encode()).hexdigest()
@@ -113,16 +120,16 @@ def release_api_store(remote, pages, failure, native_run):
             if tag in remote:
                 return result(command,kwargs,1,stderr='release already exists')
             number=len(remote)+1
-            remote[tag]=dict(assets={},draft='--draft' in arguments,isImmutable=tag.startswith('pkg-dhcp-interface-ha-26.7-'),
+            remote[tag]=dict(assets={},asset_ids={},draft='--draft' in arguments,isImmutable=tag.startswith('pkg-dhcp-interface-ha-26.7-'),
                 name=arguments[arguments.index('--title')+1],body='',isPrerelease='--prerelease' in arguments,
                 created_at=f'2026-01-01T00:{number//60:02}:{number%60:02}Z')
             for value in arguments[3:arguments.index('--repo')]:
-                if Path(value).is_file(): remote[tag]['assets'][Path(value).name]=Path(value).read_bytes()
+                if Path(value).is_file(): upload_asset(remote[tag],Path(value).name,Path(value).read_bytes())
         elif tag not in remote:
             return result(command,kwargs,1,stderr='release not found')
         elif operation=='view':
             state=remote[tag]
-            assets=[dict(name=name) for name in state['assets']]
+            assets=[dict(name=name,id=state['asset_ids'][name]) for name in state['assets']]
             if '--jq' in arguments:
                 response='\n'.join(state['assets'])
             else:
@@ -136,12 +143,13 @@ def release_api_store(remote, pages, failure, native_run):
             directory=Path(arguments[arguments.index('--dir')+1]);directory.mkdir(parents=True,exist_ok=True)
             (directory / name).write_bytes(remote[tag]['assets'][name])
         elif operation=='upload':
-            asset=Path(arguments[3]);remote[tag]['assets'][asset.name]=asset.read_bytes()
+            asset=Path(arguments[3]);upload_asset(remote[tag],asset.name,asset.read_bytes())
             if failure[0]==('upload',tag):
                 failure[0]=None
                 return result(command,kwargs,1,stderr='partial asset upload failed')
         elif operation=='delete-asset':
             remote[tag]['assets'].pop(arguments[3],None)
+            remote[tag]['asset_ids'].pop(arguments[3],None)
         elif operation=='edit':
             for field,flag in (('name','--title'),('body','--notes-file')):
                 if flag in arguments:
@@ -184,7 +192,7 @@ class ChannelTagTest(unittest.TestCase):
             tag=plugin_release.prepare_source_assets(original,root / 'source','26.7',selected)
             self.assertEqual(f'os-bind-rp-26.7-26.7_1-plugin-{fingerprint}',tag)
             names={'os-bind-rp-26.7_1.pkg','build-metadata.txt','plugin-build-inputs.json','upstream.json',
-                   'creator-target.json','bind-compatibility.json','channel.json'}
+                   'creator-target.json','plugin-package.mk','channel.json'}
             self.assertEqual({name:(original / name).read_bytes() for name in names},directory_bytes(root / 'source'))
 
 
@@ -294,7 +302,7 @@ class TestSelfContainedRepositoryStage:
             environment.root / 'key',pkg_command=environment.pkg)
         own=directory_bytes(repository / 'component/current')
         assert set(own)=={'os-bind-rp-26.7_1.pkg','build-metadata.txt','plugin-build-inputs.json',
-            'upstream.json','creator-target.json','bind-compatibility.json','resolver-plugins.pub',
+            'upstream.json','creator-target.json','plugin-package.mk','resolver-plugins.pub',
             'channel.json','meta','meta.conf','data.pkg','data.tzst','packagesite.pkg','packagesite.tzst'}
         for name,data in original.items(): assert own[name]==data
         manifest=json.loads(own['channel.json'])
@@ -530,10 +538,10 @@ class PublicationRecoveryTest(unittest.TestCase):
             tag='pkg-26.7-bind-runtime-9.20.26_2-'+'f'*64
             remote={tag:dict(assets={'asset.pkg':b'original'},draft=False,isImmutable=False,
                 name='Original runtime snapshot',body='Original notes',isPrerelease=False,created_at='2026-01-01T00:00:00Z')}
-            before=deepcopy(remote)
             groups=[dict(current_tag='pkg-26.7-bind-runtime',snapshot_tag=tag,directory=staged,
                 validate=lambda directory:None,can_advance=lambda current,candidate:True)]
             with release_api_store(remote,dict(files={}),[None],lambda command,**kwargs:self.fail(str(command))):
+                before=deepcopy(remote)
                 with self.assertRaisesRegex(RuntimeError,'different bytes'):
                     release_channel.publish_channels('example.invalid/distribution',groups,root / 'recovery')
             self.assertEqual(before,remote)
@@ -592,6 +600,9 @@ class PublicationRecoveryTest(unittest.TestCase):
             creator=write_resolved_target(root / 'creator-target.json',profile)
             write_resolved_target(root / 'reader-target.json',profile,role='reader')
             stack=root / 'stack'
+            approved=root / 'runtime-approval.mk'
+            recipe=json.loads((runtime_dirs[-1] / 'bind920-profile.json').read_text())
+            approved.write_text(runtime_approval('9.20.41_2',recipe['ports_commit']))
             pair=dict(bind_runtime=runtimes[-1],bind_plugin=plugins[-1])
             packages=[runtime_dirs[-1] / name for name in runtimes[-1]['packages']]+[plugin_dirs[-1] / name for name in plugins[-1]['packages']]
             def sign(paths,output,*args):
@@ -602,7 +613,8 @@ class PublicationRecoveryTest(unittest.TestCase):
                  patch.object(package_catalogue.bind,'select_role'),patch.object(package_catalogue.target_pkg,'verify_target_pkg'), \
                  patch.object(package_catalogue.subprocess,'check_output',return_value=components.PUBLIC_KEY.read_bytes()), \
                  patch.object(package_catalogue.releases,'stage_selected_repository',side_effect=sign):
-                current_stack=package_catalogue.stage_bind_stack(runtime_dirs[-1],plugin_dirs[-1],stack,series='26.7',key=root / 'key',creator_target=creator,upstream=upstream)
+                current_stack=package_catalogue.stage_bind_stack(runtime_dirs[-1],plugin_dirs[-1],stack,series='26.7',key=root / 'key',creator_target=creator,upstream=upstream,
+                    approved_profile=runtime_dirs[-1] / 'bind920-profile.json',runtime_approval=approved)
             current_pair=retention.paired_tag(current_stack,'26.7')
             remote[current_pair]=stack;listed.append(dict(tag_name=current_pair,draft=False,created_at='2026-01-01T00:00:00Z'))
             opaque=[]
@@ -638,7 +650,7 @@ class PublicationRecoveryTest(unittest.TestCase):
 class ChannelManifestValidationTest(unittest.TestCase):
     def test_manifest_contract(self):
         from git_fixtures import upstream_profile
-        for fault,error in [('valid',None),('formula','dependency policy'),('exact-edge','dependency policy'),
+        for fault,error in [('valid',None),('formula','differs from source'),('exact-edge','differs from source'),
                             ('version','plugin version differs from series'),('filename','original build inputs')]:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
                 directory=make_bind_component('bind_plugin',Path(temporary) / 'plugin',series='26.7',creator=creator_identity(),
@@ -656,7 +668,8 @@ class ChannelManifestValidationTest(unittest.TestCase):
                 formula='bind920 = 9.20.26' if fault=='formula' else 'bind920 >= 9.20.26'
                 with patch.object(components.releases,'query_package',return_value=(identity,edges)), \
                      patch.object(components.package_checksums,'verify_archive'), \
-                     patch.object(components.releases,'read_package_manifest',return_value=dict(dep_formula=formula,conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'])):
+                     patch.object(components.releases,'read_package_manifest',return_value=dict(dep_formula=formula,conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'],
+                        deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}})):
                     if error:
                         with self.assertRaisesRegex(ValueError,error):
                             components.validate_component(directory,'bind_plugin','26.7',pkg_command='pkg')

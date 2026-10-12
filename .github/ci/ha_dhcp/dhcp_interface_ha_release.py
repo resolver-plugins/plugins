@@ -5,8 +5,51 @@ import json
 import os
 import re
 import subprocess
+import hashlib
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from bind.runtime import bind920_profile
+from shared import metadata_profile
 
 MAKEFILE = "net/dhcp-interface-ha/Makefile"
+BIND_INPUT_FILES = {"runtime-approval.mk", "bind920-profile.json", "tools-profile.json"}
+
+
+def freeze_bind_inputs(directory, upstream, tools_repository, control_commit):
+    directory.mkdir(parents=True, exist_ok=True)
+    raw = subprocess.check_output(["git", "show", f"{control_commit}:dns/bind/Makefile"])
+    approval = bind920_profile.approval_from_makefile(raw.decode())
+    (directory / "runtime-approval.mk").write_bytes(raw)
+    records = {"bind920-profile.json": bind920_profile.resolve_profile(approval),
+               "tools-profile.json": metadata_profile.verify_tools_profile(upstream, tools_repository)}
+    for name, record in records.items():
+        (directory / name).write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+    hashes = {name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
+              for name in sorted(BIND_INPUT_FILES)}
+    sealed = (json.dumps(hashes, sort_keys=True, indent=2) + "\n").encode()
+    (directory / "bind-inputs.json").write_bytes(sealed)
+    return hashlib.sha256(sealed).hexdigest()
+
+
+def validate_bind_inputs(directory, upstream, control_commit, digest):
+    sealed = (directory / "bind-inputs.json").read_bytes()
+    if hashlib.sha256(sealed).hexdigest() != digest:
+        raise ValueError("HA shared BIND inputs differ from the controller seal")
+    hashes = json.loads(sealed)
+    if set(hashes) != BIND_INPUT_FILES or any(
+            hashlib.sha256((directory / name).read_bytes()).hexdigest() != hashes[name]
+            for name in BIND_INPUT_FILES):
+        raise ValueError("HA shared BIND file map differs from its seal")
+    raw = (directory / "runtime-approval.mk").read_bytes()
+    if raw != subprocess.check_output(["git", "show", f"{control_commit}:dns/bind/Makefile"]):
+        raise ValueError("HA runtime approval differs from trusted control Git blob")
+    approval = bind920_profile.approval_from_makefile(raw.decode())
+    recipe = bind920_profile.validate_profile(json.loads((directory / "bind920-profile.json").read_text()))
+    if recipe["ports_commit"] != approval["ports_commit"] or bind920_profile.package_version(recipe) != approval["version"]:
+        raise ValueError("HA runtime recipe differs from sealed approval")
+    metadata_profile.validate_tools_record(json.loads((directory / "tools-profile.json").read_text()), upstream)
 
 
 def repository_snapshot(series):
@@ -54,11 +97,26 @@ def select(event, ref, source, before=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["select", "snapshot"])
+    parser.add_argument("command", choices=["select", "snapshot", "bind-inputs", "validate-bind-inputs"])
     parser.add_argument("--series", default="26.7")
+    parser.add_argument("--directory", type=Path)
+    parser.add_argument("--upstream", type=Path)
+    parser.add_argument("--tools-repository", type=Path)
+    parser.add_argument("--control-commit")
+    parser.add_argument("--sha256")
     args = parser.parse_args()
     snapshot = repository_snapshot(args.series)
-    if args.command == "snapshot":
+    if args.command in {"bind-inputs", "validate-bind-inputs"}:
+        if args.directory is None or args.upstream is None or not re.fullmatch(r"[0-9a-f]{40}", args.control_commit or ""):
+            parser.error("shared BIND input commands require directory, upstream and immutable control commit")
+        upstream = metadata_profile.load_profile(args.upstream, args.series)
+        if args.command == "bind-inputs":
+            if args.tools_repository is None:
+                parser.error("bind-inputs requires tools repository")
+            print(freeze_bind_inputs(args.directory, upstream, args.tools_repository, args.control_commit))
+        else:
+            validate_bind_inputs(args.directory, upstream, args.control_commit, args.sha256)
+    elif args.command == "snapshot":
         print(snapshot)
     else:
         with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:

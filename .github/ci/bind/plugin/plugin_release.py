@@ -18,7 +18,7 @@ from shared import release_channel as releases
 SOURCE_PATHS = ("dns/bind", "Mk", "Scripts", "Templates")
 SOURCE_REQUIRED = ("dns/bind/Makefile", "Mk/plugins.mk", "Mk/defaults.mk", "Mk/common.mk")
 SOURCE_ASSETS = ("build-metadata.txt", "plugin-build-inputs.json", "upstream.json",
-                 "creator-target.json", "bind-compatibility.json", "channel.json")
+                 "creator-target.json", "plugin-package.mk", "channel.json")
 
 
 def materialize_source(repository, source_commit, upstream):
@@ -184,6 +184,7 @@ def main():
         inputs = json.loads((args.trusted_directory / "producer-inputs.json").read_text())
         if inputs["build_recipe_sha256"] != releases.sha256(args.repository_root / ".github/ci/bind/plugin/build-os-bind-rp.sh"):
             raise ValueError("plugin wrapper differs from trusted build input")
+        components.validate_selected_git(selection, args.trusted_directory)
         materialize_source(args.repository_root, args.source_commit, args.trusted_directory / "upstream.json")
     elif args.command == "intake":
         fetch_intake(args.repository, args.trusted_directory, selection, args.output_directory)

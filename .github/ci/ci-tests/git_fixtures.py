@@ -46,3 +46,71 @@ def create_core_repository(path):
         'src/etc/pkg/fingerprints/OPNsense/trusted/pkg.opnsense.org.fixture':
             'function: "sha256"\nfingerprint: "fixture"\n',
     }, 'fixture core')
+
+
+def bind_sync_repositories(tmp_path):
+    """Source/control/tools objects for the actual discovery-to-review CLI."""
+    tools = init_repository(tmp_path / 'tools')
+    for series, releases in (('26.1', [('26.1', '14.2'), ('26.1.11', '14.3')]),
+                             ('26.7', [('26.7', '15.0'), ('26.7.1', '15.1')])):
+        for tag, release in releases:
+            commit(tools, {f'config/{series}/build.conf': f'OS?= {release} # upstream\n'}, tag)
+            git(tools, 'tag', tag)
+        commit(tools, {f'config/{series}/build.conf': 'OS?=99.9\n'}, 'prerelease')
+        for suffix in ('b', 'r1'):
+            git(tools, 'tag', f'{series}.{suffix}')
+    repository = init_repository(tmp_path / 'repository')
+    initial = commit(repository, {'dns/bind/bind.conf': 'bind-v1\n',
+                                 'Mk/plugins.mk': 'native framework\n',
+                                 'README': 'upstream\n'}, 'upstream 26.1')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', initial)
+    stable_26_7 = commit(repository, {'README': 'unrelated 26.7\n'}, 'upstream 26.7')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', stable_26_7)
+    stable_27_1 = commit(repository, {'dns/bind/bind.conf': 'bind-v2\n'}, 'upstream BIND change')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/27.1', stable_27_1)
+    git(repository, 'checkout', '-B', 'release/bind-rp/26.1', initial)
+    source_commit = commit(repository, {
+        '.resolver-plugins/upstream.json': json.dumps(upstream_profile(upstream_commit=initial)),
+        'dns/bind/fork.conf': 'resolver overlay\n',
+        'Mk/plugins.mk': 'native framework\nfork dependency formula\n',
+        'dns/bind/tests/canonical-only.py': 'do not carry tests\n',
+        'tools/not-an-overlay.txt': 'do not carry source CI\n',
+    }, 'reviewed release 26.1')
+    git(repository, 'checkout', 'master')
+    return dict(repository=repository, tools=tools, initial=initial,
+                stable_26_7=stable_26_7, stable_27_1=stable_27_1,
+                source_commit=source_commit)
+
+
+def discover_sync(fixture, planner):
+    result = subprocess.run([
+        'python3', str(planner), 'discover', '--repository', str(fixture['repository']),
+        '--upstream', 'upstream', '--release-prefix', 'release/bind-rp/',
+        '--metadata-path', '.resolver-plugins/upstream.json',
+        '--tools-repository', str(fixture['tools']),
+        '--control-commit', git(fixture['repository'], 'rev-parse', 'HEAD'),
+    ], check=True, text=True, capture_output=True)
+    return json.loads(result.stdout)
+
+
+def seal_sync(discovery, tmp_path, planner, *, core_commit='2' * 40):
+    discovery_path = tmp_path / 'discovery.json'
+    plan_path = tmp_path / 'plan.json'
+    discovery_path.write_text(json.dumps(discovery))
+    subprocess.run([
+        'python3', str(planner), 'seal-plan', '--discovery', str(discovery_path),
+        '--core-commit', core_commit,
+        '--core-archive-url', f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz',
+        '--core-archive-sha256', 'a' * 64, '--output', str(plan_path),
+    ], check=True, text=True, capture_output=True)
+    return json.loads(plan_path.read_text())
+
+
+def apply_sync(fixture, plan, tmp_path, planner, environment=None):
+    plan_path = tmp_path / 'plan.json'
+    plan_path.write_text(json.dumps(plan))
+    return subprocess.run([
+        'python3', str(planner), 'apply', '--repository', str(fixture['repository']),
+        '--plan', str(plan_path), '--tools-repository', str(fixture['tools']),
+    ], text=True, capture_output=True, check=False,
+       env={**os.environ, **(environment or {})})

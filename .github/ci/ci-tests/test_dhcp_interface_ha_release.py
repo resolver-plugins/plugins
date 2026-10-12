@@ -71,6 +71,49 @@ def test_release_cli_consumes_push_payload_and_emits_job_outputs(release_history
         "release": "true", "series": "26.7", "source_commit": source}
 
 
+@pytest.mark.parametrize('fault', [None, 'member', 'control'])
+def test_shared_bind_inputs_bind_exact_git_recipe_tools_and_external_seal(tmp_path, monkeypatch, fault):
+    from git_fixtures import init_repository, commit, git, upstream_profile
+    from package_fixtures import PLUGIN_PACKAGE, make_ports_recipe, make_tools_repository, write_json
+    profile = upstream_profile('26.7')
+    ports, approval, expected_recipe = make_ports_recipe(tmp_path / 'ports')
+    tools = make_tools_repository(tmp_path / 'tools', profile)
+    repository = init_repository(tmp_path / 'control')
+    original = PLUGIN_PACKAGE + approval
+    control = commit(repository, {'dns/bind/Makefile': original}, 'reviewed BIND approval')
+    upstream = write_json(tmp_path / 'upstream.json', profile)
+    trusted = tmp_path / 'trusted'
+    resolve = selection.bind920_profile.resolve_profile
+    with monkeypatch.context() as boundary:
+        boundary.chdir(repository)
+        boundary.setattr(selection.bind920_profile, 'resolve_profile', lambda record: resolve(record, repository=ports))
+        digest = selection.freeze_bind_inputs(trusted, profile, tools, control)
+    assert (trusted / 'runtime-approval.mk').read_bytes() == original.encode()
+    assert json.loads((trusted / 'bind920-profile.json').read_text()) == expected_recipe
+    tools_blob = subprocess.check_output(['git', '-C', str(tools), 'show',
+        profile['tools_tag'] + ':config/26.7/build.conf'])
+    assert json.loads((trusted / 'tools-profile.json').read_text()) == dict(schema=1,
+        series='26.7', tools_tag='26.7.1', tools_commit=git(tools, 'rev-parse', profile['tools_tag']),
+        path='config/26.7/build.conf', build_conf_sha256=hashlib.sha256(tools_blob).hexdigest(),
+        freebsd_release='15.1')
+    assert json.loads((trusted / 'bind-inputs.json').read_text()) == {
+        name: hashlib.sha256((trusted / name).read_bytes()).hexdigest()
+        for name in ('runtime-approval.mk', 'bind920-profile.json', 'tools-profile.json')}
+    if fault == 'member':
+        record = json.loads((trusted / 'tools-profile.json').read_text())
+        write_json(trusted / 'tools-profile.json', dict(record, tools_commit='f' * 40))
+    elif fault == 'control':
+        control = commit(repository, {'dns/bind/Makefile': original + '# later approval context\n'}, 'different control')
+    sentinel = tmp_path / 'privileged-output'
+    command = [sys.executable, '-I', str(CI / 'ha_dhcp/dhcp_interface_ha_release.py'),
+        'validate-bind-inputs', '--series', '26.7', '--directory', str(trusted),
+        '--upstream', str(upstream), '--control-commit', control, '--sha256', digest]
+    result = subprocess.run(['sh', '-c', shlex.join(command) + ' && : > ' + shlex.quote(str(sentinel))],
+        cwd=repository, capture_output=True, text=True)
+    assert (result.returncode == 0) is (fault is None), result.stderr
+    assert sentinel.exists() is (fault is None)
+
+
 @pytest.fixture
 def release(tmp_path, monkeypatch):
     (tmp_path / "build-metadata.txt").write_text(

@@ -6,6 +6,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from bind.runtime import bind920_profile
 
 KINDS = ("bind_runtime", "bind_plugin")
 EVENT_FIELDS = {"name", "ref", "sha", "workflow_sha", "before", "merged", "base_ref",
@@ -13,13 +17,14 @@ EVENT_FIELDS = {"name", "ref", "sha", "workflow_sha", "before", "merged", "base_
 OUTPUT_FIELDS = ("mode", "series", "source_ref", "profile_ref", "control_ref",
                  "prerelease_tag", "pull_number", "release")
 SHARED_PATHS = (".github/ci/bind/shared/", ".github/ci/shared/")
-SHARED_FILES = {".resolver-plugins/bind-compatibility.json",
-                "docs/package-repository/resolver-plugins.pub", "scripts/install-os-bind-rp.sh"}
+PACKAGE_DEFINITION = "dns/bind/Makefile"
+APPROVAL_LINE = re.compile(r"^\s*RP_BIND_(?:VERSION|PORTS_COMMIT)\s*[?+:!]?=")
+SHARED_FILES = {"docs/package-repository/resolver-plugins.pub", "scripts/install-os-bind-rp.sh"}
 
 
 def watches(component, path):
     if component == "bind_runtime":
-        return path == ".resolver-plugins/bind920.json"
+        return path == PACKAGE_DEFINITION
     if path.startswith(("dns/bind/tests/", ".github/ci/ci-tests/")):
         return False
     if path in SHARED_FILES or path.startswith(SHARED_PATHS):
@@ -33,7 +38,24 @@ def _commit(value):
     return value
 
 
-def select_event(component, event, refs, changed_paths):
+def package_changes(before, after):
+    """Separate runtime approvals from the plugin-visible package definition."""
+    if not isinstance(before, str) or not isinstance(after, str):
+        raise ValueError("package changes require immutable before/after definitions")
+    previous = bind920_profile.approval_from_makefile(before, allow_absent=True)
+    current = bind920_profile.approval_from_makefile(after)
+    runtime_changed = previous is not None and previous != current
+    if runtime_changed:
+        def version(value):
+            base, _, revision = value.partition("_")
+            return (*map(int, base.split(".")), int(revision or "0"))
+        if version(current["version"]) <= version(previous["version"]):
+            raise ValueError("a changed runtime approval requires a newer native package version")
+    plugin_lines = lambda text: [line for line in text.splitlines() if not APPROVAL_LINE.match(line)]
+    return runtime_changed, plugin_lines(before) != plugin_lines(after)
+
+
+def select_event(component, event, refs, changed_paths, *, before_package=None, after_package=None):
     if component not in KINDS or not isinstance(event, dict) or set(event) != EVENT_FIELDS:
         raise ValueError("invalid component event")
     if (not isinstance(event["inputs"], dict) or set(event["inputs"]) != {"mode", "series", "pull_number"}
@@ -48,7 +70,12 @@ def select_event(component, event, refs, changed_paths):
     if name == "push":
         if event["ref"] != "refs/heads/master":
             raise ValueError("production pushes require merged master control")
-        if not any(watches(component, path) for path in changed_paths):
+        relevant = [path for path in changed_paths if watches(component, path)]
+        if PACKAGE_DEFINITION in relevant:
+            runtime_changed, plugin_changed = package_changes(before_package, after_package)
+            if not (runtime_changed if component == "bind_runtime" else plugin_changed):
+                relevant.remove(PACKAGE_DEFINITION)
+        if not relevant:
             return selected
         if not series_refs:
             raise ValueError("no registered numeric release series")
@@ -161,7 +188,12 @@ def main():
             ["gh", "api", f"repos/{repository}/pulls/{pull}", "--jq", ".base.ref"], text=True).strip()
     changed = (json.loads(args.changed_paths_file.read_text()) if args.changed_paths_file is not None
                else discover_changed_paths(event, document))
-    selected = select_event(args.component, event, json.loads(args.refs_file.read_text()), changed)
+    package = {}
+    if event["name"] == "push" and PACKAGE_DEFINITION in changed:
+        for key, commit in (("before_package", event["before"]), ("after_package", event["sha"])):
+            package[key] = ("" if _commit(commit) == "0" * 40 else subprocess.check_output(
+                ["git", "show", f"{commit}:{PACKAGE_DEFINITION}"], text=True))
+    selected = select_event(args.component, event, json.loads(args.refs_file.read_text()), changed, **package)
     args.output.write_text(json.dumps(selected, sort_keys=True, indent=2) + "\n")
     if args.github_output is not None:
         with args.github_output.open("a") as stream:

@@ -98,23 +98,19 @@ makefile="$ports_directory/dns/bind920/Makefile"
 distinfo="$ports_directory/dns/bind920/distinfo"
 [ "$(sha256 -q "$makefile")" = "$makefile_sha256" ] || fail 'BIND Makefile hash does not match pinned metadata'
 [ "$(sha256 -q "$distinfo")" = "$distinfo_sha256" ] || fail 'BIND distinfo hash does not match pinned metadata'
-grep -Fqx "DISTVERSION=	$distversion" "$makefile" || fail 'BIND Makefile does not declare the pinned version'
-if [ "$portrevision" -gt 0 ]
-then
-    "$python_command" - "$makefile" "$portrevision" <<'PY'
-import pathlib
-import re
+"$python_command" - "$script_directory" "$profile_path" "$resolved_commit" "$makefile" "$distinfo" <<'PYVERIFY'
+import json
+from pathlib import Path
 import sys
-
-path = pathlib.Path(sys.argv[1])
-revision = sys.argv[2]
-text = path.read_text(encoding="utf-8")
-updated, count = re.subn(r"^PORTREVISION=\s*[0-9]+\s*$", f"PORTREVISION=\t{revision}", text, flags=re.MULTILINE)
-if count == 0:
-    raise SystemExit("BIND Makefile does not declare PORTREVISION")
-path.write_text(updated, encoding="utf-8")
-PY
-fi
+sys.path.insert(0, str(Path(sys.argv[1]).parents[1]))
+from bind.runtime import bind920_profile
+expected = json.loads(Path(sys.argv[2]).read_text())
+actual = bind920_profile.profile_from_recipe(
+    {"version": bind920_profile.package_version(expected), "ports_commit": expected["ports_commit"]},
+    sys.argv[3], Path(sys.argv[4]).read_bytes(), Path(sys.argv[5]).read_bytes())
+if actual != expected:
+    raise SystemExit("native Ports recipe differs from the sealed approval")
+PYVERIFY
 
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \

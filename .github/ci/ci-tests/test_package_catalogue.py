@@ -8,12 +8,19 @@ sys.path.insert(0, str(CI))
 from shared import package_catalogue as catalogue
 from ha_fixtures import make_ha_channel
 from git_fixtures import upstream_profile
-from package_fixtures import creator_identity, make_bind_component, write_resolved_target, write_json
+from package_fixtures import (PLUGIN_PACKAGE, BIND_PROFILE, creator_identity, make_bind_component,
+                              make_ports_recipe, make_tools_repository, runtime_approval, fixture_version_comparison,
+                              write_resolved_target, write_json)
 from bind.shared import components as bind_components
 
 
 def directory_bytes(directory):
     return {path.name:path.read_bytes() for path in directory.iterdir()}
+
+
+def restored_release(record):
+    # Rollback restores content and notes; new uploads receive new native IDs.
+    return {name:value for name,value in record.items() if name!='asset_ids'}
 
 
 def byte_hashes(assets):
@@ -40,12 +47,20 @@ def publication_environment(tmp_path,monkeypatch):
     from test_release_channel_archive import release_api_store
     from bind.shared import retention
     from ha_dhcp import dhcp_interface_ha_channel as ha_channel
-    from package_fixtures import BIND_PROFILE
     history=init_repository(tmp_path / 'control')
     profile=upstream_profile('26.7')
-    policy=(CI.parents[1] / '.resolver-plugins/bind-compatibility.json').read_text()
+    recipes={}
+    def approved_recipe(version):
+        if version not in recipes:
+            recipes[version]=make_ports_recipe(tmp_path / ('ports-'+version),version)
+        return recipes[version]
+    _,approval,_=approved_recipe('9.20.26_2')
+    tools=make_tools_repository(tmp_path / 'tools',profile)
+    resolve_profile=bind_components.bind920_profile.resolve_profile
+    monkeypatch.setattr(bind_components.bind920_profile,'resolve_profile',lambda selected:
+        resolve_profile(selected,repository=recipes[selected['version']][0]))
     first=commit(history,{'.resolver-plugins/upstream.json':json.dumps(profile),
-        '.resolver-plugins/bind920.json':json.dumps(BIND_PROFILE),'.resolver-plugins/bind-compatibility.json':policy,
+        'dns/bind/Makefile':PLUGIN_PACKAGE+approval,
         '.github/ci/bind/runtime/build-bind920.sh':'reviewed runtime recipe',
         '.github/ci/bind/plugin/build-os-bind-rp.sh':'reviewed plugin recipe'},'reviewed initial control')
     origin=tmp_path / 'origin.git';git(tmp_path,'clone','--bare',history,origin)
@@ -86,6 +101,7 @@ def publication_environment(tmp_path,monkeypatch):
                 key,_,value=value.partition('=');options[key]=value
         operation=args[0]
         if operation=='-v': return response(command,kwargs,installed[0]['version'].split('_')[0]+'\n')
+        if operation=='version': return response(command,kwargs,fixture_version_comparison(*args[-2:])+'\n')
         if operation=='repo':
             catalogues[0]+=1
             for name in bind_components.CATALOGUE_ASSETS:
@@ -99,7 +115,8 @@ def publication_environment(tmp_path,monkeypatch):
         if operation=='which': return response(command,kwargs,'pkg-'+installed[0]['version']+'\n')
         if operation=='check': return response(command,kwargs)
         if operation=='info':
-            return response(command,kwargs,json.dumps(dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'])))
+            return response(command,kwargs,json.dumps(dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'],
+                deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}})))
         if operation=='query':
             if '%k' in args: return response(command,kwargs,'1\n' if locked[0] else '0\n')
             identity=archive_identity(Path(args[args.index('-F')+1])) if '-F' in args else installed[0]
@@ -128,11 +145,15 @@ def publication_environment(tmp_path,monkeypatch):
         raise AssertionError(command)
     def control(version,label):
         git(history,'checkout','master')
-        distversion,_,revision=version.partition('_')
-        selected_commit=commit(history,{'.resolver-plugins/bind920.json':json.dumps(dict(BIND_PROFILE,distversion=distversion,portrevision=int(revision or 0))),
+        _,approval,_=approved_recipe(version)
+        selected_commit=commit(history,{'dns/bind/Makefile':PLUGIN_PACKAGE+approval,
             'reviewed-change':label},label)
         git(origin,'fetch',history.as_uri(),'master:master')
         return selected_commit
+    def write_source_definition(run_root,source):
+        path=run_root / 'source-package.mk'
+        path.write_bytes(subprocess.check_output(['git','-C',str(history),'show',source+':dns/bind/Makefile']))
+        return path
     def select(component,version,*,source=None,creator=None):
         serial[0]+=1
         run_root=tmp_path / f'run-{serial[0]}';run_root.mkdir()
@@ -144,8 +165,9 @@ def publication_environment(tmp_path,monkeypatch):
         recipe=history / ('.github/ci/bind/runtime/build-bind920.sh' if component=='bind_runtime' else '.github/ci/bind/plugin/build-os-bind-rp.sh')
         result=bind_components.prepare_selection(run_root / 'trusted',component=component,series='26.7',mode='production',
             control_commit=current,profile_commit=source or current,source_commit=source if component=='bind_plugin' else None,
-            upstream=history / '.resolver-plugins/upstream.json',profile=history / '.resolver-plugins/bind920.json',
-            policy=history / '.resolver-plugins/bind-compatibility.json',recipe=recipe,repository='example.invalid/distribution',
+            upstream=history / '.resolver-plugins/upstream.json',runtime_approval=history / 'dns/bind/Makefile',
+            package_definition=write_source_definition(run_root,source) if component=='bind_plugin' else None,
+            tools_repository=tools,recipe=recipe,repository='example.invalid/distribution',
             intake_directory=run_root / 'intake',creator_target=creator_path,reader_target=reader_path)
         return SimpleNamespace(root=run_root,control=current,source=source,component=component,version=version,creator=maker,
             selection=json.loads((run_root / 'trusted/selection.json').read_text()),selection_sha256=result['selection_sha256'])
@@ -158,7 +180,8 @@ def publication_environment(tmp_path,monkeypatch):
             original=make_bind_component(run.component,run.root / 'built',series='26.7',creator=run.creator,
                 source_commit=run.source or run.control,control_commit=run.control,profile=profile,version=run.version,
                 recipe_sha256=hashlib.sha256((history / ('.github/ci/bind/runtime/build-bind920.sh' if run.component=='bind_runtime' else '.github/ci/bind/plugin/build-os-bind-rp.sh')).read_bytes()).hexdigest(),
-                runtime_receipt=receipt,policy_path=run.root / 'trusted/bind-compatibility.json')
+                runtime_receipt=receipt,package_definition=run.root / 'trusted/plugin-package.mk' if run.component=='bind_plugin' else None,
+                bind_profile=json.loads((run.root / 'trusted/bind920-profile.json').read_text()))
         names=json.loads((original / 'channel.json').read_text())['packages']
         for name in set(names) | ({'bind920-provenance.json'} if run.component=='bind_runtime' else {'build-metadata.txt','plugin-build-inputs.json'}):
             shutil.copyfile(original / name,raw / name)
@@ -170,7 +193,9 @@ def publication_environment(tmp_path,monkeypatch):
         return run
     def publish_run(run):
         git(history,'checkout','--detach',run.control)
-        bind_components.publish_component('example.invalid/distribution',run.root / 'repository',run.root / 'trusted',run.root / 'recovery',
+        run.publish_attempt=getattr(run,'publish_attempt',0)+1
+        recovery=run.root / ('recovery' if run.publish_attempt==1 else f'recovery-{run.publish_attempt}')
+        bind_components.publish_component('example.invalid/distribution',run.root / 'repository',run.root / 'trusted',recovery,
             component=run.component,series='26.7',selection_sha256=run.selection_sha256,composition_sha256=run.composition_sha256)
     def publish_ha(version,creator):
         serial[0]+=1
@@ -184,7 +209,9 @@ def publication_environment(tmp_path,monkeypatch):
         creator_target=write_resolved_target(directory / 'creator-target.json',profile,creator=creator)
         write_resolved_target(directory / 'reader-target.json',profile,role='reader',creator=reader)
         result=catalogue.stage(runtime,plugin,own,directory / 'combined',series='26.7',key=tmp_path / 'key',
-            creator_target=creator_target,upstream=upstream,owner='dhcp',composition_output=directory / 'composition-inputs.json',repository='example.invalid/distribution')
+            creator_target=creator_target,upstream=upstream,approved_profile=write_json(directory / 'bind920-profile.json',
+                json.loads((runtime / 'bind920-profile.json').read_text())),
+            runtime_approval=history / 'dns/bind/Makefile',owner='dhcp',composition_output=directory / 'composition-inputs.json',repository='example.invalid/distribution')
         composition=bind_components.load_composition(directory,component='dhcp',series='26.7',composition_sha256=result['composition_sha256'])
         bind_components.check_composition_peers('example.invalid/distribution',composition)
         ha_channel.promote('example.invalid/distribution',own,directory / 'recovery')
@@ -298,7 +325,9 @@ def test_plugin_release_uses_frozen_runtime_and_preserves_runtime_and_ha(publica
     assert directory_bytes(intake)!=environment.remote['pkg-26.7-bind-runtime']['assets']
     bind_components.select_role(selected_a.root / 'trusted/upstream.json',selected_a.root / 'trusted/reader-target.json','26.7','reader',environment.pkg)
     authenticated=bind_components.freeze_runtime(intake,json.loads((selected_a.root / 'trusted/bind920-profile.json').read_text()),
-        json.loads((selected_a.root / 'trusted/bind-compatibility.json').read_text()),'26.7',pkg_command=environment.pkg)
+        json.loads((selected_a.root / 'trusted/upstream.json').read_text()),'26.7',
+        requirement=bind_components.plugin_requirement_from_makefile((selected_a.root / 'trusted/plugin-package.mk').read_text()),
+        pkg_command=environment.pkg)
     assert authenticated==frozen
     with pytest.raises(RuntimeError): environment.publish(selected_a)
     assert before==environment.snapshot()
@@ -362,7 +391,24 @@ def test_bootstrap_and_partial_publication_retry_preserve_immutable_state(public
     source0=environment.control('9.20.26_2','reviewed bootstrap plugin')
     maker=creator_identity(version='2.4.0')
     p0=environment.stage(environment.select('bind_plugin','26.7_1',source=source0,creator=maker))
+    environment.failure[0]=('pages',None)
+    with pytest.raises(RuntimeError): environment.publish(p0)
+    assert environment.pages['files']==initial_pages
+    original_stack=deepcopy(environment.remote['pkg-26.7'])
+    completed_bootstrap={tag:deepcopy(state) for tag,state in environment.remote.items()
+        if tag not in {'pkg-26.7','pkg-26.7-bind-runtime','pkg-26.7-bind-plugin'}}
+    # A foreign registered catalogue with the same pair is not this publication.
+    foreign=environment.remote['pkg-26.7']['assets']
+    foreign['meta.conf']=b'another qualified catalogue'
+    foreign_manifest=json.loads(foreign['channel.json'])
+    foreign_manifest['assets']['meta.conf']=hashlib.sha256(foreign['meta.conf']).hexdigest()
+    foreign['channel.json']=json.dumps(foreign_manifest).encode()
+    foreign_before=environment.snapshot()
+    with pytest.raises(RuntimeError,match='exact qualified stack'): environment.publish(p0)
+    assert environment.snapshot()==foreign_before
+    environment.remote['pkg-26.7']=original_stack
     environment.publish(p0)
+    assert completed_bootstrap=={tag:environment.remote[tag] for tag in completed_bootstrap}
     plugin0=deepcopy(environment.remote['pkg-26.7-bind-plugin']['assets'])
     plugin_fingerprint=json.loads(plugin0['channel.json'])['build_fingerprint']
     assert set(json.loads(environment.remote['pkg-26.7']['assets']['channel.json'])['packages'])=={
@@ -379,24 +425,25 @@ def test_bootstrap_and_partial_publication_retry_preserve_immutable_state(public
     fingerprint1=json.loads(own1['channel.json'])['build_fingerprint']
     runtime1=f'pkg-26.7-bind-runtime-9.20.27_2-{fingerprint1}'
     paired1=f'pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint1}-plugin-{plugin_fingerprint}'
-    current_before={tag:deepcopy(environment.remote[tag]) for tag in ('pkg-26.7-bind-runtime','pkg-26.7-bind-plugin','pkg-26.7')}
+    current_before={tag:deepcopy(restored_release(environment.remote[tag])) for tag in ('pkg-26.7-bind-runtime','pkg-26.7-bind-plugin','pkg-26.7')}
     feed_before=environment.feed()
     environment.failure[0]=('upload','pkg-26.7')
     with pytest.raises(subprocess.CalledProcessError): environment.publish(r1)
-    assert current_before=={tag:environment.remote[tag] for tag in current_before}
+    assert current_before=={tag:restored_release(environment.remote[tag]) for tag in current_before}
     assert environment.feed()==feed_before
     assert environment.remote[runtime1]['assets']==own1 and not environment.remote[runtime1]['draft']
     assert environment.remote[paired1]['assets']==directory_bytes(r1.root / 'repository/stack/current')
     assert not environment.remote[paired1]['draft']
     recovery=json.loads((r1.root / 'recovery/releases/restoration.json').read_text())
     assert recovery['restore_errors']==[]
-    retry1=environment.select('bind_runtime','9.20.27_2')
-    assert retry1.selection['producer_action']=='reuse'
-    assert directory_bytes(retry1.root / 'intake/cached_component')==own1
     completed={tag:deepcopy(environment.remote[tag]) for tag in (runtime1,paired1)}
-    environment.stage(retry1)
-    assert directory_bytes(retry1.root / 'repository/stack/current')==completed[paired1]['assets']
-    environment.publish(retry1)
+    assert all(state['asset_ids'] for state in completed.values())
+    # Full state equality below catches even byte-identical immutable reuploads.
+    signed_before={path.relative_to(r1.root / 'repository').as_posix():path.read_bytes()
+        for path in (r1.root / 'repository').rglob('*') if path.is_file()}
+    environment.publish(r1)
+    assert signed_before=={path.relative_to(r1.root / 'repository').as_posix():path.read_bytes()
+        for path in (r1.root / 'repository').rglob('*') if path.is_file()}
     assert completed=={tag:environment.remote[tag] for tag in completed}
     assert environment.remote['pkg-26.7-bind-runtime']['assets']==own1
     assert environment.remote['pkg-26.7']['assets']==completed[paired1]['assets']
@@ -406,24 +453,19 @@ def test_bootstrap_and_partial_publication_retry_preserve_immutable_state(public
     fingerprint2=json.loads(own2['channel.json'])['build_fingerprint']
     runtime2=f'pkg-26.7-bind-runtime-9.20.28_2-{fingerprint2}'
     paired2=f'pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint2}-plugin-{plugin_fingerprint}'
-    current_before={tag:deepcopy(environment.remote[tag]) for tag in ('pkg-26.7-bind-runtime','pkg-26.7')}
+    current_before={tag:deepcopy(restored_release(environment.remote[tag])) for tag in ('pkg-26.7-bind-runtime','pkg-26.7')}
     environment.failure[0]=('upload',paired2)
     with pytest.raises(subprocess.CalledProcessError): environment.publish(r2)
-    assert current_before=={tag:environment.remote[tag] for tag in current_before}
+    assert current_before=={tag:restored_release(environment.remote[tag]) for tag in current_before}
     assert environment.remote[runtime2]['assets']==own2 and not environment.remote[runtime2]['draft']
     partial=deepcopy(environment.remote[paired2])
     assert partial['draft'] and 'channel.json' not in partial['assets']
     assert (r2.root / 'recovery/releases/unfinished-snapshots.json').is_file()
-    retry2=environment.select('bind_runtime','9.20.28_2')
-    assert retry2.selection['producer_action']=='reuse'
-    assert retry2.selection['expected_fingerprint']==fingerprint2
     published_before={tag:deepcopy(state) for tag,state in environment.remote.items()
         if tag.startswith('pkg-26.7-') and tag not in {'pkg-26.7-bind-runtime','pkg-26.7-bind-plugin'} and not state['draft']}
-    environment.stage(retry2)
-    assert directory_bytes(retry2.root / 'repository/stack/incomplete-draft')==partial['assets']
-    environment.publish(retry2)
+    environment.publish(r2)
     assert not environment.remote[paired2]['draft']
-    assert environment.remote[paired2]['assets']==directory_bytes(retry2.root / 'repository/stack/current')
+    assert environment.remote[paired2]['assets']==directory_bytes(r2.root / 'repository/stack/current')
     assert published_before=={tag:environment.remote[tag] for tag in published_before}
     environment.control('9.20.29_2','reviewed runtime for Pages retry')
     r3=environment.stage(environment.select('bind_runtime','9.20.29_2'))
@@ -439,16 +481,16 @@ def test_bootstrap_and_partial_publication_retry_preserve_immutable_state(public
     assert json.loads((r3.root / 'recovery/failure.json').read_text())['phase']=='pages'
     immutable_before={tag:deepcopy(state) for tag,state in environment.remote.items()
         if tag.startswith('pkg-26.7-') and tag not in {'pkg-26.7-bind-runtime','pkg-26.7-bind-plugin'} and not state['draft']}
+    environment.publish(r3)
+    assert immutable_before=={tag:environment.remote[tag] for tag in immutable_before}
+    assert environment.feed()!=feed_before
     source1=environment.control('9.20.29_2','reviewed peer plugin advance')
     p1=environment.stage(environment.select('bind_plugin','26.7_2',source=source1,creator=maker))
     environment.publish(p1)
     plugin1=deepcopy(environment.remote['pkg-26.7-bind-plugin']['assets'])
-    retry3=environment.select('bind_runtime','9.20.29_2')
-    assert retry3.selection['producer_action']=='reuse'
-    environment.stage(retry3)
-    assert directory_bytes(retry3.root / 'repository/component/current')==own3
-    environment.publish(retry3)
-    assert immutable_before=={tag:environment.remote[tag] for tag in immutable_before}
+    peer_advanced=environment.snapshot()
+    with pytest.raises(RuntimeError): environment.publish(r3)
+    assert environment.snapshot()==peer_advanced
     assert environment.remote['pkg-26.7-bind-runtime']['assets']==own3
     assert environment.remote['pkg-26.7-bind-plugin']['assets']==plugin1
     assert_original_component(environment.remote['pkg-26.7']['assets'],'bind_runtime',own3)
@@ -465,7 +507,6 @@ def test_bootstrap_and_partial_publication_retry_preserve_immutable_state(public
 
 @pytest.fixture
 def channels(tmp_path, monkeypatch):
-    from package_fixtures import BIND_PROFILE
     profile=upstream_profile('26.7')
     runtime=make_bind_component('bind_runtime',tmp_path / 'runtime',series='26.7',creator=creator_identity(),
         source_commit='a'*40,control_commit='b'*40,profile=profile,version='9.20.26_2')
@@ -479,10 +520,8 @@ def channels(tmp_path, monkeypatch):
     write_json(tmp_path / 'trusted-upstream.json',profile)
     write_resolved_target(tmp_path / 'creator-target.json',profile)
     write_resolved_target(tmp_path / 'reader-target.json',profile,role='reader')
-    control=tmp_path / 'control';(control / '.resolver-plugins').mkdir(parents=True)
-    write_json(control / '.resolver-plugins/bind920.json',BIND_PROFILE)
-    shutil.copyfile(CI.parents[1] / '.resolver-plugins/bind-compatibility.json',control / '.resolver-plugins/bind-compatibility.json')
-    monkeypatch.setattr(catalogue,'ROOT',control)
+    write_json(tmp_path / 'approved-profile.json',BIND_PROFILE)
+    (tmp_path / 'runtime-approval.mk').write_text(runtime_approval())
     def query(path,command):
         identity=identities[path.name]
         return identity,{('bind-tools','dns/bind-tools',identity[1])} if identity[0]=='bind920' else set()
@@ -491,11 +530,16 @@ def channels(tmp_path, monkeypatch):
         for package in packages: shutil.copyfile(package,output / package.name)
         for name in catalogue.CATALOGUE_ASSETS: (output / name).write_bytes(b'new signed catalogue')
     monkeypatch.setattr(catalogue.releases,'query_package',query)
-    monkeypatch.setattr(catalogue.releases,'read_package_manifest',lambda *a:dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel']))
+    monkeypatch.setattr(catalogue.releases,'read_package_manifest',lambda *a:dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'],
+                deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}}))
     monkeypatch.setattr(catalogue.target_pkg,'verify_target_pkg',Mock())
     monkeypatch.setattr(catalogue.bind,'select_role',Mock())
     monkeypatch.setattr(catalogue.package_checksums,'verify_archive',Mock())
-    monkeypatch.setattr(catalogue.subprocess,'check_output',Mock(return_value=catalogue.PUBLIC_KEY.read_bytes()))
+    def output(command,**kwargs):
+        if command[1:3]==['version','-t']:
+            return fixture_version_comparison(*command[-2:])+'\n'
+        return catalogue.PUBLIC_KEY.read_bytes()
+    monkeypatch.setattr(catalogue.subprocess,'check_output',Mock(side_effect=output))
     monkeypatch.setattr(catalogue,'verify_packages',Mock())
     monkeypatch.setattr(catalogue.releases,'stage_selected_repository',Mock(side_effect=sign))
     return runtime,plugin,ha,identities
@@ -505,7 +549,8 @@ def channels(tmp_path, monkeypatch):
 def stage(channels,tmp_path):
     output=tmp_path / 'combined'
     catalogue.stage(*channels[:3],output,series='26.7',key=tmp_path / 'key',
-        creator_target=tmp_path / 'creator-target.json',upstream=tmp_path / 'trusted-upstream.json')
+        creator_target=tmp_path / 'creator-target.json',upstream=tmp_path / 'trusted-upstream.json',
+        approved_profile=tmp_path / 'approved-profile.json',runtime_approval=tmp_path / 'runtime-approval.mk')
     return output
 
 
@@ -570,7 +615,8 @@ def test_combined_validation_rejects_package_or_provenance_drift(channels, tmp_p
 def test_static_publisher_rejects_component_removal_before_any_mutation(channels,tmp_path,monkeypatch):
     output=tmp_path / 'combined'
     catalogue.stage(channels[0],channels[1],None,output,series='26.7',key=tmp_path / 'key',
-        creator_target=tmp_path / 'creator-target.json',upstream=tmp_path / 'trusted-upstream.json')
+        creator_target=tmp_path / 'creator-target.json',upstream=tmp_path / 'trusted-upstream.json',
+        approved_profile=tmp_path / 'approved-profile.json',runtime_approval=tmp_path / 'runtime-approval.mk')
     def api(endpoint,**kwargs):
         assert not kwargs,'no mutation before preservation guard'
         if '/git/ref/' in endpoint: return {'object':{'sha':'1'*40}}
@@ -703,19 +749,25 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     monkeypatch.setattr(verification.releases,'query_package',lambda path,command:(identities[next(name for name in identities if path.name.startswith(name+'-'))],set()))
     monkeypatch.setattr(verification.package_checksums,'verify_archive',lambda *args:expected)
     def output(command,**kwargs):
-        if command[1]=='version': return '=\n'
+        if command[1]=='version': return fixture_version_comparison(*command[-2:])+'\n'
         if command[1]=='which': return current_owner[0]+'\n'
         name=command[command.index('-e')+1].removeprefix('%n = ')
         current_owner[0]=f'{name}-{identities[name][1]}'
+        if command[-1]=='%R': return 'OPNsense'
         if command[-1]=='%Fp|%Fs': return '\n'.join('|'.join(row) for row in actual[name])
         if command[-1]=='%dn|%do|%dv': return 'bind-tools|dns/bind-tools|9.20.26_2\n'
         return '|'.join(identities[name])
     current_owner=['']
     monkeypatch.setattr(verification.subprocess,'check_output',output)
-    native=Mock(return_value=SimpleNamespace(returncode=1,stdout=''))
+    def native_run(command,**kwargs):
+        if command[1]=='query' and command[-1]=='%n|%v|%o|%q':
+            name=command[command.index('-e')+1].removeprefix('%n = ')
+            return SimpleNamespace(returncode=0,stdout='|'.join(identities[name]))
+        return SimpleNamespace(returncode=1,stdout='')
+    native=Mock(side_effect=native_run)
     monkeypatch.setattr(verification.subprocess,'run',native)
-    policy=json.loads((CI.parents[1] / '.resolver-plugins/bind-compatibility.json').read_text())
-    verification.installed(packages,tmp_path / 'evidence','public',exact=False,policy=policy)
+    requirement=bind_components.plugin_requirement_from_makefile(PLUGIN_PACKAGE)
+    verification.installed(packages,tmp_path / 'evidence','public',exact=False,requirement=requirement)
     observed=json.loads((tmp_path / 'evidence/public.json').read_text())
     assert [row['validation'] for row in observed]==['eligible-runtime','eligible-runtime','exact-archive']
     assert observed[0]['files']==[['/usr/local/file','2'*64]]
@@ -724,7 +776,7 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
         verification.installed(packages,tmp_path / 'evidence','local')
     actual['os-bind-rp']=[('/usr/local/file','3'*64)]
     with pytest.raises(ValueError,match='file set differs'):
-        verification.installed(packages,tmp_path / 'evidence','invalid-public',exact=False,policy=policy)
+        verification.installed(packages,tmp_path / 'evidence','invalid-public',exact=False,requirement=requirement)
     assert not (tmp_path / 'evidence/local.json').exists() and not (tmp_path / 'evidence/invalid-public.json').exists()
 
 
@@ -755,23 +807,17 @@ def test_independent_components_preserve_original_identity_and_frozen_cache(tmp_
     write_json(plugin / 'channel.json', manifest)
     assert bind_components.validate_component(plugin, 'bind_plugin', '26.7')['build_fingerprint'] == fingerprint
     for field, changed in [('source_commit', '5' * 40), ('package_creator', creator_identity(version='2.5.0', origin='opnsense/pkg')),
-                           ('build_recipe_sha256', '5' * 64), ('compatibility_policy_sha256', '6' * 64)]:
+                           ('build_recipe_sha256', '5' * 64)]:
         assert bind_components.plugin_build_fingerprint(dict(inputs, **{field: changed})) != fingerprint
     write_json(plugin / 'channel.json', dict(manifest, built_against_runtime=original_runtime))
-    frozen = bind_components.component_receipt(runtime, 'bind_runtime', '26.7')
-    old_current = make_bind_component('bind_runtime', tmp_path / 'old-current', series='26.7',
-        creator=creator_identity(), source_commit='6' * 40, control_commit='7' * 40,
-        profile=profile, version='9.20.26_1')
+    frozen = bind_components.component_receipt(plugin, 'bind_plugin', '26.7')
     monkeypatch.setattr(bind_components.subprocess, 'run', lambda *a, **kw:
         SimpleNamespace(stdout=json.dumps([dict(tagName=frozen['snapshot_tag'], isDraft=False)])))
     monkeypatch.setattr(bind_components.releases, 'snapshot_release', lambda repo, tag, root:
-        SimpleNamespace(existed=True, draft=False, directory=runtime if tag == frozen['snapshot_tag'] else old_current))
+        SimpleNamespace(existed=True, draft=False, directory=plugin))
     copied = tmp_path / 'cache'
-    assert bind_components.fetch_cached_component('example/distribution', 'bind_runtime', '26.7',
-                                                 frozen['fingerprint'], copied) == frozen
-    action = bind_components.select_producer_action('bind_runtime', dict(schema=4, series='26.7',
-        freebsd_release='15.1', architecture='x86_64', bind_profile=json.loads((runtime / 'bind920-profile.json').read_text()),
-        build_recipe_sha256='e' * 64, package_creator=creator_identity()), copied)
+    assert bind_components.fetch_cached_component('example/distribution', 'bind_plugin', '26.7',
+                                                 fingerprint, copied) == frozen
+    action = bind_components.select_producer_action('bind_plugin', inputs, copied)
     assert action['producer_action'] == 'reuse'
-    assert catalogue.releases.directory_checksums(copied) == saved['bind_runtime']
-    assert catalogue.releases.directory_checksums(old_current) != saved['bind_runtime']
+    assert catalogue.releases.directory_checksums(copied) == saved['bind_plugin']

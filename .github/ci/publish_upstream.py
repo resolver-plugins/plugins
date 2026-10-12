@@ -12,14 +12,14 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 
-METADATA_PATH = '.resolver-plugins/upstream.json'
-PLAN_FIELDS = {
-    'action', 'series', 'upstream_ref', 'upstream_commit', 'source_release',
-    'target_release', 'sync_branch', 'tools_tag', 'freebsd_release',
-    'bind_changed', 'reason',
-}
+from shared.metadata_profile import validate_profile
+from sync_upstream import (
+    AUDIT_PATH, CALLER_PATH, METADATA_PATH, SYNC_PATTERN, THIN_CALLER,
+    metadata_for, source_metadata, validate_frozen_inputs, validate_plan,
+)
+
+
 SERIES_PATTERN = re.compile(r'^\d+\.\d+$')
-SYNC_PATTERN = re.compile(r'^sync/(bootstrap|bind)/(\d+\.\d+)/([0-9a-f]{12})$')
 IDENTITY_PATTERN = re.compile(r'^(.*) <([^>]*)> ([0-9]+) ([+-])([0-9]{2})([0-9]{2})$')
 
 
@@ -60,87 +60,56 @@ def metadata_at(repository: Path, revision: str) -> dict[str, str]:
     return metadata
 
 
-def valid_release_metadata(
-    metadata: dict[str, str],
-    series: str,
-    upstream_commit: str,
-) -> bool:
-    required = (
-        'series',
-        'upstream_branch',
-        'upstream_commit',
-        'tools_tag',
-        'freebsd_release',
-        'core_commit',
-        'core_archive_url',
-        'core_archive_sha256',
-    )
-    if set(metadata) != set(required) or any(
-        not isinstance(metadata.get(field), str) or not metadata[field]
-        for field in required
-    ):
-        return False
-    core_commit = metadata['core_commit']
-    return (
-        metadata['series'] == series
-        and metadata['upstream_branch'] == f'stable/{series}'
-        and metadata['upstream_commit'] == upstream_commit
-        and re.fullmatch(r'[0-9a-f]{40}', upstream_commit) is not None
-        and re.fullmatch(
-            rf'{re.escape(series)}(?:\.(?:0|[1-9]\d*))?',
-            metadata['tools_tag'],
-        ) is not None
-        and re.fullmatch(r'[1-9]\d*(?:\.\d+)?', metadata['freebsd_release']) is not None
-        and re.fullmatch(r'[0-9a-f]{40}', core_commit) is not None
-        and metadata['core_archive_url']
-        == f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz'
-        and re.fullmatch(r'[0-9a-f]{64}', metadata['core_archive_sha256']) is not None
-    )
-
-
-def valid_sync_only_bootstrap(
-    repository: Path,
-    sync_commit: str,
-    target_commit: str,
-    series: str,
-    sync_metadata: dict[str, str],
-    target_metadata: dict[str, str],
-) -> bool:
-    upstream_commit = sync_metadata['upstream_commit']
-    if (
-        sync_metadata != target_metadata
-        or not valid_release_metadata(target_metadata, series, upstream_commit)
-    ):
-        return False
+def valid_release_metadata(metadata: dict[str, str], series: str, upstream_commit: str) -> bool:
     try:
-        current_upstream = local_git(
-            repository,
-            'rev-parse',
-            f'refs/remotes/upstream/stable/{series}^{{commit}}',
-        )
-        sync_parents = local_git(
-            repository, 'rev-list', '--parents', '-n', '1', sync_commit
-        ).split()
-        target_parents = local_git(
-            repository, 'rev-list', '--parents', '-n', '1', target_commit
-        ).split()
-        changed_paths = local_git(
-            repository,
-            'diff-tree',
-            '--no-commit-id',
-            '--name-only',
-            '-r',
-            upstream_commit,
-            target_commit,
-        ).splitlines()
+        profile = validate_profile(metadata, series)
     except ValueError:
         return False
-    return (
-        current_upstream == upstream_commit
-        and sync_parents == [sync_commit, target_commit]
-        and target_parents == [target_commit, upstream_commit]
-        and changed_paths == [METADATA_PATH]
-    )
+    return profile['upstream_commit'] == upstream_commit
+
+
+def audit_at(repository: Path, revision: str) -> dict:
+    try:
+        plan = json.loads(local_git(repository, 'show', f'{revision}:{AUDIT_PATH}'))
+    except (ValueError, json.JSONDecodeError):
+        raise ValueError(f'missing synchronization audit at {revision}') from None
+    validate_plan(plan)
+    return plan
+
+
+def validate_generated_state(repository: Path, plan: dict, target_commit: str | None,
+                             sync_commit: str | None) -> None:
+    expected_metadata = metadata_for(plan)
+    for commit in (target_commit, sync_commit):
+        if commit and metadata_at(repository, commit) != expected_metadata:
+            raise ValueError('generated metadata does not match sealed publication plan')
+    if target_commit and plan['action'] == 'bootstrap-review':
+        if local_git(repository, 'rev-list', '--parents', '-n', '1', target_commit).split() != [target_commit, plan['upstream_commit']]:
+            raise ValueError('bootstrap release does not parent the selected upstream commit')
+        changed = local_git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r',
+                            plan['upstream_commit'], target_commit).splitlines()
+        if changed != [METADATA_PATH]:
+            raise ValueError('bootstrap base is not pristine')
+    if sync_commit is None:
+        return
+    if audit_at(repository, sync_commit) != plan:
+        raise ValueError('generated recovery audit does not match sealed publication plan')
+    caller = local_git(repository, 'show', f'{sync_commit}:{CALLER_PATH}', binary=True)
+    if caller != THIN_CALLER.encode():
+        raise ValueError('generated review caller does not match the trusted template')
+    environment_only = plan['action'] == 'update-review' and not plan['bind_changed']
+    parent = (target_commit if plan['action'] == 'bootstrap-review'
+              else plan['source_commit'] if environment_only else plan['upstream_commit'])
+    if local_git(repository, 'rev-list', '--parents', '-n', '1', sync_commit).split() != [sync_commit, parent]:
+        raise ValueError('review commit parent does not match sealed publication plan')
+    changed = local_git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r',
+                        parent, sync_commit).splitlines()
+    generated = {METADATA_PATH, AUDIT_PATH, CALLER_PATH}
+    for path in changed:
+        overlay = (path == 'Mk/plugins.mk' or path.startswith('dns/bind/'))
+        tests = path == 'dns/bind/tests' or path.startswith('dns/bind/tests/')
+        if path not in generated and (environment_only or not overlay or tests):
+            raise ValueError('review includes changes outside the bounded fork overlay')
 
 
 def api_date(identity: str) -> dict[str, str]:
@@ -389,14 +358,19 @@ def ensure_existing_ref(
         raise ValueError(f'remote reference {branch} does not match the fetched commit')
 
 
-def review_text(series: str, source_commit: str, upstream_commit: str) -> tuple[str, str]:
-    comparison = (
-        f'https://github.com/opnsense/plugins/compare/{source_commit}...{upstream_commit}'
-    )
-    return (
-        f'Review upstream BIND synchronization for {series}',
-        f'Review the upstream BIND delta before merging. Upstream comparison: {comparison}',
-    )
+def review_text(plan: dict, source_profile: dict) -> tuple[str, str]:
+    series = plan['series']
+    comparison = ('https://github.com/opnsense/plugins/compare/'
+                  f"{source_profile['upstream_commit']}...{plan['upstream_commit']}")
+    source = 'BIND source changed' if plan['bind_changed'] else 'BIND source unchanged'
+    environment = ('Build environment changed' if plan['environment_changed']
+                   else 'Build environment unchanged')
+    body = (f'{source}; {environment.lower()}. Review before merging.\n\n'
+            f"Tools: `{source_profile['tools_tag']}` -> `{plan['tools_tag']}`; "
+            f"FreeBSD: `{source_profile['freebsd_release']}` -> `{plan['freebsd_release']}`.\n"
+            f"Pinned core: `{plan['core_commit']}`.\n"
+            f'Upstream comparison: {comparison}')
+    return f'Review upstream BIND synchronization for {series}', body
 
 
 def ensure_pull(
@@ -417,225 +391,90 @@ def ensure_pull(
     return pull
 
 
-def validate_plan(plan: dict[str, Any]) -> tuple[str, str, str, str | None]:
-    if not isinstance(plan, dict) or set(plan) != PLAN_FIELDS:
-        raise ValueError('missing or invalid publication plan')
-    action = plan.get('action')
-    if action not in {'bootstrap-build', 'bootstrap-review', 'update-review'}:
-        raise ValueError('unknown publication action')
-    series = plan.get('series')
-    upstream_commit = plan.get('upstream_commit')
-    target = plan.get('target_release')
-    tools_tag = plan.get('tools_tag')
-    freebsd_release = plan.get('freebsd_release')
-    if (
-        not isinstance(series, str)
-        or not SERIES_PATTERN.fullmatch(series)
-        or not isinstance(upstream_commit, str)
-        or not re.fullmatch(r'[0-9a-f]{40}', upstream_commit)
-        or target != f'release/bind-rp/{series}'
-        or plan.get('upstream_ref') != f'upstream/stable/{series}'
-        or not isinstance(tools_tag, str)
-        or re.fullmatch(
-            rf'{re.escape(series)}(?:\.(?:0|[1-9]\d*))?', tools_tag
-        ) is None
-        or not isinstance(freebsd_release, str)
-        or re.fullmatch(r'[1-9]\d*(?:\.\d+)?', freebsd_release) is None
-    ):
-        raise ValueError('missing or invalid publication plan')
-    sync = plan.get('sync_branch')
-    expected_sync = None
-    if action == 'bootstrap-review':
-        expected_sync = f'sync/bootstrap/{series}/{upstream_commit[:12]}'
-    elif action == 'update-review':
-        expected_sync = f'sync/bind/{series}/{upstream_commit[:12]}'
-        if plan.get('source_release') != target:
-            raise ValueError('missing or invalid publication plan')
-    if sync != expected_sync:
-        raise ValueError('missing or invalid publication plan')
-    return action, series, target, sync
-
-
 def publish_plan(
     local_repository: Path,
     plan: dict[str, Any],
     github_repository: str,
     reviewer: str,
     github: GitHub,
+    tools_repository: Path,
 ) -> None:
-    action, series, target, sync = validate_plan(plan)
-    target_commit = None
-    sync_commit = None
-    if action.startswith('bootstrap'):
-        target_commit = local_commit(local_repository, target)
-    if sync:
-        sync_commit = local_commit(local_repository, sync)
-
-    source = plan.get('source_release')
-    if not isinstance(source, str):
-        raise ValueError('missing or invalid publication plan')
-    source_commit = metadata_at(local_repository, source)['upstream_commit']
-    generated_metadata = []
-    if target_commit:
-        generated_metadata.append(metadata_at(local_repository, target_commit))
-    if sync_commit:
-        generated_metadata.append(metadata_at(local_repository, sync_commit))
-    for metadata in generated_metadata:
-        if any(
-            metadata[field] != plan[field]
-            for field in (
-                'series',
-                'upstream_commit',
-                'tools_tag',
-                'freebsd_release',
-            )
-        ):
-            raise ValueError('generated metadata does not match publication plan')
-    if len(generated_metadata) == 2 and generated_metadata[0] != generated_metadata[1]:
-        raise ValueError('generated metadata does not match publication plan')
-
+    action, _, target, sync = validate_plan(plan)
+    source_profile = validate_frozen_inputs(local_repository, plan, tools_repository)
+    target_commit = local_commit(local_repository, target) if action.startswith('bootstrap') else None
+    sync_commit = local_commit(local_repository, sync) if sync else None
+    validate_generated_state(local_repository, plan, target_commit, sync_commit)
+    ensure_existing_ref(github, github_repository, plan['source_release'], plan['source_commit'])
+    for branch, commit in ((target, target_commit), (sync, sync_commit)):
+        if branch and commit:
+            existing = github.ref_sha(github_repository, branch)
+            if existing is not None and existing != commit:
+                raise ValueError(f'refusing to replace {branch}: it points to a different commit')
     if sync:
         if not reviewer:
             raise ValueError('RP_SYNC_REVIEWER is required for review publication')
         github.check_assignee(github_repository, reviewer)
-
     if target_commit:
         github.publish_commit(local_repository, github_repository, target_commit)
     if sync_commit:
         github.publish_commit(local_repository, github_repository, sync_commit)
-
     if sync and sync_commit:
         ensure_ref(github, github_repository, sync, sync_commit)
     if target_commit:
         ensure_ref(github, github_repository, target, target_commit)
-
     if sync:
-        title, body = review_text(series, source_commit, plan['upstream_commit'])
-        ensure_pull(
-            github, github_repository, sync, target, reviewer, title, body
-        )
+        title, body = review_text(plan, source_profile)
+        ensure_pull(github, github_repository, sync, target, reviewer, title, body)
 
 
-def release_branches(repository: Path) -> dict[str, str]:
-    output = local_git(
-        repository,
-        'for-each-ref',
-        '--format=%(refname:strip=4) %(objectname)',
-        'refs/heads/release/bind-rp',
-    )
-    result = {}
-    if not isinstance(output, str):
-        return result
-    for line in output.splitlines():
-        series, commit = line.split(maxsplit=1)
-        if SERIES_PATTERN.fullmatch(series):
-            result[series] = commit
-    return result
-
-
-def series_key(series: str) -> tuple[int, int]:
-    major, minor = series.split('.')
-    return int(major), int(minor)
-
-
-def recovery_candidates(repository: Path) -> list[dict[str, Any]]:
-    output = local_git(
-        repository,
-        'for-each-ref',
-        '--format=%(refname:strip=3) %(objectname)',
-        'refs/remotes/origin/sync',
-    )
-    if not isinstance(output, str):
-        return []
-    releases = release_branches(repository)
+def recovery_candidates(repository: Path, tools_repository: Path) -> list[dict[str, Any]]:
+    output = local_git(repository, 'for-each-ref', '--format=%(refname:strip=3) %(objectname)',
+                       'refs/remotes/origin/sync')
     candidates = []
     for line in output.splitlines():
         branch, sync_commit = line.split(maxsplit=1)
-        match = SYNC_PATTERN.fullmatch(branch)
-        if not match:
+        if SYNC_PATTERN.fullmatch(branch) is None:
             continue
-        kind, series, abbreviation = match.groups()
-        target = f'release/bind-rp/{series}'
         try:
-            sync_metadata = metadata_at(repository, sync_commit)
+            plan = audit_at(repository, sync_commit)
+            if plan['sync_branch'] != branch:
+                raise ValueError('proposal ref does not match its audit')
+            source_profile = validate_frozen_inputs(repository, plan, tools_repository,
+                                                    require_control_head=False)
         except ValueError:
             continue
+        target = plan['target_release']
         try:
-            target_commit = local_git(
-                repository, 'rev-parse', f'refs/remotes/origin/{target}^{{commit}}'
-            )
+            target_commit = local_git(repository, 'rev-parse', f'refs/remotes/origin/{target}^{{commit}}')
             base_missing = False
         except ValueError:
-            if kind != 'bootstrap':
+            if plan['action'] != 'bootstrap-review':
                 continue
             try:
                 target_commit = local_git(repository, 'rev-parse', f'{sync_commit}^')
+                base_missing = True
             except ValueError:
                 continue
-            base_missing = True
         try:
-            target_metadata = metadata_at(repository, target_commit)
+            validate_generated_state(repository, plan,
+                                     target_commit if plan['action'] == 'bootstrap-review' else None,
+                                     sync_commit)
+            if plan['action'] == 'update-review' and target_commit != plan['source_commit']:
+                continue
         except ValueError:
             continue
-        upstream_commit = sync_metadata['upstream_commit']
-        if (
-            sync_metadata['series'] != series
-            or target_metadata['series'] != series
-            or upstream_commit[:12] != abbreviation
-        ):
-            continue
-        if kind == 'bootstrap':
-            parent = local_git(repository, 'rev-parse', f'{sync_commit}^')
-            source_series = max(
-                (item for item in releases if series_key(item) < series_key(series)),
-                key=series_key,
-                default=None,
-            )
-            if parent != target_commit or source_series is None:
-                continue
-            if base_missing and not valid_sync_only_bootstrap(
-                repository,
-                sync_commit,
-                target_commit,
-                series,
-                sync_metadata,
-                target_metadata,
-            ):
-                continue
-            source_commit = metadata_at(
-                repository, f'release/bind-rp/{source_series}'
-            )['upstream_commit']
-        else:
-            source_commit = target_metadata['upstream_commit']
-        candidates.append(
-            {
-                'series': series,
-                'head': branch,
-                'head_commit': sync_commit,
-                'base': target,
-                'base_commit': target_commit,
-                'source_commit': source_commit,
-                'upstream_commit': upstream_commit,
-                'base_missing': base_missing,
-            }
-        )
+        candidates.append(dict(plan=plan, source_profile=source_profile, head=branch,
+                               head_commit=sync_commit, base=target,
+                               base_commit=target_commit, base_missing=base_missing))
     return candidates
 
 
-def recover_pending_reviews(
-    local_repository: Path,
-    github_repository: str,
-    reviewer: str,
-    github: GitHub,
-) -> bool:
+def recover_pending_reviews(local_repository: Path, github_repository: str, reviewer: str,
+                            github: GitHub, tools_repository: Path) -> bool:
     pending = []
-    for candidate in recovery_candidates(local_repository):
-        if candidate['base_missing']:
-            pending.append(candidate)
-            continue
-        pulls = github.pulls_for(
-            github_repository, candidate['head'], candidate['base']
-        )
+    for candidate in recovery_candidates(local_repository, tools_repository):
+        pulls = [] if candidate['base_missing'] else github.pulls_for(
+            github_repository, candidate['head'], candidate['base'])
         if any(pull.get('state') == 'open' for pull in pulls) or not pulls:
             pending.append(candidate)
     if not pending:
@@ -644,40 +483,16 @@ def recover_pending_reviews(
         raise ValueError('RP_SYNC_REVIEWER is required for review recovery')
     github.check_assignee(github_repository, reviewer)
     for candidate in pending:
-        ensure_existing_ref(
-            github,
-            github_repository,
-            candidate['head'],
-            candidate['head_commit'],
-        )
+        plan = candidate['plan']
+        ensure_existing_ref(github, github_repository, plan['source_release'], plan['source_commit'])
+        ensure_existing_ref(github, github_repository, candidate['head'], candidate['head_commit'])
         if candidate['base_missing']:
-            ensure_ref(
-                github,
-                github_repository,
-                candidate['base'],
-                candidate['base_commit'],
-            )
+            ensure_ref(github, github_repository, candidate['base'], candidate['base_commit'])
         else:
-            ensure_existing_ref(
-                github,
-                github_repository,
-                candidate['base'],
-                candidate['base_commit'],
-            )
-        title, body = review_text(
-            candidate['series'],
-            candidate['source_commit'],
-            candidate['upstream_commit'],
-        )
-        ensure_pull(
-            github,
-            github_repository,
-            candidate['head'],
-            candidate['base'],
-            reviewer,
-            title,
-            body,
-        )
+            ensure_existing_ref(github, github_repository, candidate['base'], candidate['base_commit'])
+        title, body = review_text(plan, candidate['source_profile'])
+        ensure_pull(github, github_repository, candidate['head'], candidate['base'],
+                    reviewer, title, body)
     return True
 
 
@@ -697,10 +512,12 @@ def main() -> None:
     publish_parser = commands.add_parser('publish')
     publish_parser.add_argument('--repository', required=True)
     publish_parser.add_argument('--plan', required=True)
+    publish_parser.add_argument('--tools-repository', required=True)
     publish_parser.add_argument('--github-repository', required=True)
     publish_parser.add_argument('--reviewer', default='')
     recover_parser = commands.add_parser('recover')
     recover_parser.add_argument('--repository', required=True)
+    recover_parser.add_argument('--tools-repository', required=True)
     recover_parser.add_argument('--github-repository', required=True)
     recover_parser.add_argument('--reviewer', default='')
     recover_parser.add_argument('--output', required=True)
@@ -714,6 +531,7 @@ def main() -> None:
                 arguments.github_repository,
                 arguments.reviewer,
                 github,
+                Path(arguments.tools_repository),
             )
         else:
             handled = recover_pending_reviews(
@@ -721,6 +539,7 @@ def main() -> None:
                 arguments.github_repository,
                 arguments.reviewer,
                 github,
+                Path(arguments.tools_repository),
             )
             with Path(arguments.output).open('a', encoding='utf-8') as output:
                 print(f'handled={str(handled).lower()}', file=output)

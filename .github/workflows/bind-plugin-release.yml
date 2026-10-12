@@ -8,7 +8,6 @@ on:
       - '.github/ci/bind/shared/**'
       - '.github/ci/shared/**'
       - '.github/workflows/bind-plugin-release.yml'
-      - '.resolver-plugins/bind-compatibility.json'
       - 'docs/package-repository/resolver-plugins.pub'
       - 'dns/bind/**'
       - '!dns/bind/tests/**'
@@ -21,7 +20,6 @@ on:
     branches: ['release/bind-rp/**']
     paths:
       - '.resolver-plugins/upstream.json'
-      - '.resolver-plugins/bind-compatibility.json'
       - 'dns/bind/**'
       - '!dns/bind/tests/**'
       - 'Mk/**'
@@ -111,10 +109,15 @@ jobs:
           git fetch --no-tags origin "$SOURCE_REF"
           source_commit=$(git rev-parse 'FETCH_HEAD^{commit}')
           git show "$source_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
+          git show "$control_commit:dns/bind/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
+          tools_tag=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" tools_tag)
+          git init --bare "$RUNNER_TEMP/opnsense-tools"
+          git -C "$RUNNER_TEMP/opnsense-tools" fetch --depth=1 https://github.com/opnsense/tools.git "refs/tags/$tools_tag:refs/tags/$tools_tag"
+          git show "$source_commit:dns/bind/Makefile" > "$RUNNER_TEMP/plugin-package.mk"
           python3 -I .github/ci/bind/shared/components.py inputs \
             --component bind_plugin --series "$SERIES" --mode "$MODE" \
-            --upstream "$RUNNER_TEMP/upstream.json" --profile .resolver-plugins/bind920.json \
-            --policy .resolver-plugins/bind-compatibility.json --recipe .github/ci/bind/plugin/build-os-bind-rp.sh \
+            --upstream "$RUNNER_TEMP/upstream.json" --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" --package-definition "$RUNNER_TEMP/plugin-package.mk" --recipe .github/ci/bind/plugin/build-os-bind-rp.sh \
             --control-commit "$control_commit" --profile-commit "$source_commit" --source-commit "$source_commit" \
             --trusted-directory artifacts/trusted --intake-directory "artifacts/$SERIES/intake" \
             --repository resolver-plugins/repository --output "$RUNNER_TEMP/controller.json"

@@ -10,7 +10,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize('helper', [
-    'bind/runtime/reuse_bind920.py', 'shared/release_channel.py', 'shared/package_catalogue.py',
+    'shared/release_channel.py', 'shared/package_catalogue.py',
     'ha_dhcp/dhcp_interface_ha_channel.py', 'ha_dhcp/publish-dhcp-interface-ha.py',
 ])
 def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
@@ -20,9 +20,9 @@ def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
 
 
 @pytest.mark.parametrize('changed', [None, 'creator', 'reader'])
-def test_control_bundle_preflight_rejects_changed_records(tmp_path, changed):
+def test_control_bundle_preflight_rejects_changed_records(tmp_path, monkeypatch, changed):
     """The HA role bundle retains its own producer; observe admission, not digest diagnostics."""
-    from package_fixtures import write_resolved_target, write_json
+    from package_fixtures import (PLUGIN_PACKAGE, make_ports_recipe, make_tools_repository, write_resolved_target, write_json)
     target_pkg = load_module('workflow_target_pkg', 'shared/target_pkg.py', register=True)
     trusted = tmp_path / 'artifacts/trusted'
     trusted.mkdir(parents=True)
@@ -36,11 +36,24 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, changed):
             data['package_creator']['version'] = '9.9.9'
             write_json(record, data)
         target_pkg.load_target(record, '26.7', upstream=upstream, role=role)
-    shutil.copytree(REPOSITORY_ROOT / '.github/ci/shared', tmp_path / '.github/ci/shared')
+    ports, approval, _ = make_ports_recipe(tmp_path / 'ports')
+    repository = init_repository(tmp_path)
+    control = commit(repository, {'dns/bind/Makefile': PLUGIN_PACKAGE + approval}, 'reviewed HA control')
+    tools = make_tools_repository(tmp_path / 'tools', upstream_profile('26.7'))
+    ha_inputs = load_module('ha_workflow_inputs', 'ha_dhcp/dhcp_interface_ha_release.py')
+    resolve = ha_inputs.bind920_profile.resolve_profile
+    with monkeypatch.context() as boundary:
+        boundary.chdir(repository)
+        boundary.setattr(ha_inputs.bind920_profile, 'resolve_profile', lambda record: resolve(record, repository=ports))
+        bind_digest = ha_inputs.freeze_bind_inputs(trusted, upstream_profile('26.7'), tools, control)
+    shutil.copytree(REPOSITORY_ROOT / '.github/ci', tmp_path / '.github/ci',
+                    ignore=shutil.ignore_patterns('__pycache__'))
     signer = job_text((REPOSITORY_ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text(), 'sign')
     script = next(step_run(step) for step in workflow_steps(signer) if 'sha256sum --check' in step_run(step))
     for role, digest in digests.items():
         script = script.replace(action_expression(f'needs.profile.outputs.{role}_target_sha256'), digest)
+    script = script.replace(action_expression('github.workflow_sha'), control)
+    script = script.replace(action_expression('needs.profile.outputs.bind_inputs_sha256'), bind_digest)
     sentinel = tmp_path / 'privileged-output'
     result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script + '\n: > "$Q_PRIVILEGED_SENTINEL"\n'],
         cwd=tmp_path, env=dict(os.environ, SERIES='26.7', Q_PRIVILEGED_SENTINEL=str(sentinel)),
@@ -56,34 +69,44 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, changed):
 ])
 def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, monkeypatch, component, changed):
     components = load_module('sealed_components', 'bind/shared/components.py')
-    from package_fixtures import BIND_PROFILE, creator_identity, make_bind_component, write_resolved_target, write_json
+    from package_fixtures import (PLUGIN_PACKAGE, creator_identity, make_bind_component, make_ports_recipe,
+                                  make_tools_repository, write_resolved_target, write_json)
     profile = upstream_profile('26.7')
     upstream = write_json(tmp_path / 'upstream.json', profile)
-    pin = write_json(tmp_path / 'bind920-profile.json', BIND_PROFILE)
-    policy = REPOSITORY_ROOT / '.resolver-plugins/bind-compatibility.json'
+    ports, approval_text, pin = make_ports_recipe(tmp_path / 'ports')
+    tools = make_tools_repository(tmp_path / 'tools', profile)
+    approval = tmp_path / 'runtime-approval.mk'
+    approval.write_text(PLUGIN_PACKAGE + approval_text)
+    package = tmp_path / 'plugin-package.mk'
+    package.write_text(PLUGIN_PACKAGE)
     recipe = tmp_path / 'build-wrapper.sh'
     recipe.write_text('selected build wrapper')
     creator = write_resolved_target(tmp_path / 'creator.json', profile)
     reader = write_resolved_target(tmp_path / 'reader.json', profile, role='reader')
     repository = init_repository(tmp_path / 'checkout')
-    control = commit(repository, {
+    source = commit(repository, {
         '.resolver-plugins/upstream.json': upstream.read_text(),
-        '.resolver-plugins/bind920.json': pin.read_text(),
-        '.resolver-plugins/bind-compatibility.json': policy.read_text(),
+        'dns/bind/Makefile': package.read_text(),
         '.github/ci/bind/runtime/build-bind920.sh': recipe.read_text(),
         '.github/ci/bind/plugin/build-os-bind-rp.sh': recipe.read_text(),
-    }, 'trusted control and source')
+    }, 'selected release source without runtime approval')
+    control = commit(repository, {'dns/bind/Makefile': approval.read_text()}, 'trusted control approval')
     runtime = make_bind_component('bind_runtime', tmp_path / 'runtime', series='26.7',
         creator=creator_identity(), source_commit='1' * 40, control_commit='2' * 40,
-        profile=profile, version='9.20.26_2')
+        profile=profile, version='9.20.26_2', bind_profile=pin)
     trusted = tmp_path / 'trusted'
     with monkeypatch.context() as boundary:
-        boundary.setattr(components.subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout='[]'))
+        native_run = components.subprocess.run
+        boundary.setattr(components.subprocess, 'run', lambda command, **kw:
+            SimpleNamespace(stdout='[]') if command[0] == 'gh' else native_run(command, **kw))
+        resolve = components.bind920_profile.resolve_profile
+        boundary.setattr(components.bind920_profile, 'resolve_profile', lambda record: resolve(record, repository=ports))
         boundary.setattr(components.releases, 'snapshot_release', lambda *a:
             SimpleNamespace(existed=True, draft=False, directory=runtime))
         result = components.prepare_selection(trusted, component=component, series='26.7', mode='production',
-            control_commit=control, source_commit=control if component == 'bind_plugin' else None,
-            profile_commit=control, upstream=upstream, profile=pin, policy=policy, recipe=recipe,
+            control_commit=control, source_commit=source if component == 'bind_plugin' else None,
+            profile_commit=source, upstream=upstream, runtime_approval=approval, tools_repository=tools,
+            package_definition=package if component == 'bind_plugin' else None, recipe=recipe,
             repository='example/distribution', intake_directory=tmp_path / 'intake',
             creator_target=creator, reader_target=reader)
     assert result['producer_action'] == 'build'
@@ -102,7 +125,7 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
     elif changed == 'runtime':
         replacement = make_bind_component('bind_runtime', tmp_path / 'replacement', series='26.7',
             creator=creator_identity(version='2.4.0'), source_commit='5' * 40, control_commit='6' * 40,
-            profile=profile, version='9.20.26_2')
+            profile=profile, version='9.20.26_2', bind_profile=pin)
         write_json(trusted / 'runtime-selection.json', components.component_receipt(replacement, 'bind_runtime', '26.7'))
     if changed in ('creator', 'reader', 'runtime'):
         selection = json.loads((trusted / 'selection.json').read_text())
@@ -142,11 +165,11 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
                 filename = bind_records()[name]['filename']
                 shutil.copyfile(runtime / filename, producer / filename)
             write_json(producer / 'bind920-provenance.json', components.bind920_profile.build_provenance(
-                BIND_PROFILE, '26.7', '15.1', 'x86_64', creator_identity(), bind_records(),
+                pin, '26.7', '15.1', 'x86_64', creator_identity(), bind_records(),
                 recipe_sha256=inputs['build_recipe_sha256']))
         else:
             fresh = make_bind_component('bind_plugin', tmp_path / 'fresh-plugin', series='26.7',
-                creator=creator_identity(), source_commit=control, control_commit=control,
+                creator=creator_identity(), source_commit=source, control_commit=control,
                 profile=profile, version='26.7_1')
             for name in ('os-bind-rp-26.7_1.pkg', 'build-metadata.txt'):
                 shutil.copyfile(fresh / name, producer / name)
@@ -164,7 +187,7 @@ def release_workflow(component):
     return (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
 
 
-def select_cli(directory, component, context, document, paths=None, *, pr_base=None, files=None):
+def select_cli(directory, component, context, document, paths=None, *, pr_base=None, files=None, repository=None):
     directory.mkdir(parents=True, exist_ok=True)
     event, refs, output, github_output = (directory / name for name in ('event.json', 'refs.json', 'selected.json', 'github-output'))
     event.write_text(json.dumps(document))
@@ -191,7 +214,7 @@ def select_cli(directory, component, context, document, paths=None, *, pr_base=N
         remote.write_text(json.dumps(files))
         environment.update(PATH=str(directory) + os.pathsep + environment['PATH'],
                            Q_PR_BASE=pr_base or '', Q_GH_FILES=str(remote))
-    completed = subprocess.run(arguments, env=environment, text=True, capture_output=True)
+    completed = subprocess.run(arguments, cwd=repository, env=environment, text=True, capture_output=True)
     selected = json.loads(output.read_text()) if output.exists() else None
     serialized = dict(line.split('=', 1) for line in github_output.read_text().splitlines()) if github_output.exists() else {}
     return completed, selected, serialized
@@ -203,13 +226,11 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
     dispatch = dict(push, name='workflow_dispatch')
     merged = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'), merge_commit_sha='c' * 40))
     scenarios = [
-        (push, {'before': 'd' * 40}, ['.resolver-plugins/bind920.json'], None, True, False, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
-        (push, {'before': 'd' * 40}, ['dns/bind/Makefile'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
         (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
         (push, {'before': 'd' * 40}, ['.resolver-plugins/upstream.json'], None, False, False, 'production', None, None, None),
         (push, {'before': 'd' * 40}, ['dns/bind/tests/test_watcher.py'], None, False, False, 'production', None, None, None),
         (merge, merged, ['.resolver-plugins/upstream.json'], None, False, True, 'production', '26.7', 'c' * 40, 'b' * 40),
-        (merge, merged, ['.resolver-plugins/bind920.json'], None, False, False, 'production', None, None, None),
+        (merge, merged, ['docs/building.md'], None, False, False, 'production', None, None, None),
         (merge, dict(merged, pull_request=dict(merged['pull_request'], merged=False)), [], None, False, False, 'production', None, None, None),
         (dispatch, {'inputs': dict(mode='production', series='26.7')}, [], None, True, True, 'production', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
         (dispatch, {'inputs': dict(mode='development', series='26.7', pull_number='51')}, [], 'master', True, True, 'development', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
@@ -230,11 +251,46 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
                                   for key, value in expected.items()}
 
 
+@pytest.mark.parametrize('change,expected', [
+    ('initialize', (False, False)), ('runtime', (True, False)),
+    ('plugin', (False, True)), ('both', (True, True)), ('unchanged', (False, False)),
+])
+def test_git_package_delta_routes_approval_and_plugin_independently(tmp_path, change, expected):
+    from package_fixtures import PLUGIN_PACKAGE, runtime_approval
+    repository = init_repository(tmp_path / 'history')
+    before_definition = PLUGIN_PACKAGE + ('' if change == 'initialize' else runtime_approval())
+    before = commit(repository, {'dns/bind/Makefile': before_definition}, 'before reviewed package change')
+    after_definition = PLUGIN_PACKAGE + runtime_approval()
+    if change in ('runtime', 'both'):
+        after_definition = PLUGIN_PACKAGE + runtime_approval('9.20.27', '2' * 40)
+    if change in ('plugin', 'both'):
+        after_definition = after_definition.replace('>= 9.20.26', '>= 9.20.27')
+    after = commit(repository, {'dns/bind/Makefile': after_definition, 'docs/note': 'reviewed note'}, 'after reviewed change')
+    context = dict(name='push', ref='refs/heads/master', sha=after, workflow_sha=after)
+    for component, release in zip(('bind_runtime', 'bind_plugin'), expected):
+        paths = trigger_paths(release_workflow(component), 'push')
+        admitted = False
+        for pattern in paths:
+            if fnmatchcase('dns/bind/Makefile', pattern.removeprefix('!')):
+                admitted = not pattern.startswith('!')
+        assert admitted
+        completed, selected, serialized = select_cli(tmp_path / component, component, context,
+            {'before': before}, repository=repository)
+        assert completed.returncode == 0, completed.stderr
+        profile = 'refs/heads/release/bind-rp/26.10' if release else None
+        wanted = dict(mode='production', series='26.10' if release else None, release=release,
+            source_ref=profile if component == 'bind_plugin' else None, profile_ref=profile,
+            control_ref=after if release else None, prerelease_tag=None, pull_number=None)
+        assert selected == wanted
+        assert serialized == {key: str(value).lower() if isinstance(value, bool) else value or ''
+                              for key, value in wanted.items()}
+
+
 def test_closed_pr_collection_includes_every_page_and_renamed_inputs(tmp_path):
     context = dict(name='pull_request_target', ref='refs/heads/master', sha='a' * 40, workflow_sha='b' * 40)
     document = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'),
                                                merge_commit_sha='c' * 40))
-    pages = [[dict(filename='.resolver-plugins/bind920.json')],
+    pages = [[dict(filename='docs/unrelated.md')],
              [dict(filename='docs/renamed-plugin.py', previous_filename='dns/bind/src/etc/rc.d/named'),
               dict(filename='docs/building.md')]]
     completed, selected, _ = select_cli(tmp_path, 'bind_plugin', context, document, files=pages)
@@ -256,10 +312,9 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
 
 
 @pytest.mark.parametrize('path,push,merge', [
-    ('.resolver-plugins/bind920.json', (True, False), (False, False)),
     ('.github/ci/bind/runtime/build-bind920.sh', (False, False), (False, False)),
     ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, True), (False, False)),
-    ('dns/bind/Makefile', (False, True), (False, True)),
+    ('dns/bind/Makefile', (True, True), (False, True)),
     ('dns/bind/src/etc/rc.d/named', (False, True), (False, True)),
     ('Mk/plugins.mk', (False, True), (False, True)),
     ('Scripts/version.sh', (False, True), (False, True)),
@@ -267,7 +322,6 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
     ('.github/ci/bind/shared/components.py', (False, True), (False, False)),
     ('.github/ci/shared/new-helper.py', (False, True), (False, False)),
     ('.resolver-plugins/upstream.json', (False, False), (False, True)),
-    ('.resolver-plugins/bind-compatibility.json', (False, True), (False, True)),
     ('docs/package-repository/resolver-plugins.pub', (False, True), (False, False)),
     ('scripts/install-os-bind-rp.sh', (False, True), (False, False)),
     ('.github/workflows/bind-runtime-release.yml', (False, False), (False, False)),
@@ -381,6 +435,10 @@ def test_privileged_jobs_bind_control_and_immutable_owner_artifacts(component):
     jobs = workflow_jobs(release_workflow(component))
     privileged = ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else [])
     for name, job in jobs.items():
+        if component == 'bind_runtime':
+            for step in workflow_steps(job):
+                if 'uses: actions/upload-artifact@' in step:
+                    assert re.search(r'^          retention-days: ([^\n]+)$', step, re.MULTILINE)[1] == '30', name
         downloads = [step for step in workflow_steps(job) if 'uses: actions/download-artifact@' in step]
         if downloads:
             expected = {(action_expression('needs.profile.outputs.trusted_artifact_id'), 'artifacts/trusted')}

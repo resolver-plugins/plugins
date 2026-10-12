@@ -7,7 +7,7 @@ fail() {
     exit 1
 }
 
-component='' mode='' repository_root='' trusted_directory='' series=''
+component='' mode='' repository_root='' trusted_directory='' series='' install_case=fresh
 while [ "$#" -gt 0 ]
 do
     [ "$#" -ge 2 ] || fail 'every verification flag requires a value'
@@ -17,12 +17,14 @@ do
         --repository-root) repository_root=$2 ;;
         --trusted-directory) trusted_directory=$2 ;;
         --series) series=$2 ;;
+        --install-case) install_case=$2 ;;
         *) fail "unknown verification flag: $1" ;;
     esac
     shift 2
 done
 case "$component" in bind_runtime|bind_plugin) ;; *) fail 'invalid component' ;; esac
 case "$mode" in local|public) ;; *) fail 'invalid verification mode' ;; esac
+case "$install_case" in fresh|upstream|below-minimum|below-core) ;; *) fail 'invalid native installation case' ;; esac
 if [ -z "$repository_root" ] || [ -z "$trusted_directory" ] || [ -z "$series" ]
 then
     fail 'missing verification inputs'
@@ -58,7 +60,14 @@ RP_TARGET_PKG_METADATA="$trusted_directory/reader-target.json"
 export RP_UPSTREAM_METADATA RP_TARGET_PKG_METADATA
 "$ci/shared/setup-opnsense-repository.sh" "$series" >/dev/null
 pkg update -f
-pkg install -y -r OPNsense pkg opnsense
+if [ "$install_case" = below-core ]
+then
+    prepared_core=$(/usr/local/sbin/pkg-static query -e '%n = opnsense' '%n|%v|%o|%q')
+    [ -n "$prepared_core" ] || fail 'below-core case requires a prepared installed core'
+    pkg install -y -r OPNsense pkg
+else
+    pkg install -y -r OPNsense pkg opnsense
+fi
 python3 "$ci/shared/target_pkg.py" install "$RP_TARGET_PKG_METADATA" "$series" \
     --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
 python3 "$ci/shared/target_pkg.py" verify "$RP_TARGET_PKG_METADATA" "$series" \
@@ -108,8 +117,35 @@ then
     /usr/local/sbin/pkg-static install -y -r OPNsense "$@"
 fi
 
+if [ "$install_case" = below-core ] && \
+    [ "$prepared_core" != "$(/usr/local/sbin/pkg-static query -e '%n = opnsense' '%n|%v|%o|%q')" ]
+then
+    fail 'below-core preparation upgraded the core before the native checkpoint'
+fi
+
 if [ "$mode" = public ] && [ -d "$repository_root/combined" ]
 then
+    if [ "$install_case" = upstream ]
+    then
+        /usr/local/sbin/pkg-static install -y -r OPNsense os-bind
+    fi
+    metadata native-install --install-case "$install_case"
+    outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["outcome"])' \
+        "$evidence/native-$install_case-result.json")
+    if [ "$outcome" = installed ]
+    then
+        metadata source
+        "$ci/bind/runtime/verify-bind-runtime.sh"
+        metadata canary --label "native-$install_case-canary"
+    fi
+    if [ "$install_case" != fresh ]
+    then
+        python3 "$ci/shared/target_pkg.py" verify "$RP_TARGET_PKG_METADATA" "$series" \
+            --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
+        exit 0
+    fi
+    # Retain the previous installer qualification until native replacement proof passes.
+    /usr/local/sbin/pkg-static delete -f -y os-bind-rp
     /usr/local/sbin/pkg-static install -y -r OPNsense os-bind
     metadata installer-before
     evidence=$(CDPATH='' cd -- "$evidence" && pwd)

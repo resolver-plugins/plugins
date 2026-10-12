@@ -21,7 +21,7 @@ class Bind920ReuseTest(unittest.TestCase):
         for version, revision, package_version in [('9.20.26', 2, '9.20.26_2'), ('9.20.27', 0, '9.20.27')]:
             with self.subTest(version=version, revision=revision), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
-                profile = directory / 'bind920.json'
+                profile = directory / 'bind920-profile.json'
                 bind_tools = directory / f'bind-tools-{package_version}.pkg'
                 bind920 = directory / f'bind920-{package_version}.pkg'
                 output = directory / 'bind920-provenance.json'
