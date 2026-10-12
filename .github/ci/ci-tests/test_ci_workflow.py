@@ -1,22 +1,41 @@
 from common_imports import *
 
-from workflow_fixtures import assert_permissions, WORKFLOWS, assert_checkout_credentials, assert_pinned_actions, job_text
+from workflow_fixtures import (WORKFLOWS, assert_permissions, assert_checkout_credentials,
+                               assert_pinned_actions, job_text, workflow_jobs, workflow_steps,
+                               step_run, trigger_paths)
 
 
 def test_pr_workflow_runs_the_full_suite_without_publication_authority():
     workflow = (WORKFLOWS / 'ci-tests.yml').read_text()
-    trigger, jobs = workflow.split('jobs:\n', 1)
-    assert '  pull_request:\n' in trigger
-    assert 'pull_request_target:' not in trigger
-    for path in ('.github/ci/**', '.github/workflows/**', '.resolver-plugins/**',
-                 'dns/bind/**', 'net/dhcp-interface-ha/**', 'Mk/**', 'Scripts/**',
-                 'Templates/**', 'scripts/**', 'docs/package-repository/**'):
-        assert f"      - '{path}'" in trigger
+    header = workflow.split('jobs:\n', 1)[0]
+    assert re.search(r'^  pull_request:$', header, re.MULTILINE)
+    assert not re.search(r'^  pull_request_target:', header, re.MULTILINE)
+    patterns = trigger_paths(workflow, 'pull_request')
+    for path in ('.github/ci/example.py', '.github/workflows/example.yml', '.resolver-plugins/bind920.json',
+                 'dns/bind/Makefile', 'net/dhcp-interface-ha/Makefile', 'Mk/plugins.mk',
+                 'Scripts/version.sh', 'Templates/plugin.in', 'scripts/install-os-bind-rp.sh',
+                 'docs/package-repository/resolver-plugins.pub'):
+        selected = False
+        for pattern in patterns:
+            if fnmatchcase(path, pattern.removeprefix('!')):
+                selected = not pattern.startswith('!')
+        assert selected, path
     assert_permissions(workflow, {'contents': 'read'})
-    assert 'permissions:' not in jobs
-    assert 'secrets.' not in workflow
+    expressions = '\n'.join(re.findall(r'\$\{\{(.*?)\}\}', workflow, re.DOTALL))
+    assert not re.search(r'\bsecrets\b', expressions)
+    assert not re.search(r'^\s+secrets:', workflow, re.MULTILINE)
     assert_pinned_actions(workflow)
-    test = job_text(workflow, 'test')
-    assert_checkout_credentials(test)
-    assert not re.search(r'^\s+(?:if|continue-on-error):', test, re.MULTILINE)
-    assert 'python -m pytest -q .github/ci/ci-tests' in test
+    for job in workflow_jobs(workflow).values():
+        assert_permissions(job, None, indent=4)
+        if 'uses: actions/checkout@' in job:
+            assert_checkout_credentials(job)
+    job = job_text(workflow, 'test')
+    suites = [step for step in workflow_steps(job)
+              if any((arguments := shlex.split(line, comments=True)) and arguments[0] in ('python', 'python3')
+                     and arguments[1:3] == ['-m', 'pytest'] and '.github/ci/ci-tests' in arguments
+                     for line in step_run(step).splitlines())]
+    assert len(suites) == 1
+    for scope in (job.split('    steps:\n', 1)[0], suites[0]):
+        for field, accepted in [('if', ('true', 'success()')), ('continue-on-error', ('false',))]:
+            declaration = re.search(r'^\s+' + field + r': ([^\n]+)$', scope, re.MULTILINE)
+            assert declaration is None or declaration[1] in accepted, field

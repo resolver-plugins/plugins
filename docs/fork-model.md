@@ -48,6 +48,21 @@ rollback channels are published as GitHub Releases in
 metadata. A release-branch build remains a reviewed build input; it does not
 independently authorize publication or a change to the installation contract.
 
+The runtime and plugin have independent producers, compatibility fingerprints
+and signed component histories. Runtime changes do not rebuild an unchanged
+plugin; plugin changes consume an already published approved runtime and do not
+build or dispatch it. Shared policy changes may require both producers. For a
+new series or runtime pin, publish the runtime first and retry the plugin if its
+required component is not yet available.
+
+Composition preserves original component archives, build records and creator
+audit references, including the plugin's historical build-time runtime. Current
+reader authentication and the new catalogue writer are separate qualification
+records. Complete current and rollback BIND stacks remain self-contained; the
+shared feed retains every registered peer, including HA on 26.7. All publishers
+share one queued release lock and recheck their frozen peer receipts before
+mutation. Only the plugin workflow creates the plugin's source release.
+
 Do not alter signing, GitHub Release publication, package-repository
 publication, tokens, secrets, or the end-user installation contract without
 explicit maintainer authorization.

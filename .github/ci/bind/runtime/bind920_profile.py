@@ -76,7 +76,7 @@ def package_version(profile: object) -> str:
     return f"{profile['distversion']}_{profile['portrevision']}"
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared import target_pkg
 
 
@@ -92,14 +92,16 @@ def build_recipe_sha256() -> str:
         raise ValueError(f"cannot read BIND build recipe: {error}") from error
 
 
-def compatibility_fingerprint(
+def producer_inputs(
     profile: object,
     series: str,
     freebsd_release: str,
     architecture: str,
     package_creator: object,
-) -> str:
-    """Hash all inputs that determine whether BIND packages are reusable."""
+    *,
+    recipe_sha256: str,
+) -> dict[str, object]:
+    """Return the canonical schema-4 runtime build inputs."""
     profile = validate_profile(profile)
     if SERIES_PATTERN.fullmatch(series) is None:
         raise ValueError("invalid OPNsense series")
@@ -108,15 +110,31 @@ def compatibility_fingerprint(
     if ARCHITECTURE_PATTERN.fullmatch(architecture) is None:
         raise ValueError("invalid target architecture")
     package_creator = validate_package_creator(package_creator)
-    inputs = {
+    if not isinstance(recipe_sha256, str) or SHA256_PATTERN.fullmatch(recipe_sha256) is None:
+        raise ValueError("invalid BIND build recipe SHA256")
+    return {
         "schema": PROVENANCE_SCHEMA,
         "series": series,
         "freebsd_release": freebsd_release,
         "architecture": architecture,
         "bind_profile": profile,
-        "build_recipe_sha256": build_recipe_sha256(),
+        "build_recipe_sha256": recipe_sha256,
         "package_creator": package_creator,
     }
+
+
+def compatibility_fingerprint(
+    profile: object,
+    series: str,
+    freebsd_release: str,
+    architecture: str,
+    package_creator: object,
+    *,
+    recipe_sha256: str,
+) -> str:
+    """Hash explicit inputs without consulting the validator's checkout."""
+    inputs = producer_inputs(profile, series, freebsd_release, architecture,
+                             package_creator, recipe_sha256=recipe_sha256)
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -128,12 +146,15 @@ def build_provenance(
     architecture: str,
     package_creator: object,
     packages: object,
+    *,
+    recipe_sha256: str,
 ) -> dict[str, object]:
     """Describe the exact BIND pair available for one compatibility identity."""
     profile = validate_profile(profile)
     package_creator = validate_package_creator(package_creator)
     fingerprint = compatibility_fingerprint(
-        profile, series, freebsd_release, architecture, package_creator
+        profile, series, freebsd_release, architecture, package_creator,
+        recipe_sha256=recipe_sha256,
     )
     if not isinstance(packages, dict) or set(packages) != set(PACKAGE_ORIGINS):
         raise ValueError("BIND provenance has an invalid package set")
@@ -158,7 +179,7 @@ def build_provenance(
         "series": series,
         "freebsd_release": freebsd_release,
         "architecture": architecture,
-        "build_recipe_sha256": build_recipe_sha256(),
+        "build_recipe_sha256": recipe_sha256,
         "package_creator": package_creator,
         "packages": validated_packages,
     }
@@ -173,6 +194,8 @@ def write_provenance(
     package_creator: object,
     bind_tools: Path,
     bind920: Path,
+    *,
+    recipe_sha256: str | None = None,
 ) -> None:
     """Write canonical provenance for two finished BIND package archives."""
     if not bind_tools.is_file() or not bind920.is_file():
@@ -192,7 +215,8 @@ def write_provenance(
         },
     }
     provenance = build_provenance(
-        profile, series, freebsd_release, architecture, package_creator, packages
+        profile, series, freebsd_release, architecture, package_creator, packages,
+        recipe_sha256=build_recipe_sha256() if recipe_sha256 is None else recipe_sha256,
     )
     output.write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
@@ -205,6 +229,7 @@ def main() -> None:
     parser.add_argument("freebsd_release", nargs="?")
     parser.add_argument("--architecture", default="x86_64")
     parser.add_argument("--package-creator")
+    parser.add_argument("--recipe-sha256", help="explicit original recipe hash; defaults to this wrapper")
     parser.add_argument("--bind-tools", type=Path)
     parser.add_argument("--bind920", type=Path)
     parser.add_argument("--output", type=Path)
@@ -232,6 +257,8 @@ def main() -> None:
                 arguments.freebsd_release,
                 arguments.architecture,
                 package_creator,
+                recipe_sha256=(arguments.recipe_sha256 if arguments.recipe_sha256 is not None
+                               else build_recipe_sha256()),
             )
         )
         return
@@ -246,6 +273,7 @@ def main() -> None:
         package_creator,
         arguments.bind_tools,
         arguments.bind920,
+        recipe_sha256=arguments.recipe_sha256,
     )
 
 

@@ -7,7 +7,7 @@ from module_fixtures import *
 
 from package_fixtures import BIND_PROFILE as PROFILE, bind_records, creator_identity
 
-MODULE_PATH = CI / "bind/bind920_profile.py"
+MODULE_PATH = CI / "bind/runtime/bind920_profile.py"
 bind920_profile = load_module("bind920_profile", MODULE_PATH)
 
 

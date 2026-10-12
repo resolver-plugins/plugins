@@ -5,20 +5,26 @@ on:
     paths:
       - '.github/ci/ha_dhcp/**'
       - '.github/ci/shared/**'
+      - '.github/ci/bind/shared/**'
+      - '.github/ci/bind/runtime/**'
       - '.github/ci/ci-tests/**'
       - 'net/dhcp-interface-ha/**'
       - '.github/workflows/ha-dhcp-interface-tests.yml'
       - '.github/workflows/ha-dhcp-interface-release.yml'
-      - '.github/workflows/bind-package-release.yml'
+      - '.github/workflows/bind-runtime-release.yml'
+      - '.github/workflows/bind-plugin-release.yml'
   pull_request:
     paths:
       - '.github/ci/ha_dhcp/**'
       - '.github/ci/shared/**'
+      - '.github/ci/bind/shared/**'
+      - '.github/ci/bind/runtime/**'
       - '.github/ci/ci-tests/**'
       - 'net/dhcp-interface-ha/**'
       - '.github/workflows/ha-dhcp-interface-tests.yml'
       - '.github/workflows/ha-dhcp-interface-release.yml'
-      - '.github/workflows/bind-package-release.yml'
+      - '.github/workflows/bind-runtime-release.yml'
+      - '.github/workflows/bind-plugin-release.yml'
   workflow_dispatch:
   workflow_call:
 

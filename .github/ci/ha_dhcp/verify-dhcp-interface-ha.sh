@@ -11,6 +11,9 @@ ci="$root/.github/ci"
 : "${RP_UPSTREAM_METADATA:?trusted upstream metadata is required}"
 : "${RP_TARGET_PKG_METADATA:?creator target metadata is required}"
 : "${RP_READER_PKG_METADATA:?reader target metadata is required}"
+: "${RP_COMPOSITION_SHA256:?external composition seal is required}"
+python3 -I "$ci/shared/package_catalogue.py" validate --repository-root "$(dirname -- "$combined")" \
+    --component dhcp --series "$series" --composition-sha256 "$RP_COMPOSITION_SHA256" >/dev/null
 python3 "$ci/shared/target_pkg.py" field "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 python3 "$ci/shared/target_pkg.py" field "$RP_READER_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role reader >/dev/null
 python3 "$ci/ha_dhcp/dhcp_interface_ha_channel.py" validate --directory "$expected" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --trusted-upstream "$RP_UPSTREAM_METADATA"

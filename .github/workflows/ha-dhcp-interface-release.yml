@@ -19,6 +19,7 @@ permissions:
 concurrency:
   group: package-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   test:
@@ -78,6 +79,8 @@ jobs:
     needs: [profile, test]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    outputs:
+      producer_artifact_id: ${{ steps.producer.outputs.artifact-id }}
     env:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
@@ -131,28 +134,36 @@ jobs:
             pkg install -y python3 git
             git config --global --add safe.directory "$PWD"
             RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/ha_dhcp/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - id: producer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dhcp-interface-ha-${{ needs.profile.outputs.series }}
+          name: dhcp-interface-ha-${{ needs.profile.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.profile.outputs.series }}
           if-no-files-found: error
           retention-days: 7
 
   sign:
     needs: [profile, build]
+    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    outputs:
+      repository_artifact_id: ${{ steps.repository.outputs.artifact-id }}
+      composition_sha256: ${{ steps.seal.outputs.composition_sha256 }}
     env:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Require producer artifact
+        run: test -n '${{ needs.build.outputs.producer_artifact_id }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: dhcp-interface-ha-${{ needs.profile.outputs.series }}
+          artifact-ids: ${{ needs.build.outputs.producer_artifact_id }}
+          merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}
       - name: Materialize trusted profile
         env:
@@ -179,6 +190,14 @@ jobs:
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
+      - name: Bind source to trusted workflow
+        env:
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          set -eu
+          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
       - name: Reuse immutable signed snapshot
         id: reuse
         env:
@@ -193,16 +212,19 @@ jobs:
             --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
             --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" --trusted-upstream artifacts/trusted/upstream.json --target-pkg-metadata "$RP_TARGET_PKG_METADATA")
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
-      - name: Fetch current BIND component
+      - name: Fetch published BIND runtime and plugin components
         env:
           GH_TOKEN: ${{ github.token }}
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
-          python3 .github/ci/shared/package_catalogue.py fetch --component bind --series "$SERIES" --output "artifacts/$SERIES/bind-current"
+          set -eu
+          python3 -I .github/ci/shared/package_catalogue.py fetch --component bind_runtime --series "$SERIES" --output "artifacts/$SERIES/bind-runtime"
+          python3 -I .github/ci/shared/package_catalogue.py fetch --component bind_plugin --series "$SERIES" --output "artifacts/$SERIES/bind-plugin"
       - name: Sign isolated plugin and shared catalogues
         uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
         env:
           RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
           REUSED: ${{ steps.reuse.outputs.reused }}
           SERIES: ${{ needs.profile.outputs.series }}
           SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
@@ -210,7 +232,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: RP_PKG_SIGNING_KEY REUSED SERIES SOURCE_COMMIT PROFILE_COMMIT RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
+          envs: RP_PKG_SIGNING_KEY GH_TOKEN REUSED SERIES SOURCE_COMMIT PROFILE_COMMIT RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           copyback: true
@@ -218,13 +240,28 @@ jobs:
             set -eu
             export IGNORE_OSVERSION=yes
             pkg update -f
-            pkg install -y python3 git
+            pkg install -y python3 git gh
             git config --global --add safe.directory "$PWD"
             RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py snapshot --series "$SERIES")
             export RP_OPNSENSE_SNAPSHOT
-            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/shared/setup-opnsense-repository.sh "$SERIES" >/dev/null
-            pkg update -f
-            python3 .github/ci/shared/target_pkg.py install "$RP_TARGET_PKG_METADATA" "$SERIES" --upstream artifacts/trusted/upstream.json --role creator
+            python3 -I - "$SERIES" <<'PY'
+            import os
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path('.github/ci').resolve()))
+            from bind.shared import components
+            from shared import package_catalogue
+            series = sys.argv[1]
+            upstream = Path('artifacts/trusted/upstream.json')
+            reader = Path(os.environ['RP_READER_PKG_METADATA'])
+            pkg = '/usr/local/sbin/pkg-static'
+            components.select_role(upstream, reader, series, 'reader', pkg)
+            package_catalogue.authenticate_components(
+                Path('artifacts') / series / 'bind-runtime',
+                Path('artifacts') / series / 'bind-plugin', None,
+                series=series, reader_target=reader, upstream=upstream, pkg_command=pkg)
+            components.select_role(upstream, Path(os.environ['RP_TARGET_PKG_METADATA']), series, 'creator', pkg)
+            PY
             umask 077
             key=.rp-dhcpha-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
@@ -236,12 +273,25 @@ jobs:
                 --trusted-upstream artifacts/trusted/upstream.json --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA"
             fi
             python3 .github/ci/shared/package_catalogue.py stage \
-              --bind-channel "artifacts/$SERIES/bind-current" --dhcp-channel "artifacts/$SERIES/repository/current" \
-              --output "artifacts/$SERIES/repository/combined" --series "$SERIES" --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --upstream artifacts/trusted/upstream.json
+              --runtime-channel "artifacts/$SERIES/bind-runtime" --plugin-channel "artifacts/$SERIES/bind-plugin" \
+              --dhcp-channel "artifacts/$SERIES/repository/current" --output "artifacts/$SERIES/repository/combined" \
+              --series "$SERIES" --key "$key" --creator-target "$RP_TARGET_PKG_METADATA" --upstream artifacts/trusted/upstream.json \
+              --owner dhcp --composition-output "artifacts/$SERIES/repository/composition-inputs.json" --repository resolver-plugins/repository
             rm -f "$key"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - name: Seal composition from signer artifact
+        id: seal
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+        run: |
+          set -eu
+          composition_sha256=$(sha256sum "artifacts/$SERIES/repository/composition-inputs.json" | cut -d ' ' -f1)
+          python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
+            --component dhcp --series "$SERIES" --composition-sha256 "$composition_sha256"
+          printf 'composition_sha256=%s\n' "$composition_sha256" >> "$GITHUB_OUTPUT"
+      - id: repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.profile.outputs.series }}/repository
           if-no-files-found: error
           retention-days: 7
@@ -253,14 +303,18 @@ jobs:
     env:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
+      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.profile.outputs.source_commit }}
           persist-credentials: false
+      - name: Require sealed repository artifact
+        run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
       - name: Materialize trusted profile
         env:
@@ -294,7 +348,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
+          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA RP_COMPOSITION_SHA256
           usesh: true
           disable-cache: true
           run: |
@@ -309,17 +363,46 @@ jobs:
 
   publish:
     needs: [profile, sign, verify]
+    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
+    env:
+      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Require sealed repository artifact
+        run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Validate trusted source and sealed composition before publication
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
+          python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
+            --component dhcp --series "$SERIES" --composition-sha256 "$RP_COMPOSITION_SHA256"
+          python3 -I - "$SERIES" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('.github/ci').resolve()))
+          from bind.shared import components
+          composition = components.load_composition(
+              Path('artifacts') / sys.argv[1] / 'repository', component='dhcp',
+              series=sys.argv[1], composition_sha256=os.environ['RP_COMPOSITION_SHA256'])
+          components.check_composition_peers('resolver-plugins/repository', composition)
+          PY
       - name: Mint distribution repository token
         id: distribution-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -337,24 +420,50 @@ jobs:
           set -eu
           python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py promote \
             --directory "artifacts/$SERIES/repository/current" --recovery "$RUNNER_TEMP/dhcpha-recovery"
+          python3 -I - "$SERIES" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('.github/ci').resolve()))
+          from bind.shared import components
+          composition = components.load_composition(
+              Path('artifacts') / sys.argv[1] / 'repository', component='dhcp',
+              series=sys.argv[1], composition_sha256=os.environ['RP_COMPOSITION_SHA256'])
+          components.check_composition_peers('resolver-plugins/repository', composition, owned_must_match=True)
+          PY
           python3 .github/ci/shared/package_catalogue.py publish \
-            --directory "artifacts/$SERIES/repository/combined" --recovery "$RUNNER_TEMP/catalogue-recovery"
+            --repository-root "artifacts/$SERIES/repository" --component dhcp --series "$SERIES" \
+            --composition-sha256 "$RP_COMPOSITION_SHA256" --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/catalogue-recovery"
+      - name: Save publication recovery state
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dhcp-interface-ha-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dhcpha-recovery
+            ${{ runner.temp }}/catalogue-recovery
+          if-no-files-found: ignore
+          retention-days: 7
 
   verify-published:
-    needs: [profile, publish]
+    needs: [profile, sign, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
+      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ needs.profile.outputs.source_commit }}
           persist-credentials: false
+      - name: Require sealed repository artifact
+        run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
       - name: Materialize trusted profile
         env:
@@ -388,7 +497,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
+          envs: SERIES RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA RP_COMPOSITION_SHA256
           usesh: true
           disable-cache: true
           run: |
@@ -402,19 +511,36 @@ jobs:
               "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/$SERIES/latest" "$combined"
 
   source-release:
-    needs: [profile, verify-published]
+    needs: [profile, sign, verify-published]
+    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Require sealed repository artifact
+        run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - name: Validate trusted source and sealed composition before source release
+        env:
+          SERIES: ${{ needs.profile.outputs.series }}
+          SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
+          RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          set -eu
+          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
+          python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
+            --component dhcp --series "$SERIES" --composition-sha256 "$RP_COMPOSITION_SHA256"
       - name: Publish verified source prerelease
         env:
           GH_TOKEN: ${{ github.token }}

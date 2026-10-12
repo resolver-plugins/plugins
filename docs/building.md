@@ -32,24 +32,26 @@ routine update warrants it.
 
 ## Local build
 
-The [BIND release workflow](../.github/workflows/bind-package-release.yml) is the
-canonical build path. It keeps the CI scripts checked out from `master`,
-fetches the selected immutable release
-commit, then materializes only that commit's `dns/bind` source and
-`.resolver-plugins/upstream.json` and `Mk` build framework. This matters for
-legacy release branches, which intentionally do not carry the control-plane
-scripts. In particular, the release `Mk` files prevent a development-branch
-marker from adding an unintended `-devel` package suffix.
+The [runtime release workflow](../.github/workflows/bind-runtime-release.yml)
+produces the pinned `bind-tools`/`bind920` pair. The
+[plugin release workflow](../.github/workflows/bind-plugin-release.yml) produces
+`os-bind-rp` against an already published, authenticated runtime pair. Neither
+workflow builds or dispatches its peer. Both keep CI scripts, policies and the
+committed key at an immutable `master` control commit. Plugin materialization
+replaces the selected source commit's entire `dns/bind`, `Mk`, `Scripts` and
+`Templates` trees, removing source-absent framework paths. This matters for
+legacy release branches, which intentionally do not carry control-plane code,
+and prevents a leftover development marker from changing the production name.
 
 Package-affecting pushes to `master` automatically run production for the
 newest numeric `release/bind-rp/<series>` branch. Release helpers are grouped in
 `.github/ci/bind/`, `.github/ci/ha_dhcp/`, and `.github/ci/shared/`;
-regression tests remain in `.github/ci/ci-tests/`. The BIND workflow watches the
-whole `bind/` and `shared/` directories, so new helpers are covered automatically.
-HA-only source, release helpers
-and workflows, test-only edits, and documentation do not trigger a BIND build.
-Shared catalogue, signing/publication, package-creator, and build-framework changes
-still do. PR test workflows retain their own broader validation filters.
+regression tests remain in `.github/ci/ci-tests/`. Runtime-owned helpers and
+`bind920.json` trigger the runtime workflow; plugin source, its helpers and
+the `Mk`, `Scripts` and `Templates` framework trigger the plugin workflow.
+Shared BIND policy, catalogue and package-manager helpers trigger both.
+HA-only source, helpers and workflows, test-only edits and documentation do not
+trigger BIND publication. PR tests retain broader validation filters.
 
 Merging a package-affecting pull request into a release-source branch automatically
 runs production for that series, pinned to the merge commit. The workflow and
@@ -57,33 +59,43 @@ publication helpers still come from the trusted `master` control plane. Closing 
 without merging does not build a release. Manual dispatch remains available
 for an explicit series or development build.
 
-Reproduce that split in a disposable clone when building locally. Start
-from `master`, fetch the selected release branch, and overlay only its release
-inputs before entering the matching FreeBSD environment:
+For a local unsigned build, start in a disposable clone of `master` and fetch
+the selected source once. Preserve its upstream profile separately from the
+control checkout:
 
 ```sh
 series=26.7
+control_commit=$(git rev-parse HEAD)
 release_ref="refs/heads/release/bind-rp/$series"
 git fetch --no-tags origin "$release_ref:refs/remotes/origin/build-source"
 source_commit=$(git rev-parse refs/remotes/origin/build-source)
-git checkout "$source_commit" -- .resolver-plugins/upstream.json Mk dns/bind
-git cat-file -e "$source_commit:Mk/devel.mk" 2>/dev/null || rm -f Mk/devel.mk
+mkdir -p artifacts
+git show "$source_commit:.resolver-plugins/upstream.json" > artifacts/source-upstream.json
 ```
 
-The runner checks out the pinned OPNsense core commit and configures its
-package repository and fingerprints. Before compiling, it checks the
-self-contained `pkg-<series>` channel in `resolver-plugins/repository` for
-`bind920-provenance.json`. If the complete BIND profile, series, FreeBSD
-release, architecture, and target package-creator identity match, it downloads
-the two BIND packages through the signed package channel and installs them in
-the build VM. A first build or changed compatibility identity is a normal cache
-miss and uses the exact FreeBSD Ports recipe pinned in
-`.resolver-plugins/bind920.json`, verifies its hashes, and builds `bind-tools`
-followed by `bind920` at the pinned BIND package version. Documentation is
+The controller resolves creator and minimum-reader roles once and seals the
+upstream profile, pin, policy, exact wrapper hash, producer inputs and any
+published component receipts in a separate trusted directory. Consumers receive
+that artifact's immutable ID and the external SHA-256 of `selection.json`.
+Every wrapper requires `RP_TRUSTED_DIRECTORY` and `RP_SELECTION_SHA256` before
+package-manager or build operations; the old environment defaults are insufficient.
+
+Production runtime selection reuses only a matching published runtime component
+and its exact immutable snapshot. Malformed, draft, missing-snapshot or
+incompatible native input stops the run. A valid identity mismatch selects a
+fresh build, which verifies the exact Ports recipe hashes and builds `bind-tools`
+followed by `bind920`. Development always builds a fresh unsigned pair.
+Documentation is
 excluded because it is not needed at runtime; this keeps the source build from
-pulling in the large Sphinx documentation toolchain. The plugin build then
-installs that exact pair before packaging `os-bind-rp`, so the current channel
-and its rollback snapshot contain the BIND packages actually used by the build.
+pulling in the large Sphinx documentation toolchain.
+
+Plugin selection requires a published runtime that matches the approved pin
+and current compatibility policy. It freezes the full receipt before the VM,
+authenticates and installs that exact pair, then builds or reuses the plugin.
+It never falls back to building BIND. If the approved runtime is absent or
+incompatible, publish it with the runtime workflow and retry the plugin run.
+The plugin's recorded build-time runtime remains historical provenance; a later
+compatible runtime can be qualified with the same original plugin bytes.
 The plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
 built BIND revision, and the builder verifies the OPNsense version floor.
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
@@ -122,21 +134,23 @@ Both use the profile's FreeBSD major and `amd64` ABI. The resolver accepts the
 literal version, revision and epoch from either `opnsense/pkg` or
 `ports-mgmt/pkg`; ambiguous or unsupported recipes stop the build.
 
-Resolve both records once after materializing the selected release inputs:
+The sealed controller resolves both records once. To inspect that resolution
+separately when diagnosing the selected profile:
 
 ```sh
 python3 .github/ci/shared/target_pkg.py resolve \
-  --upstream .resolver-plugins/upstream.json --series "$series" \
+  --upstream artifacts/source-upstream.json --series "$series" \
   --architecture x86_64 --output-directory artifacts/trusted
 export RP_TARGET_PKG_METADATA=artifacts/trusted/creator-target.json
 export RP_READER_PKG_METADATA=artifacts/trusted/reader-target.json
 ```
 
-CI transfers only these two records in a separate, immutable same-run artifact.
-Consumers download its artifact ID and verify both profile-job SHA256 outputs
-before metadata helpers or VM execution. Builder output cannot select signing
-policy. These digests protect our control records; they do not pin upstream
-creator archive or binary bytes.
+BIND CI transfers these records within the sealed controller bundle, alongside
+its exact build and policy inputs. HA keeps its separate immutable role artifact
+and checks both profile-job SHA-256 outputs. Consumers use artifact IDs and
+external seals before metadata helpers or VM execution. Builder output cannot
+select signing policy. These digests protect our control records; they do not
+pin upstream creator archive or binary bytes.
 
 Repository setup loads the pinned core's trusted and revoked fingerprints.
 Selection first queries the authenticated ordinary OPNsense feed for the exact
@@ -161,19 +175,19 @@ For an explicit creator install and verification in the disposable build VM:
 
 ```sh
 python3 .github/ci/shared/target_pkg.py install "$RP_TARGET_PKG_METADATA" "$series" \
-  --upstream .resolver-plugins/upstream.json --role creator
+  --upstream artifacts/source-upstream.json --role creator
 python3 .github/ci/shared/target_pkg.py verify "$RP_TARGET_PKG_METADATA" "$series" \
-  --upstream .resolver-plugins/upstream.json --role creator
+  --upstream artifacts/source-upstream.json --role creator
 ```
 
 Installation qualification uses the separate reader record with `--role reader`
 and the same upstream profile. Set `RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA"`
 on repository setup for that VM, so its isolated feed selects the reader release.
 Do not resolve tags again in consumer jobs.
-Native BIND qualification prepares OPNsense and official `os-bind` with the
-current OPNsense package manager before selecting the minimum reader. It then
-uses that reader's verified `pkg-static` for catalogue, installation and rollback
-operations. The shipped installer uses this same executable.
+Native BIND qualification prepares the OPNsense core with the current package
+manager before selecting the minimum reader. It then uses that reader's verified
+`pkg-static` for catalogues, official `os-bind` preparation, installation and
+rollback operations. The shipped installer uses this same executable.
 Local qualification requests each built package's exact version and compares its
 installed identity with the archive. Public installer qualification also checks
 the supported behavior of keeping a newer compatible upstream BIND pair.
@@ -181,31 +195,27 @@ File checksum validation accepts SHA256 hex and BLAKE2b z-base32, as supported
 by the [minimum reader's checksum implementation](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkg_checksum.c).
 Installed file contents still require a successful `pkg check -s`.
 
-New BIND provenance uses schema 4 and channels use schema 5; HA channels use
-schema 2. `package_creator` contains name, full version, origin and ABI.
+New BIND provenance uses schema 4, independent runtime/plugin component channels
+use schema 1, full BIND stack channels use schema 6, and combined catalogues use
+schema 2. HA channels retain schema 2. `package_creator` contains name, full
+version, origin and ABI.
 `creator_source` records the numeric release, official repository, commit and
 recipe path for audit. Flat build metadata records `pkg_creator`,
 `creator_release`, `creator_ports_commit` and `creator_recipe_path`.
-BIND reuse fingerprints include creator identity and the existing BIND/build
-compatibility inputs, excluding audit references and upstream creator bytes.
-Normal CI reads only BIND provenance schema 4, BIND channel schema 5 and HA
-channel schema 2. Other formats stop processing. Compatible current-format
-immutable retries preserve every original byte, including earlier audit
-references. Combined schema-1 catalogues
-retain each component's own creator provenance, permitting creator upgrades or
-origin relocation while requiring a common ABI, exact archives and authenticated
-catalogue reads. Creator byte reissues no longer need hash-update PRs.
+Runtime fingerprints cover its pin, compatibility tuple, creator identity and
+runtime wrapper bytes. Plugin fingerprints cover the full plugin/framework
+source SHA, tuple, creator identity, policy and plugin wrapper bytes; runtime
+identity is excluded. Source/control audit SHAs are excluded from runtime
+identity. Current CI accepts the formats above and stops on other component
+formats. Compatible reuse preserves every original byte, including earlier
+creator audit references and the plugin's original build-time runtime.
+Qualification records current reader authentication separately. Composed
+catalogues preserve original component provenance and record their current
+catalogue writer separately; all selected archives must share the exact ABI.
+Creator byte reissues no longer need hash-update PRs.
 
-Before enabling normal release automation, perform the one-time BIND cutover
-for both 26.1 and 26.7. Build fresh packages with `RP_BIND920_CHANNEL_URL` unset,
-then sign and qualify them against their minimum readers. Temporary local
-cutover tooling validates fresh build metadata and BIND provenance against the
-selected trusted profiles and source/control revisions, validates the existing
-current channels, preserves their exact recovery bytes and publishes the fresh
-channels and shared feeds. Retire that tooling after both public feeds pass
-verification. Historical snapshots remain
-installable through `pkg`; they are not inputs to current CI. Do not rewrite
-their metadata to describe a build that never occurred.
+Historical snapshots remain installable through `pkg`; they are not inputs to
+current CI. Preserve their original metadata as the record of the actual build.
 
 Before copying an artifact, each wrapper verifies that the target parser can
 read a non-null checksum for every packaged file. The equivalent manual gate
@@ -219,27 +229,45 @@ python3 .github/ci/shared/package_checksums.py \
 Treat a missing, `(null)`, or malformed file checksum as an incompatible
 artifact even when the archive and repository signatures are valid.
 
-For example, after preparing the selected release source:
+Prepare a sealed development runtime on a controller with Python provisioned
+and access to the official role recipes:
 
 ```sh
-RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
-SOURCE_COMMIT="$source_commit" \
-.github/ci/bind/build-os-bind-rp.sh "$series" "artifacts/$series"
+python3 -I .github/ci/bind/shared/components.py inputs \
+  --component bind_runtime --series "$series" --mode development \
+  --upstream artifacts/source-upstream.json --profile .resolver-plugins/bind920.json \
+  --policy .resolver-plugins/bind-compatibility.json \
+  --recipe .github/ci/bind/runtime/build-bind920.sh \
+  --control-commit "$control_commit" --profile-commit "$source_commit" \
+  --trusted-directory artifacts/trusted/runtime --intake-directory "artifacts/$series/runtime-intake" \
+  --output artifacts/runtime-controller.json
+export RP_TRUSTED_DIRECTORY=artifacts/trusted/runtime
+export RP_SELECTION_SHA256=$(python3 -c 'import json; print(json.load(open("artifacts/runtime-controller.json"))["selection_sha256"])')
+# In the profile's matching disposable FreeBSD environment:
+.github/ci/bind/runtime/build-bind920.sh "$series" "artifacts/$series/runtime-producer"
 ```
 
-If that command exits with status `3`, build or reuse the Resolver fallback
-and invoke the plugin wrapper with `RP_BIND920_FALLBACK=yes`:
+For a plugin preview, independently seal its source and published runtime intake.
+This requires an approved runtime already present in the distribution repository:
 
 ```sh
-RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
+python3 -I .github/ci/bind/shared/components.py inputs \
+  --component bind_plugin --series "$series" --mode development \
+  --upstream artifacts/source-upstream.json --profile .resolver-plugins/bind920.json \
+  --policy .resolver-plugins/bind-compatibility.json \
+  --recipe .github/ci/bind/plugin/build-os-bind-rp.sh \
+  --control-commit "$control_commit" --profile-commit "$source_commit" --source-commit "$source_commit" \
+  --trusted-directory artifacts/trusted/plugin --intake-directory "artifacts/$series/plugin-intake" \
+  --repository resolver-plugins/repository --output artifacts/plugin-controller.json
+export RP_TRUSTED_DIRECTORY=artifacts/trusted/plugin
+export RP_SELECTION_SHA256=$(python3 -c 'import json; print(json.load(open("artifacts/plugin-controller.json"))["selection_sha256"])')
+RP_RUNTIME_DIRECTORY="artifacts/$series/plugin-intake/bind_runtime" RP_PLUGIN_DEVEL=yes \
 SOURCE_COMMIT="$source_commit" \
-.github/ci/bind/build-bind920.sh "$series" "artifacts/$series"
-RP_BIND920_FALLBACK=yes RP_UPSTREAM_METADATA=.resolver-plugins/upstream.json \
-SOURCE_COMMIT="$source_commit" \
-.github/ci/bind/build-os-bind-rp.sh "$series" "artifacts/$series"
+.github/ci/bind/plugin/build-os-bind-rp.sh "$series" "artifacts/$series/plugin-producer"
 ```
 
-The package and `build-metadata.txt` are written below the output directory.
+The plugin preview has the explicit `os-bind-rp-devel` name. The package,
+`plugin-build-inputs.json` and `build-metadata.txt` are written below its output directory.
 The metadata records the source commit, BIND package version, OPNsense package
 version, ABI, provenance values, and FreeBSD environment used for the build.
 
@@ -253,6 +281,14 @@ runs the canonical `dns/bind/tests` suite from the pull request. It also runs
 the CI helper tests for BIND profile changes, including generated
 `.resolver-plugins/bind920.json` candidate PRs. Do not add a static release
 matrix: a newly created release branch is included automatically.
+
+Local canonical checks require the same selected release-source materialization.
+The control-plane `master` tree intentionally lacks `dns/bind/src`, so a raw
+`pytest dns/bind/tests` there cannot collect the behavior suite. In a disposable
+checkout, follow the workflow's `Materialize canonical tests and release BIND
+source` step for each active release branch, retaining the tests from the
+selected control commit, then run `python3 -m pytest -q dns/bind/tests` against
+that exact source. Report each series and immutable source commit checked.
 
 The workflow also requires `dns/bind/pkg-descr` to change with publishable
 BIND runtime, package-hook, or package-metadata changes. Test-only changes and
@@ -296,7 +332,8 @@ Check that the metadata is valid before running a full VM build:
 ```sh
 python3 .github/ci/shared/metadata_profile.py \
   .resolver-plugins/upstream.json "$series" freebsd_release
-sh -n .github/ci/bind/build-bind920.sh .github/ci/bind/build-os-bind-rp.sh \
+sh -n .github/ci/bind/runtime/build-bind920.sh .github/ci/bind/plugin/build-os-bind-rp.sh \
+  .github/ci/bind/shared/verify-bind-release.sh .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
   .github/ci/shared/setup-opnsense-repository.sh
 python3 -m compileall -q .github/ci
 pytest -q .github/ci/ci-tests

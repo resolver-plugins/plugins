@@ -23,6 +23,12 @@ Review the generated PR and merge it only after the fork-specific behavior has
 been verified. The synchronizer never silently advances a release branch for a
 new OPNsense series, even when its BIND tree is unchanged.
 
+The retained `bootstrap-build` compatibility path produces only an unsigned
+runtime artifact named `bind-runtime-bootstrap-<series>`. It restores CI, pin,
+policy and key bytes from the trusted workflow commit, seals development inputs
+for the selected immutable profile, and passes that external selection digest
+to the runtime wrapper. It does not build a plugin or create a stable channel.
+
 ## Provenance and recovery
 
 Before it creates a branch, pull request, or assignment, the workflow checks
@@ -41,6 +47,39 @@ metadata or unavailable upstream input. Correct it through a reviewed release
 branch change; do not bypass the validator or edit a generated branch in
 place. For an artifact-build failure, inspect the VM build logs and the
 metadata profile first, then reproduce the build using [Building](building.md).
+
+## Runtime and plugin publication
+
+The [runtime workflow](../.github/workflows/bind-runtime-release.yml) owns the
+reviewed BIND pin and runtime helper changes. The
+[plugin workflow](../.github/workflows/bind-plugin-release.yml) owns the plugin
+and its `Mk`, `Scripts` and `Templates` build framework. Shared compatibility,
+catalogue and package-manager changes may select both. Documentation, tests,
+HA-only changes and upstream discovery changes do not select BIND production.
+
+A relevant `master` push selects the newest numeric registered release series.
+A merged package-affecting PR into an exact `release/bind-rp/<series>` selects
+that series and its merged immutable source/profile commit; unmerged closure
+selects neither producer. Workflow code and privileged helpers remain pinned to
+the trusted default-branch workflow commit. A manual production dispatch requires
+`master` and an explicit registered series. Development dispatch requires a PR
+and writes only its unsigned component preview.
+
+For a new series or approved runtime pin, run runtime production first, then
+plugin production. The plugin freezes an already published runtime receipt and
+fails if it is absent or incompatible; it never builds or dispatches its peer.
+The three writers, including HA, share the `package-release` lock with
+cancellation disabled and the full native queue enabled. A queued plugin run
+may reach selection before the runtime it needs, so retry it after runtime
+publication succeeds. Queue order does not supply dependency ordering.
+
+Runtime-only updates preserve an unchanged plugin's archive and original
+`built_against_runtime` record. Current compatibility and reader authentication
+are recorded separately when creating the complete stack and feed. Only the
+plugin producer creates a human-facing plugin source release after public
+installation succeeds. [Package repository](package-repository.md) documents
+component tags, complete rollback stacks, reference-aware retention and retry
+recovery.
 
 ## BIND runtime candidate workflow
 

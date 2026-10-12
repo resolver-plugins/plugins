@@ -4,7 +4,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VERIFIER = ROOT / ".github" / "ci" / "bind/verify-bind-runtime.sh"
+VERIFIER = ROOT / ".github" / "ci" / "bind/runtime/verify-bind-runtime.sh"
 
 
 FAKE_COMMANDS = r"""

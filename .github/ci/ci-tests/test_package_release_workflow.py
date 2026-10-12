@@ -1,127 +1,16 @@
 from git_fixtures import *
 from module_fixtures import load_module
 
-from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs
+from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs, workflow_steps, step_run, trigger_paths
 
 import pytest
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
-WORKFLOW = REPOSITORY_ROOT / '.github/workflows/bind-package-release.yml'
-
-
-def workflow_text() -> str:
-    return WORKFLOW.read_text(encoding='utf-8')
-
-
-def run_selection(tmp_path, **inputs):
-    """Execute the real selector; only the remote GitHub read is simulated."""
-    gh = ('gh() {\ncase "$*" in\n'
-          '  *git/matching-refs/heads/release/bind-rp/*) printf "%s\\n" '
-          'refs/heads/release/bind-rp/26.7 refs/heads/release/bind-rp/26.10 '
-          'refs/heads/release/bind-rp/26.9 refs/heads/release/bind-rp/not-a-series;;\n'
-          '  *pulls/51*) printf "%s\\n" "$FIXTURE_PR_BASE";;\n'
-          '  *) return 64;;\nesac\n}\n')
-    output = tmp_path / 'selection'
-    environment = dict(os.environ,
-                       GITHUB_REPOSITORY='example/plugins', GITHUB_OUTPUT=str(output),
-                       EVENT_NAME='push', GITHUB_REF='refs/heads/master', GITHUB_SHA='a' * 40,
-                       BEFORE_SHA='', GITHUB_WORKFLOW_SHA='b' * 40, PR_MERGE_COMMIT='c' * 40,
-                       PR_BASE_REF='release/bind-rp/26.7', PR_MERGED='true', INPUT_MODE='production',
-                       INPUT_SERIES='26.7', INPUT_PULL_NUMBER='', FIXTURE_PR_BASE='master')
-    environment.update(inputs)
-    script = textwrap.dedent(job_text(workflow_text(), 'select').split('        run: |\n', 1)[1])
-    result = subprocess.run(['bash', '-c', gh + script], cwd=tmp_path, env=environment,
-                            text=True, capture_output=True)
-    selected = dict(line.split('=', 1) for line in output.read_text().splitlines()) if output.exists() else {}
-    return result, selected
-
-
-def test_merged_release_source_pr_publishes_its_exact_merge_commit(tmp_path):
-    workflow = workflow_text()
-    trigger = workflow.split('  pull_request_target:', 1)[1].split('  workflow_dispatch:', 1)[0]
-    select = job_text(workflow, 'select')
-
-    assert "pull_request_target:\n    types: [closed]\n    branches:\n      - 'release/bind-rp/**'" in workflow
-    for path in ("'.resolver-plugins/**'", "'dns/bind/**'", "'Mk/**'"):
-        assert path in trigger
-    assert "if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true" in select
-    assert 'PR_MERGE_COMMIT: ${{ github.event.pull_request.merge_commit_sha }}' in select
-    assert 'GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}' in select
-    assert 'github.event.pull_request.head.sha' not in workflow
-    result, selected = run_selection(tmp_path, EVENT_NAME='pull_request_target')
-    assert result.returncode == 0, result.stderr
-    assert selected == dict(mode='production', series='26.7', source_ref='c' * 40,
-                            control_ref='b' * 40, prerelease_tag='', pull_number='')
-
-
-def test_package_affecting_master_pushes_publish_the_newest_release_series(tmp_path):
-    workflow = workflow_text()
-
-    assert 'push:\n    branches: [master]' in workflow
-    result, selected = run_selection(tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert selected == dict(mode='production', series='26.10', source_ref='refs/heads/release/bind-rp/26.10',
-                            control_ref='a' * 40, prerelease_tag='', pull_number='')
-
-
-@pytest.mark.parametrize('base,source', [('master', 'refs/heads/release/bind-rp/26.7'),
-                                       ('release/bind-rp/26.7', 'refs/pull/51/head')])
-def test_development_selection_uses_the_pr_base_and_preserves_its_tag(tmp_path, base, source):
-    result, selected = run_selection(tmp_path, EVENT_NAME='workflow_dispatch', INPUT_MODE='development',
-                                     INPUT_PULL_NUMBER='51', FIXTURE_PR_BASE=base)
-    assert result.returncode == 0, result.stderr
-    assert selected == dict(mode='development', series='26.7', source_ref=source,
-                            control_ref='a' * 40, prerelease_tag='pr-51-26.7', pull_number='51')
-
-
-def test_production_selection_refuses_a_release_branch_control_plane(tmp_path):
-    result, selected = run_selection(tmp_path, EVENT_NAME='workflow_dispatch',
-                                     GITHUB_REF='refs/heads/release/bind-rp/26.7')
-    assert result.returncode != 0
-    assert selected == {}
-
-
-@pytest.mark.parametrize('paths,expected', [
-    (['net/dhcp-interface-ha/Makefile', 'net/dhcp-interface-ha/src/runtime.py'], False),
-    (['.github/ci/ha_dhcp/build-dhcp-interface-ha.sh', '.github/ci/ha_dhcp/verify-dhcp-interface-ha.sh',
-      '.github/ci/ha_dhcp/publish-dhcp-interface-ha.py', '.github/ci/ha_dhcp/dhcp_interface_ha_release.py',
-      '.github/ci/ha_dhcp/dhcp_interface_ha_channel.py', '.github/ci/ha_dhcp/new_helper.py',
-      '.github/workflows/ha-dhcp-interface-release.yml'], False),
-    (['.github/ci/ci-tests/test_package_release_workflow.py', '.github/ci/ci-tests/ha_fixtures.py',
-      'dns/bind/tests/test_watcher.py', 'dns/bind/tests/fixtures/example.py'], False),
-    (['README.md', 'docs/building.md', '.resolver-plugins/overlay-paths.txt',
-      '.github/ci/sync_upstream.py', '.github/ci/bind920_candidate.py', 'scripts/install-repository.sh'], False),
-    (['dns/bind/Makefile', 'dns/bind/pkg-descr', 'dns/bind/+POST_INSTALL.pre',
-      'dns/bind/src/etc/rc.d/named'], True),
-    (['.github/ci/bind/build-bind920.sh', '.github/ci/bind/build-os-bind-rp.sh',
-      '.github/ci/bind/bind920_profile.py', '.github/ci/bind/bind_compatibility.py',
-      '.github/ci/bind/reuse_bind920.py', '.github/ci/bind/verify-bind-runtime.sh',
-      '.github/ci/bind/new_helper.py'], True),
-    (['.github/ci/shared/package_catalogue.py', '.github/ci/shared/release_channel.py',
-      '.github/ci/shared/target_pkg.py', '.github/ci/shared/package_checksums.py',
-      '.github/ci/shared/metadata_profile.py', '.github/ci/shared/setup-opnsense-repository.sh',
-      '.github/ci/shared/tools/new_helper.py'], True),
-    (['.resolver-plugins/bind920.json', '.resolver-plugins/bind-compatibility.json',
-      '.resolver-plugins/upstream.json'], True),
-    (['Mk/plugins.mk', 'Scripts/version.sh', 'Templates/example.in',
-      'docs/package-repository/resolver-plugins.pub', 'scripts/install-os-bind-rp.sh',
-      '.github/workflows/bind-package-release.yml'], True),
-])
-def test_master_build_filters_include_bind_inputs_and_exclude_ha_and_tests(paths, expected):
-    trigger = workflow_text().split('  push:', 1)[1].split('  pull_request_target:', 1)[0]
-    patterns = re.findall(r"^      - '([^']+)'$", trigger, re.MULTILINE)
-    for path in paths:
-        selected = False
-        # These filters use literal paths and trailing /**, with ordered exclusions.
-        for pattern in patterns:
-            if fnmatchcase(path, pattern.removeprefix('!')):
-                selected = not pattern.startswith('!')
-        assert selected is expected, path
 
 
 @pytest.mark.parametrize('helper', [
-    'bind/reuse_bind920.py', 'shared/release_channel.py', 'shared/package_catalogue.py',
+    'bind/runtime/reuse_bind920.py', 'shared/release_channel.py', 'shared/package_catalogue.py',
     'ha_dhcp/dhcp_interface_ha_channel.py', 'ha_dhcp/publish-dhcp-interface-ha.py',
 ])
 def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
@@ -130,177 +19,9 @@ def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
     assert result.returncode == 0, result.stderr
 
 
-def test_build_jobs_checkout_the_selected_control_plane_and_release_inputs():
-    workflow = workflow_text()
-    assert '  workflow_dispatch:\n' in workflow.split('\njobs:', 1)[0]
-    profile = job_text(workflow, 'profile')
-    test = job_text(workflow, 'test')
-    bind = job_text(workflow, 'bind')
-    build = job_text(workflow, 'build')
-    assert 'ref: ${{ needs.select.outputs.control_ref }}' in profile
-    for job in (test, bind, build):
-        assert 'ref: ${{ needs.profile.outputs.control_commit }}' in job
-    assert 'git checkout "$SOURCE_COMMIT" -- .resolver-plugins/upstream.json Mk dns/bind' in build
-    for name in ('bind', 'build', 'sign', 'verify-development', 'verify', 'verify-published'):
-        assert 'release: ${{ needs.profile.outputs.freebsd_release }}' in job_text(workflow, name)
-    assert 'RP_BIND920_CHANNEL_URL: https://github.com/resolver-plugins/repository/releases/download/pkg-${{ needs.select.outputs.series }}' in bind
-    assert 'needs: [select, profile, test, bind]' in build
-
-
-def test_workflow_uses_sha_pinned_actions_and_nonpersistent_checkout_credentials():
-    workflow = workflow_text()
-    assert_pinned_actions(workflow)
-    for name, job in workflow_jobs(workflow).items():
-        if 'uses: actions/checkout@' in job:
-            assert_checkout_credentials(job)
-
-
-def test_production_signing_and_publication_are_separate_from_builds():
-    workflow = workflow_text()
-    jobs = workflow_jobs(workflow)
-    assert 'secrets.' not in workflow.split('jobs:', 1)[0]
-    assert_permissions(workflow, {'contents': 'read', 'pull-requests': 'read'})
-    overrides = {
-        'publish-development': {'contents': 'write', 'pull-requests': 'read'},
-        'source-release': {'contents': 'write'},
-    }
-    for name in ('bind', 'build', 'verify-development',
-                 'sign', 'publish', 'verify', 'verify-published'):
-        overrides[name] = {'contents': 'read'}
-    for name, job in jobs.items():
-        secrets = set(re.findall(r'secrets\.([A-Z_]+)', job))
-        expected = {'sign': {'RP_PKG_SIGNING_KEY'}, 'publish': {'RP_DISTRIBUTION_APP_PRIVATE_KEY'}}
-        assert secrets == expected.get(name, set()), name
-        assert_permissions(job, overrides.get(name), indent=4)
-    for name in ('sign', 'publish', 'verify', 'verify-published', 'source-release',
-                 'verify-development', 'publish-development'):
-        mode = 'development' if name.endswith('-development') else 'production'
-        assert f"    if: needs.select.outputs.mode == '{mode}'\n" in jobs[name]
-    assert 'needs: [select, profile, sign, verify]' in jobs['publish']
-
-
-def test_signer_binds_the_control_commit_and_trusted_build_profiles():
-    workflow = workflow_text()
-    signer = job_text(workflow, 'sign')
-    assert 'ref: ${{ needs.profile.outputs.control_commit }}' in signer
-    assert "--control-commit '${{ needs.profile.outputs.control_commit }}'" in signer
-    for command in ('validate-bind-provenance', 'validate-build-metadata', 'reuse-snapshot', 'stage-channel'):
-        matches = re.findall(r'release_channel\.py ' + command + r' ([^\n]+)', signer.replace('\\\n', ''))
-        arguments = shlex.split(matches[0])
-        assert arguments[arguments.index('--target-pkg-metadata') + 1] == '$RP_TARGET_PKG_METADATA'
-        if command == 'validate-bind-provenance':
-            assert arguments[arguments.index('--profile') + 1] == '.resolver-plugins/bind920.json'
-            assert arguments[arguments.index('--freebsd-release') + 1] == '${{ needs.profile.outputs.freebsd_release }}'
-            assert arguments[arguments.index('--series') + 1] == '$SERIES'
-        if command == 'validate-build-metadata':
-            assert arguments[arguments.index('--upstream') + 1] == 'artifacts/trusted/upstream.json'
-
-
-def test_publisher_mints_a_repository_scoped_github_app_token():
-    workflow = workflow_text()
-    publisher = job_text(workflow, 'publish')
-    assert 'owner: resolver-plugins' in publisher
-    assert 'repositories: repository' in publisher
-    assert 'permission-contents: write' in publisher
-    assert 'RP_DISTRIBUTION_REPOSITORY_TOKEN' not in workflow
-
-
-def test_production_preflights_pages_then_publishes_the_abi_static_channel():
-    workflow = workflow_text()
-    publisher = job_text(workflow, 'publish')
-
-    assert 'https://resolver-plugins.github.io/repository/pages-health' in publisher
-    assert publisher.index('publish-channels') < publisher.index('package_catalogue.py publish')
-
-
-def test_publication_waits_for_current_and_snapshot_installability_in_freebsd():
-    workflow = workflow_text()
-    verifier = job_text(workflow, 'verify')
-    assert '"$root"/current/bind-tools-*.pkg' in verifier
-    assert '"$root"/current/bind920-*.pkg' in verifier
-    assert '"$root"/current/os-bind-rp-*.pkg' in verifier
-    assert '"$root"/current/*.pkg' not in verifier
-    assert 'url: "file://$PWD/$root/snapshot"' in verifier
-    assert '/usr/local/sbin/pkg-static install -f -y -r resolver-plugins-rollback os-bind-rp' in verifier
-
-
-def test_published_channel_is_installed_from_github_in_freebsd():
-    workflow = workflow_text()
-    verifier = job_text(workflow, 'verify-published')
-    assert 'needs: [select, profile, publish]' in verifier
-    assert 'repository_url="https://resolver-plugins.github.io/repository/pkg/\\${ABI}/$series/latest"' in verifier
-    assert 'verify-abi-endpoint --url "$channel_url" --expected-channel "$root"' in verifier
-    assert '[ "$channel_identities" = "$expected_identities" ]' in verifier
-    assert verifier.index('pkg install -y -r OPNsense pkg opnsense os-bind') < verifier.index(
-        'RP_PKG_STATIC_COMMAND="$shim/observe-pkg-static" scripts/install-os-bind-rp.sh'
-    )
-    assert '[ "$channel_identity" = "$expected_identity" ]' in verifier
-    assert '[ "$installed_identities" = "$expected_installed" ]' in verifier
-    assert 'RP_PKG_COMMAND=/usr/local/sbin/pkg-static' in verifier
-    assert verifier.index('verify-abi-endpoint') < verifier.index('/usr/local/sbin/pkg-static update -f -r resolver-plugins')
-    assert 'test "$(stat -f %Lp "$state_directory")" = 700' in verifier
-    assert '[ "$(sha256 -q "$root/$identity.pkg")" = "$digest" ]' in verifier
-
-
-def test_development_release_installs_from_a_temporary_freebsd_repository():
-    workflow = workflow_text()
-    verifier = job_text(workflow, 'verify-development')
-    publisher = job_text(workflow, 'publish-development')
-    assert 'needs: [select, profile, build]' in verifier
-    assert 'needs: [select, build, verify-development]' in publisher
-    assert 'pull_number: ${{ steps.select.outputs.pull_number }}' in workflow
-    assert 'PULL_NUMBER: ${{ needs.select.outputs.pull_number }}' in publisher
-    assert publisher.count(
-        'gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state'
-    ) == 2
-    assert publisher.count(
-        'release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"'
-    ) == 2
-    assert publisher.index('pr_state=$(gh api') < publisher.index('gh release create "$TAG"')
-    assert publisher.rindex('pr_state=$(gh api') > publisher.index('gh release upload "$TAG"')
-
-
-def test_source_release_contains_only_plugin_and_build_metadata():
-    workflow = workflow_text()
-    source_release = workflow.split('  source-release:', 1)[1]
-    assert 'needs: [select, profile, verify-published]' in source_release
-    assert 'publish-immutable --repository "$GITHUB_REPOSITORY"' in source_release
-    assert 'set -- "$output"/os-bind-rp-*.pkg' in source_release
-    assert 'cp "$1" "$output/build-metadata.txt" "$source_output/"' in source_release
-    assert 'bind920-*.pkg' not in source_release
-
-
-@pytest.mark.parametrize('job', ['verify-development', 'verify', 'verify-published'])
-def test_freebsd_install_gates_pin_verify_and_replace_official_packages(job):
-    verifier = job_text(workflow_text(), job)
-    reader = '/usr/local/sbin/pkg-static'
-    official = 'pkg install -y -r OPNsense pkg opnsense os-bind'
-    checksums = 'package_checksums.py'
-    runtime = '.github/ci/bind/verify-bind-runtime.sh'
-    for required in (
-        'target_pkg.py verify', '--pkg-command /usr/local/sbin/pkg-static',
-        f"[ -z \"$({reader} query -e '%n = os-bind' '%n'",
-        f"{reader} query -e \"%n = $package\" '%Fp|%Fs'", '$2 == "(null)"',
-    ):
-        assert required in verifier
-    assert verifier.index('.github/ci/shared/setup-opnsense-repository.sh') < verifier.index(
-        official
-    ) < verifier.index('target_pkg.py install') < verifier.index(checksums)
-    for line in verifier.splitlines():
-        if 'target_pkg.py install' in line or 'target_pkg.py verify' in line:
-            assert '"$RP_READER_PKG_METADATA"' in line and '--role reader' in line and '--upstream .resolver-plugins/upstream.json' in line
-            assert f'--pkg-command {reader}' in line
-    assert 'RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" RP_UPSTREAM_METADATA=' in verifier
-    assert verifier.index(f'{reader} check -s bind-tools bind920 os-bind-rp') < verifier.index(runtime)
-    if job != 'verify-published':
-        assert f'{reader} install -f -y -r ' in verifier and '"$@"' in verifier
-        assert '[ "$installed_identity" = "$expected_identity" ]' in verifier
-
-
-@pytest.mark.parametrize('workflow', ['bind-package-release.yml', 'ha-dhcp-interface-release.yml'])
 @pytest.mark.parametrize('changed', [None, 'creator', 'reader'])
-def test_control_bundle_preflight_rejects_changed_records(tmp_path, workflow, changed):
-    """Run the real signing preflight; valid substituted records must fail their digest."""
+def test_control_bundle_preflight_rejects_changed_records(tmp_path, changed):
+    """The HA role bundle retains its own producer; observe admission, not digest diagnostics."""
     from package_fixtures import write_resolved_target, write_json
     target_pkg = load_module('workflow_target_pkg', 'shared/target_pkg.py', register=True)
     trusted = tmp_path / 'artifacts/trusted'
@@ -316,17 +37,536 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, workflow, ch
             write_json(record, data)
         target_pkg.load_target(record, '26.7', upstream=upstream, role=role)
     shutil.copytree(REPOSITORY_ROOT / '.github/ci/shared', tmp_path / '.github/ci/shared')
-    signer = job_text((REPOSITORY_ROOT / '.github/workflows' / workflow).read_text(), 'sign')
-    step = signer.split('      - name: Validate resolved pkg targets\n', 1)[1].split('      - ', 1)[0]
-    script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+    signer = job_text((REPOSITORY_ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text(), 'sign')
+    script = next(step_run(step) for step in workflow_steps(signer) if 'sha256sum --check' in step_run(step))
     for role, digest in digests.items():
-        script = script.replace('${{ needs.profile.outputs.' + role + '_target_sha256 }}', digest)
-    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script], cwd=tmp_path,
-        env=dict(os.environ, SERIES='26.7'), capture_output=True, text=True)
-    if changed:
-        assert result.returncode != 0
-        assert f'{changed}-target.json: FAILED' in result.stdout
-        assert 'checksum did NOT match' in result.stderr
-    else:
-        assert result.returncode == 0, result.stderr
-        assert 'creator-target.json: OK' in result.stdout and 'reader-target.json: OK' in result.stdout
+        script = script.replace(action_expression(f'needs.profile.outputs.{role}_target_sha256'), digest)
+    sentinel = tmp_path / 'privileged-output'
+    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script + '\n: > "$Q_PRIVILEGED_SENTINEL"\n'],
+        cwd=tmp_path, env=dict(os.environ, SERIES='26.7', Q_PRIVILEGED_SENTINEL=str(sentinel)),
+        capture_output=True, text=True)
+    assert (result.returncode == 0) is (changed is None), result.stderr
+    assert sentinel.exists() is (changed is None)
+
+
+@pytest.mark.parametrize('component,changed', [
+    ('bind_runtime', None), ('bind_plugin', None), ('bind_plugin', 'creator'),
+    ('bind_plugin', 'reader'), ('bind_plugin', 'runtime'), ('bind_plugin', 'reader-file'),
+    ('bind_plugin', 'control'), ('bind_plugin', 'profile-control'), ('bind_plugin', 'head'),
+])
+def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, monkeypatch, component, changed):
+    components = load_module('sealed_components', 'bind/shared/components.py')
+    from package_fixtures import BIND_PROFILE, creator_identity, make_bind_component, write_resolved_target, write_json
+    profile = upstream_profile('26.7')
+    upstream = write_json(tmp_path / 'upstream.json', profile)
+    pin = write_json(tmp_path / 'bind920-profile.json', BIND_PROFILE)
+    policy = REPOSITORY_ROOT / '.resolver-plugins/bind-compatibility.json'
+    recipe = tmp_path / 'build-wrapper.sh'
+    recipe.write_text('selected build wrapper')
+    creator = write_resolved_target(tmp_path / 'creator.json', profile)
+    reader = write_resolved_target(tmp_path / 'reader.json', profile, role='reader')
+    repository = init_repository(tmp_path / 'checkout')
+    control = commit(repository, {
+        '.resolver-plugins/upstream.json': upstream.read_text(),
+        '.resolver-plugins/bind920.json': pin.read_text(),
+        '.resolver-plugins/bind-compatibility.json': policy.read_text(),
+        '.github/ci/bind/runtime/build-bind920.sh': recipe.read_text(),
+        '.github/ci/bind/plugin/build-os-bind-rp.sh': recipe.read_text(),
+    }, 'trusted control and source')
+    runtime = make_bind_component('bind_runtime', tmp_path / 'runtime', series='26.7',
+        creator=creator_identity(), source_commit='1' * 40, control_commit='2' * 40,
+        profile=profile, version='9.20.26_2')
+    trusted = tmp_path / 'trusted'
+    with monkeypatch.context() as boundary:
+        boundary.setattr(components.subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout='[]'))
+        boundary.setattr(components.releases, 'snapshot_release', lambda *a:
+            SimpleNamespace(existed=True, draft=False, directory=runtime))
+        result = components.prepare_selection(trusted, component=component, series='26.7', mode='production',
+            control_commit=control, source_commit=control if component == 'bind_plugin' else None,
+            profile_commit=control, upstream=upstream, profile=pin, policy=policy, recipe=recipe,
+            repository='example/distribution', intake_directory=tmp_path / 'intake',
+            creator_target=creator, reader_target=reader)
+    assert result['producer_action'] == 'build'
+    digest, profile_control = result['selection_sha256'], control
+    if changed in ('creator', 'reader', 'reader-file'):
+        role = 'reader' if changed == 'reader-file' else changed
+        record = json.loads((trusted / f'{role}-target.json').read_text())
+        record['package_creator']['version'] = '9.9.9'
+        write_json(trusted / f'{role}-target.json', record)
+        components.target_pkg.load_target(trusted / f'{role}-target.json', '26.7',
+                                          upstream=trusted / 'upstream.json', role=role)
+        if changed == 'creator':
+            inputs = json.loads((trusted / 'producer-inputs.json').read_text())
+            inputs['package_creator'] = record['package_creator']
+            write_json(trusted / 'producer-inputs.json', inputs)
+    elif changed == 'runtime':
+        replacement = make_bind_component('bind_runtime', tmp_path / 'replacement', series='26.7',
+            creator=creator_identity(version='2.4.0'), source_commit='5' * 40, control_commit='6' * 40,
+            profile=profile, version='9.20.26_2')
+        write_json(trusted / 'runtime-selection.json', components.component_receipt(replacement, 'bind_runtime', '26.7'))
+    if changed in ('creator', 'reader', 'runtime'):
+        selection = json.loads((trusted / 'selection.json').read_text())
+        if changed == 'creator':
+            selection['expected_fingerprint'] = components.plugin_build_fingerprint(inputs)
+        selection['files'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in trusted.iterdir() if p.name != 'selection.json'}
+        write_json(trusted / 'selection.json', selection)
+        components.load_selection(trusted, component=component, series='26.7',
+                                  selection_sha256=hashlib.sha256((trusted / 'selection.json').read_bytes()).hexdigest())
+    if changed in ('control', 'profile-control', 'head'):
+        foreign = commit(repository, {'other.txt': 'another valid control'}, 'foreign control')
+        if changed == 'control':
+            selection = json.loads((trusted / 'selection.json').read_text())
+            selection['control_commit'] = foreign
+            profile_control = foreign
+            digest = components.seal_selection(trusted, selection)
+        elif changed == 'profile-control':
+            profile_control = foreign
+            git(repository, 'checkout', control)
+    sentinel = tmp_path / 'privileged-output'
+    command = [sys.executable, '-I', str(REPOSITORY_ROOT / '.github/ci/bind/shared/components.py'),
+               'validate', '--component', component, '--series', '26.7', '--trusted-directory', str(trusted),
+               '--selection-sha256', digest, '--expected-control-commit', control,
+               '--profile-control-commit', profile_control]
+    checked = subprocess.run(['sh', '-c', shlex.join(command) + ' && : > ' + shlex.quote(str(sentinel))],
+                             cwd=repository, capture_output=True, text=True)
+    assert (checked.returncode == 0) is (changed is None), checked.stderr
+    assert sentinel.exists() is (changed is None)
+    if changed is None:
+        producer = tmp_path / 'producer'
+        producer.mkdir()
+        inputs = json.loads((trusted / 'producer-inputs.json').read_text())
+        if component == 'bind_runtime':
+            from package_fixtures import bind_records
+            for name in bind_records():
+                filename = bind_records()[name]['filename']
+                shutil.copyfile(runtime / filename, producer / filename)
+            write_json(producer / 'bind920-provenance.json', components.bind920_profile.build_provenance(
+                BIND_PROFILE, '26.7', '15.1', 'x86_64', creator_identity(), bind_records(),
+                recipe_sha256=inputs['build_recipe_sha256']))
+        else:
+            fresh = make_bind_component('bind_plugin', tmp_path / 'fresh-plugin', series='26.7',
+                creator=creator_identity(), source_commit=control, control_commit=control,
+                profile=profile, version='26.7_1')
+            for name in ('os-bind-rp-26.7_1.pkg', 'build-metadata.txt'):
+                shutil.copyfile(fresh / name, producer / name)
+            shutil.copyfile(trusted / 'producer-inputs.json', producer / 'plugin-build-inputs.json')
+        original = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in producer.iterdir()}
+        selection = components.load_selection(trusted, component=component, series='26.7',
+                                             selection_sha256=result['selection_sha256'])
+        candidate = components.validate_candidate(producer, selection, trusted, pkg_command=None)
+        assert candidate['build_fingerprint'] == result['expected_fingerprint']
+        assert candidate['control_commit'] == control
+        assert candidate['packages'] == {name: digest for name, digest in original.items() if name.endswith('.pkg')}
+
+def release_workflow(component):
+    filename = 'bind-runtime-release.yml' if component == 'bind_runtime' else 'bind-plugin-release.yml'
+    return (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
+
+
+def select_cli(directory, component, context, document, paths=None, *, pr_base=None, files=None):
+    directory.mkdir(parents=True, exist_ok=True)
+    event, refs, output, github_output = (directory / name for name in ('event.json', 'refs.json', 'selected.json', 'github-output'))
+    event.write_text(json.dumps(document))
+    refs.write_text(json.dumps(['refs/heads/release/bind-rp/26.7', 'refs/heads/release/bind-rp/26.10',
+                               'refs/heads/release/bind-rp/26.9', 'refs/heads/release/bind-rp/not-a-series']))
+    environment = dict(os.environ, GITHUB_EVENT_NAME=context['name'], GITHUB_REF=context['ref'],
+                       GITHUB_SHA=context['sha'], GITHUB_WORKFLOW_SHA=context['workflow_sha'],
+                       GITHUB_REPOSITORY='example/plugins')
+    arguments = [sys.executable, '-I', str(REPOSITORY_ROOT / '.github/ci/bind/shared/selection.py'),
+                 'select-event', '--component', component, '--event-file', str(event), '--refs-file', str(refs),
+                 '--output', str(output), '--github-output', str(github_output)]
+    if paths is not None:
+        changed = directory / 'paths.json'
+        changed.write_text(json.dumps(paths))
+        arguments.extend(['--changed-paths-file', str(changed)])
+    if pr_base is not None or files is not None:
+        gh = directory / 'gh'
+        gh.write_text('#!/bin/sh\nset -eu\ncase "$*" in\n'
+            '  "api --paginate --slurp repos/example/plugins/pulls/51/files?per_page=100") cat "$Q_GH_FILES";;\n'
+            '  "api repos/example/plugins/pulls/51 --jq .base.ref") printf "%s\\n" "$Q_PR_BASE";;\n'
+            '  *) exit 64;;\nesac\n')
+        gh.chmod(0o755)
+        remote = directory / 'remote-files.json'
+        remote.write_text(json.dumps(files))
+        environment.update(PATH=str(directory) + os.pathsep + environment['PATH'],
+                           Q_PR_BASE=pr_base or '', Q_GH_FILES=str(remote))
+    completed = subprocess.run(arguments, env=environment, text=True, capture_output=True)
+    selected = json.loads(output.read_text()) if output.exists() else None
+    serialized = dict(line.split('=', 1) for line in github_output.read_text().splitlines()) if github_output.exists() else {}
+    return completed, selected, serialized
+
+
+def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
+    push = dict(name='push', ref='refs/heads/master', sha='a' * 40, workflow_sha='b' * 40)
+    merge = dict(push, name='pull_request_target')
+    dispatch = dict(push, name='workflow_dispatch')
+    merged = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'), merge_commit_sha='c' * 40))
+    scenarios = [
+        (push, {'before': 'd' * 40}, ['.resolver-plugins/bind920.json'], None, True, False, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
+        (push, {'before': 'd' * 40}, ['dns/bind/Makefile'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
+        (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, True, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
+        (push, {'before': 'd' * 40}, ['dns/bind/tests/test_watcher.py'], None, False, False, 'production', None, None, None),
+        (merge, merged, ['.resolver-plugins/upstream.json'], None, True, True, 'production', '26.7', 'c' * 40, 'b' * 40),
+        (merge, dict(merged, pull_request=dict(merged['pull_request'], merged=False)), [], None, False, False, 'production', None, None, None),
+        (dispatch, {'inputs': dict(mode='production', series='26.7')}, [], None, True, True, 'production', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
+        (dispatch, {'inputs': dict(mode='development', series='26.7', pull_number='51')}, [], 'master', True, True, 'development', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
+        (dispatch, {'inputs': dict(mode='development', series='26.7', pull_number='51')}, [], 'release/bind-rp/26.7', True, True, 'development', '26.7', 'refs/pull/51/head', 'a' * 40),
+    ]
+    for index, (context, document, paths, pr_base, runtime, plugin, mode, series, profile, control) in enumerate(scenarios):
+        for component, release in [('bind_runtime', runtime), ('bind_plugin', plugin)]:
+            completed, selected, serialized = select_cli(tmp_path / f'{index}-{component}', component,
+                                                        context, document, paths, pr_base=pr_base)
+            assert completed.returncode == 0, completed.stderr
+            expected = dict(mode=mode, series=series if release else None,
+                            source_ref=profile if release and component == 'bind_plugin' else None,
+                            profile_ref=profile if release else None, control_ref=control if release else None,
+                            prerelease_tag=f'pr-51-26.7-{component.replace("_", "-")}' if mode == 'development' else None,
+                            pull_number='51' if mode == 'development' else None, release=release)
+            assert selected == expected
+            assert serialized == {key: str(value).lower() if isinstance(value, bool) else value or ''
+                                  for key, value in expected.items()}
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_closed_pr_collection_includes_every_page_and_renamed_inputs(tmp_path, component):
+    context = dict(name='pull_request_target', ref='refs/heads/master', sha='a' * 40, workflow_sha='b' * 40)
+    document = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'),
+                                               merge_commit_sha='c' * 40))
+    pages = [[dict(filename='.resolver-plugins/bind920.json')],
+             [dict(filename='docs/renamed-plugin.py', previous_filename='dns/bind/src/etc/rc.d/named'),
+              dict(filename='docs/building.md')]]
+    completed, selected, _ = select_cli(tmp_path, component, context, document, files=pages)
+    assert completed.returncode == 0, completed.stderr
+    assert selected == dict(mode='production', series='26.7',
+                            source_ref='c' * 40 if component == 'bind_plugin' else None,
+                            profile_ref='c' * 40, control_ref='b' * 40,
+                            prerelease_tag=None, pull_number=None, release=True)
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_production_dispatch_cannot_select_release_branch_control(tmp_path, component):
+    context = dict(name='workflow_dispatch', ref='refs/heads/release/bind-rp/26.7',
+                   sha='a' * 40, workflow_sha='b' * 40)
+    completed, selected, serialized = select_cli(tmp_path, component, context,
+                                                {'inputs': dict(mode='production', series='26.7')}, [])
+    assert completed.returncode != 0
+    assert selected is None and serialized == {}
+
+
+@pytest.mark.parametrize('path,push,merge', [
+    ('.resolver-plugins/bind920.json', (True, False), (True, False)),
+    ('.github/ci/bind/runtime/build-bind920.sh', (True, False), (False, False)),
+    ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, True), (False, False)),
+    ('dns/bind/Makefile', (False, True), (False, True)),
+    ('dns/bind/src/etc/rc.d/named', (False, True), (False, True)),
+    ('Mk/plugins.mk', (False, True), (False, True)),
+    ('Scripts/version.sh', (False, True), (False, True)),
+    ('Templates/plugin.in', (False, True), (False, True)),
+    ('.github/ci/bind/shared/components.py', (True, True), (False, False)),
+    ('.github/ci/shared/new-helper.py', (True, True), (False, False)),
+    ('.resolver-plugins/upstream.json', (True, True), (True, True)),
+    ('.resolver-plugins/bind-compatibility.json', (True, True), (True, True)),
+    ('docs/package-repository/resolver-plugins.pub', (True, True), (False, False)),
+    ('scripts/install-os-bind-rp.sh', (True, True), (False, False)),
+    ('.github/workflows/bind-runtime-release.yml', (True, False), (False, False)),
+    ('.github/workflows/bind-plugin-release.yml', (False, True), (False, False)),
+    ('dns/bind/tests/test_watcher.py', (False, False), (False, False)),
+    ('.github/ci/ci-tests/test_package_release_workflow.py', (False, False), (False, False)),
+    ('docs/building.md', (False, False), (False, False)),
+    ('net/dhcp-interface-ha/Makefile', (False, False), (False, False)),
+    ('.github/ci/ha_dhcp/new-helper.py', (False, False), (False, False)),
+    ('.github/workflows/ha-dhcp-interface-release.yml', (False, False), (False, False)),
+    ('.github/ci/sync_upstream.py', (False, False), (False, False)),
+    ('.github/ci/bind/new-helper.py', (False, False), (False, False)),
+])
+def test_actual_filters_route_independent_input_classes(path, push, merge):
+    selection = load_module('independent_workflow_selection', 'bind/shared/selection.py')
+    for component, expected_push, expected_merge in zip(('bind_runtime', 'bind_plugin'), push, merge):
+        workflow = release_workflow(component)
+        for event, expected in [('push', expected_push), ('pull_request_target', expected_merge)]:
+            selected = False
+            for pattern in trigger_paths(workflow, event):
+                if fnmatchcase(path, pattern.removeprefix('!')):
+                    selected = not pattern.startswith('!')
+            assert selected is expected, (component, event, path)
+        assert selection.watches(component, path) is expected_push
+
+def action_expression(value):
+    return '$' + '{{ ' + value + ' }}'
+
+
+@pytest.mark.parametrize('filename', ['bind-runtime-release.yml', 'bind-plugin-release.yml', 'ha-dhcp-interface-release.yml'])
+def test_release_authority_is_limited_to_reviewed_jobs(filename):
+    workflow = (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
+    header = workflow.split('jobs:\n', 1)[0]
+    assert not re.search(r'\bsecrets\b', '\n'.join(re.findall(r'\$\{\{(.*?)\}\}', header, re.DOTALL)))
+    global_permissions = {'contents': 'read'} | ({} if filename.startswith('ha-') else {'pull-requests': 'read'})
+    assert_permissions(workflow, global_permissions)
+    concurrency = re.search(r'^concurrency:\n((?:  [^\n]*\n)*)', header, re.MULTILINE)[1]
+    assert dict(line.strip().split(': ', 1) for line in concurrency.splitlines()) == {
+        'group': 'package-release', 'cancel-in-progress': 'false', 'queue': 'max'}
+    assert_pinned_actions(workflow)
+    for name, job in workflow_jobs(workflow).items():
+        expected_secrets = {'RP_PKG_SIGNING_KEY'} if name == 'sign' else (
+            {'RP_DISTRIBUTION_APP_PRIVATE_KEY'} if name in ('publish', 'retention') else set())
+        expressions = '\n'.join(re.findall(r'\$\{\{(.*?)\}\}', job, re.DOTALL))
+        references = re.findall(r'\bsecrets\.([A-Za-z_]\w*)', expressions)
+        assert not re.search(r'^\s+secrets:', job, re.MULTILINE), name
+        assert len(re.findall(r'\bsecrets\b', expressions)) == len(references), name
+        assert set(references) == expected_secrets, name
+        if filename.startswith('ha-'):
+            permissions = {'contents': 'write'} if name == 'source-release' else None
+        elif name == 'publish-development':
+            permissions = {'contents': 'write', 'pull-requests': 'read'}
+        elif name == 'source-release':
+            permissions = {'contents': 'write'}
+        else:
+            permissions = {'contents': 'read'} if name in (
+                'producer', 'sign', 'verify', 'publish', 'verify-published', 'retention', 'verify-development') else None
+        assert_permissions(job, permissions, indent=4)
+        if 'uses: actions/checkout@' in job:
+            assert_checkout_credentials(job)
+        for step in workflow_steps(job):
+            if 'uses: actions/create-github-app-token@' in step:
+                fields = dict(re.findall(r'^          ([\w-]+): ([^\n]+)$', step, re.MULTILINE))
+                assert fields['owner'] == 'resolver-plugins'
+                assert fields['repositories'] == 'repository'
+                assert {key: value for key, value in fields.items() if key.startswith('permission-')} == {'permission-contents': 'write'}
+
+
+def condition_allows(job, context):
+    match = re.search(r'^    if: ([^\n]+)\n((?:      [^\n]*\n)*)', job, re.MULTILINE)
+    condition = ' '.join(line.strip() for line in match[2].splitlines()) if match[1] in ('>-', '|') else match[1]
+    for key, value in sorted(context.items(), key=lambda item: len(item[0]), reverse=True):
+        condition = re.sub(r'\b' + re.escape(key) + r'\b', repr(value), condition)
+    condition = re.sub(r'\btrue\b', 'True', condition).replace('&&', ' and ').replace('||', ' or ')
+    return eval(condition, {'__builtins__': {}, 'startsWith': str.startswith,
+                            'format': lambda pattern, *args: pattern.format(*args)})
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_privileged_event_guards_do_not_trust_selector_mode(component):
+    workflow_name = 'bind-runtime-release.yml' if component == 'bind_runtime' else 'bind-plugin-release.yml'
+    base = {'needs.select.outputs.mode': 'production', 'github.event_name': 'push',
+            'github.ref': 'refs/heads/master', 'inputs.mode': None,
+            'github.event.pull_request.merged': False, 'github.event.pull_request.base.ref': None,
+            'github.workflow_ref': f'example/plugins/.github/workflows/{workflow_name}@refs/heads/master',
+            'github.repository': 'example/plugins'}
+    merged = dict(base, **{'github.event_name': 'pull_request_target', 'github.ref': 'refs/heads/release/bind-rp/26.7',
+                          'github.event.pull_request.merged': True, 'github.event.pull_request.base.ref': 'release/bind-rp/26.7'})
+    scenarios = [
+        (base, True),
+        (dict(base, **{'github.ref': 'refs/heads/feature'}), False),
+        (dict(base, **{'needs.select.outputs.mode': 'development'}), False),
+        (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production'}), True),
+        (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'development'}), False),
+        (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production', 'github.ref': 'refs/heads/feature'}), False),
+        (merged, True),
+        (dict(merged, **{'github.event.pull_request.merged': False}), False),
+        (dict(merged, **{'github.event.pull_request.base.ref': 'master'}), False),
+        (dict(merged, **{'github.workflow_ref': f'example/plugins/.github/workflows/{workflow_name}@refs/heads/feature'}), False),
+        (dict(base, **{'github.event_name': 'pull_request'}), False),
+    ]
+    jobs = workflow_jobs(release_workflow(component))
+    privileged = ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else [])
+    for name in privileged:
+        for context, allowed in scenarios:
+            assert condition_allows(jobs[name], context) is allowed, (component, name, context)
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_privileged_jobs_bind_control_and_immutable_owner_artifacts(component):
+    jobs = workflow_jobs(release_workflow(component))
+    privileged = ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else [])
+    for name, job in jobs.items():
+        downloads = [step for step in workflow_steps(job) if 'uses: actions/download-artifact@' in step]
+        if downloads:
+            expected = {(action_expression('needs.profile.outputs.trusted_artifact_id'), 'artifacts/trusted')}
+            if name != 'producer':
+                owner = 'producer' if name in ('sign', 'verify-development', 'publish-development') else 'sign'
+                output = 'producer_artifact_id' if owner == 'producer' else 'repository_artifact_id'
+                directory = 'producer' if owner == 'producer' else 'repository'
+                if component == 'bind_plugin' and name == 'publish-development':
+                    expected.clear()
+                expected.add((action_expression(f'needs.{owner}.outputs.{output}'),
+                              f'artifacts/{action_expression("needs.select.outputs.series")}/{directory}'))
+            assert {(re.search(r'^          artifact-ids: ([^\n]+)$', step, re.MULTILINE)[1],
+                     re.search(r'^          path: ([^\n]+)$', step, re.MULTILINE)[1]) for step in downloads} == expected, name
+        if name not in privileged:
+            continue
+        steps = workflow_steps(job)
+        checkouts = [step for step in steps if 'uses: actions/checkout@' in step]
+        assert checkouts and all(re.search(r'^          ref: ([^\n]+)$', step, re.MULTILINE)[1] ==
+                                 action_expression('github.workflow_sha') for step in checkouts)
+        preflights = [(index, step) for index, step in enumerate(steps) if '--expected-control-commit' in step_run(step)]
+        assert len(preflights) == 1, name
+        index, preflight = preflights[0]
+        for field, accepted in [('if', ('true', 'success()')), ('continue-on-error', ('false',))]:
+            declaration = re.search(r'^\s+' + field + r': ([^\n]+)$', preflight, re.MULTILINE)
+            assert declaration is None or declaration[1] in accepted, (name, field)
+        script = step_run(preflight).replace('\\\n', '')
+        arguments = shlex.split(re.search(r'components\.py validate ([^\n]+)', script)[1])
+        required = {'--component': component, '--trusted-directory': 'artifacts/trusted',
+                    '--selection-sha256': '$RP_SELECTION_SHA256',
+                    '--expected-control-commit': '$RP_EXPECTED_CONTROL_COMMIT',
+                    '--profile-control-commit': '$RP_PROFILE_CONTROL_COMMIT'}
+        if name != 'sign':
+            required['--composition-sha256'] = '$RP_COMPOSITION_SHA256'
+            assert '--repository-root' in arguments
+        for flag, value in required.items():
+            assert arguments[arguments.index(flag) + 1] == value, (name, flag)
+        fields = dict(re.findall(r'^\s+(RP_[A-Z0-9_]+): ([^\n]+)$',
+                                 job.split('    steps:\n', 1)[0] + preflight, re.MULTILINE))
+        assert fields['RP_EXPECTED_CONTROL_COMMIT'] == action_expression('github.workflow_sha')
+        assert fields['RP_PROFILE_CONTROL_COMMIT'] == action_expression('needs.profile.outputs.control_commit')
+        assert fields['RP_SELECTION_SHA256'] == action_expression('needs.profile.outputs.selection_sha256')
+        if name != 'sign':
+            assert fields['RP_COMPOSITION_SHA256'] == action_expression('needs.sign.outputs.composition_sha256')
+        effects = [position for position, step in enumerate(steps)
+                   if 'secrets.' in step or 'release_channel.py publish-immutable' in step]
+        assert effects and index < min(effects), name
+    assert ('source-release' in jobs) is (component == 'bind_plugin')
+
+def needs_jobs(job):
+    value = re.search(r'^    needs: ([^\n]+)$', job, re.MULTILINE)[1]
+    return {name.strip() for name in value.strip('[]').split(',')}
+
+
+def vm_body(job):
+    steps = [step for step in workflow_steps(job) if 'uses: vmactions/freebsd-vm@' in step]
+    assert len(steps) == 1
+    match = re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', steps[0], re.MULTILINE)
+    return steps[0], textwrap.dedent(match[1])
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_native_qualification_is_mandatory_and_authentication_precedes_key_decode(component):
+    jobs = workflow_jobs(release_workflow(component))
+    for job, prerequisite in [('producer', 'test'), ('verify', 'sign'), ('publish', 'verify'),
+                              ('verify-published', 'publish'), ('retention', 'verify-published'),
+                              ('publish-development', 'verify-development')]:
+        assert prerequisite in needs_jobs(jobs[job]), (component, job)
+    if component == 'bind_plugin':
+        assert 'verify-published' in needs_jobs(jobs['source-release'])
+        assert 'source-release' in needs_jobs(jobs['retention'])
+    for name in ('producer', 'sign', 'verify', 'verify-published', 'verify-development'):
+        step, script = vm_body(jobs[name])
+        assert re.search(r'^          release: ([^\n]+)$', step, re.MULTILINE)[1] == action_expression('needs.profile.outputs.freebsd_release')
+        assert not re.search(r'^\s+continue-on-error: true$', jobs[name], re.MULTILINE)
+        if name in ('verify', 'verify-published', 'verify-development'):
+            arguments = shlex.split(re.search(r'verify-bind-release\.sh ([^\n]+)', script.replace('\\\n', ''))[1])
+            assert arguments[arguments.index('--component') + 1] == component
+            assert arguments[arguments.index('--mode') + 1] == ('public' if name == 'verify-published' else 'local')
+            assert '--repository-root' in arguments and '--trusted-directory' in arguments and '--series' in arguments
+            forwarded = re.search(r'^          envs: ([^\n]+)$', step, re.MULTILINE)[1].split()
+            assert 'RP_SELECTION_SHA256' in forwarded
+            if name != 'verify-development':
+                assert 'RP_COMPOSITION_SHA256' in forwarded
+    _, signer = vm_body(jobs['sign'])
+    arguments = shlex.split(re.search(r'components\.py authenticate ([^\n]+)', signer.replace('\\\n', ''))[1])
+    for flag, value in {'--component': component, '--selection-sha256': '$RP_SELECTION_SHA256',
+                        '--trusted-directory': 'artifacts/trusted', '--pkg-command': '/usr/local/sbin/pkg-static',
+                        '--directory': 'artifacts/$series/producer'}.items():
+        assert arguments[arguments.index(flag) + 1] == value, flag
+    assert signer.index('components.py authenticate') < signer.index('base64 -d')
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+def test_pages_readiness_precedes_distribution_mutation(component):
+    steps = workflow_steps(job_text(release_workflow(component), 'publish'))
+    health = [(index, step_run(step)) for index, step in enumerate(steps) if 'pages-health' in step_run(step)]
+    assert len(health) == 1
+    index, script = health[0]
+    assert 'https://resolver-plugins.github.io/repository/pages-health' in script
+    assert 'resolver-plugins-pages-ok' in script
+    mutation = next(position for position, step in enumerate(steps) if 'create-github-app-token@' in step)
+    assert index < mutation
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+@pytest.mark.parametrize('before,after,existing', [('open', 'open', False), ('closed', 'closed', True), ('open', 'closed', False)])
+def test_preview_publication_preserves_other_tags_and_removes_closed_pr_output(tmp_path, component, before, after, existing):
+    """Exercise the actual publisher shell; GH persistence and sealed intake are independent boundaries."""
+    tag = f'pr-51-26.7-{component.replace("_", "-")}'
+    peer = 'bind-plugin' if component == 'bind_runtime' else 'bind-runtime'
+    protected = {f'pr-51-26.7-{peer}', 'pr-52-26.7-bind-plugin', 'pkg-26.7-bind-runtime', 'os-bind-rp-26.7-source'}
+    initial = protected | ({tag} if existing else set())
+    state = tmp_path / 'remote.json'
+    state.write_text(json.dumps(dict(states=[before, after], calls=0, releases=sorted(initial),
+                                    tags=sorted(initial), assets={name: {'original': name} for name in initial})))
+    commands = tmp_path / 'commands'
+    commands.mkdir()
+    gh = commands / 'gh'
+    gh.write_text(textwrap.dedent("""\
+        #!/usr/bin/env python3
+        import json, os, sys
+        from pathlib import Path
+        path=Path(os.environ['Q_REMOTE_STORE'])
+        state=json.loads(path.read_text())
+        args=sys.argv[1:]
+        status=0
+        if args[:1]==['api'] and args[-1:]==['.state']:
+            index=min(state['calls'],len(state['states'])-1)
+            print(state['states'][index])
+            state['calls']+=1
+        elif args[:2]==['release','view']:
+            status=0 if args[2] in state['releases'] else 1
+        elif args[:2]==['release','create']:
+            tag=args[2]
+            if tag in state['releases']:
+                status=1
+            else:
+                state['releases'].append(tag)
+                state['tags'].append(tag)
+                state['assets'][tag]={}
+        elif args[:2]==['release','upload']:
+            files=[]
+            for value in args[3:]:
+                if value.startswith('-'):
+                    break
+                files.append(Path(value))
+            state['assets'][args[2]]={file.name:file.read_bytes().hex() for file in files}
+        elif args[:2]==['release','delete']:
+            tag=args[2]
+            if tag in state['releases']:
+                state['releases'].remove(tag)
+                state['assets'].pop(tag)
+        elif args[:3]==['api','--method','DELETE']:
+            tag=args[3].split('/tags/',1)[1]
+            if tag in state['tags']:
+                state['tags'].remove(tag)
+        else:
+            raise SystemExit('unexpected local GH command')
+        path.write_text(json.dumps(state))
+        raise SystemExit(status)
+        """))
+    gh.chmod(0o755)
+    python = commands / 'python3'
+    python.write_text('#!/bin/sh\ncase "$*" in\n'
+        '  *"components.py validate"*) exit 0;;\n'
+        '  *) exec "$Q_REAL_PYTHON" "$@";;\nesac\n')
+    python.chmod(0o755)
+    producer = tmp_path / 'artifacts/26.7/producer'
+    producer.mkdir(parents=True)
+    names = ('bind-tools-9.20.26_2.pkg', 'bind920-9.20.26_2.pkg', 'bind920-provenance.json') if component == 'bind_runtime' else ('os-bind-rp-devel-26.7_1.pkg', 'build-metadata.txt')
+    for name in names:
+        (producer / name).write_bytes(name.encode())
+    expected_payload = {name: (producer / name).read_bytes().hex() for name in names}
+    job = job_text(release_workflow(component), 'publish-development')
+    script = next(step_run(step) for step in workflow_steps(job) if 'gh release upload' in step_run(step))
+    script = script.replace('.github/ci/shared/release_channel.py', str(REPOSITORY_ROOT / '.github/ci/shared/release_channel.py'))
+    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script], cwd=tmp_path, text=True, capture_output=True,
+        env=dict(os.environ, PATH=str(commands) + os.pathsep + os.environ['PATH'], Q_REAL_PYTHON=sys.executable,
+                 Q_REMOTE_STORE=str(state), TAG=tag, SERIES='26.7', PULL_NUMBER='51',
+                 INPUT_SERIES='26.7', INPUT_PULL_NUMBER='51', GITHUB_REPOSITORY='example/plugins',
+                 RP_SELECTION_SHA256='a' * 64))
+    assert result.returncode == 0, result.stderr
+    remote = json.loads(state.read_text())
+    expected_tags = protected | ({tag} if before == after == 'open' else set())
+    assert set(remote['releases']) == expected_tags
+    assert set(remote['tags']) == expected_tags
+    expected_assets = {name: {'original': name} for name in protected}
+    if tag in expected_tags:
+        expected_assets[tag] = expected_payload
+    assert remote['assets'] == expected_assets
