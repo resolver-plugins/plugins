@@ -1,0 +1,20 @@
+# Native dependency records do not enforce an installed core's minimum version.
+set -eu
+
+bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
+bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p')
+[ -n "${bind_package_minimum_core}" ] || {
+    printf '%s\n' 'os-bind-rp minimum OPNsense version is missing' >&2
+    exit 1
+}
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v')
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}")
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    *)
+        printf 'os-bind-rp requires OPNsense %s or later (installed %s)\n' \
+            "${bind_package_minimum_core}" "${bind_package_core}" >&2
+        exit 1
+        ;;
+esac
