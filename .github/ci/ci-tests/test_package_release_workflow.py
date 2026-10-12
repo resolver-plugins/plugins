@@ -205,9 +205,10 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
     scenarios = [
         (push, {'before': 'd' * 40}, ['.resolver-plugins/bind920.json'], None, True, False, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
         (push, {'before': 'd' * 40}, ['dns/bind/Makefile'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
-        (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, True, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
+        (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
         (push, {'before': 'd' * 40}, ['dns/bind/tests/test_watcher.py'], None, False, False, 'production', None, None, None),
-        (merge, merged, ['.resolver-plugins/upstream.json'], None, True, True, 'production', '26.7', 'c' * 40, 'b' * 40),
+        (merge, merged, ['.resolver-plugins/upstream.json'], None, False, True, 'production', '26.7', 'c' * 40, 'b' * 40),
+        (merge, merged, ['.resolver-plugins/bind920.json'], None, False, False, 'production', None, None, None),
         (merge, dict(merged, pull_request=dict(merged['pull_request'], merged=False)), [], None, False, False, 'production', None, None, None),
         (dispatch, {'inputs': dict(mode='production', series='26.7')}, [], None, True, True, 'production', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
         (dispatch, {'inputs': dict(mode='development', series='26.7', pull_number='51')}, [], 'master', True, True, 'development', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
@@ -228,18 +229,17 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
                                   for key, value in expected.items()}
 
 
-@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
-def test_closed_pr_collection_includes_every_page_and_renamed_inputs(tmp_path, component):
+def test_closed_pr_collection_includes_every_page_and_renamed_inputs(tmp_path):
     context = dict(name='pull_request_target', ref='refs/heads/master', sha='a' * 40, workflow_sha='b' * 40)
     document = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'),
                                                merge_commit_sha='c' * 40))
     pages = [[dict(filename='.resolver-plugins/bind920.json')],
              [dict(filename='docs/renamed-plugin.py', previous_filename='dns/bind/src/etc/rc.d/named'),
               dict(filename='docs/building.md')]]
-    completed, selected, _ = select_cli(tmp_path, component, context, document, files=pages)
+    completed, selected, _ = select_cli(tmp_path, 'bind_plugin', context, document, files=pages)
     assert completed.returncode == 0, completed.stderr
     assert selected == dict(mode='production', series='26.7',
-                            source_ref='c' * 40 if component == 'bind_plugin' else None,
+                            source_ref='c' * 40,
                             profile_ref='c' * 40, control_ref='b' * 40,
                             prerelease_tag=None, pull_number=None, release=True)
 
@@ -255,21 +255,21 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
 
 
 @pytest.mark.parametrize('path,push,merge', [
-    ('.resolver-plugins/bind920.json', (True, False), (True, False)),
-    ('.github/ci/bind/runtime/build-bind920.sh', (True, False), (False, False)),
+    ('.resolver-plugins/bind920.json', (True, False), (False, False)),
+    ('.github/ci/bind/runtime/build-bind920.sh', (False, False), (False, False)),
     ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, True), (False, False)),
     ('dns/bind/Makefile', (False, True), (False, True)),
     ('dns/bind/src/etc/rc.d/named', (False, True), (False, True)),
     ('Mk/plugins.mk', (False, True), (False, True)),
     ('Scripts/version.sh', (False, True), (False, True)),
     ('Templates/plugin.in', (False, True), (False, True)),
-    ('.github/ci/bind/shared/components.py', (True, True), (False, False)),
-    ('.github/ci/shared/new-helper.py', (True, True), (False, False)),
-    ('.resolver-plugins/upstream.json', (True, True), (True, True)),
-    ('.resolver-plugins/bind-compatibility.json', (True, True), (True, True)),
-    ('docs/package-repository/resolver-plugins.pub', (True, True), (False, False)),
-    ('scripts/install-os-bind-rp.sh', (True, True), (False, False)),
-    ('.github/workflows/bind-runtime-release.yml', (True, False), (False, False)),
+    ('.github/ci/bind/shared/components.py', (False, True), (False, False)),
+    ('.github/ci/shared/new-helper.py', (False, True), (False, False)),
+    ('.resolver-plugins/upstream.json', (False, True), (False, True)),
+    ('.resolver-plugins/bind-compatibility.json', (False, True), (False, True)),
+    ('docs/package-repository/resolver-plugins.pub', (False, True), (False, False)),
+    ('scripts/install-os-bind-rp.sh', (False, True), (False, False)),
+    ('.github/workflows/bind-runtime-release.yml', (False, False), (False, False)),
     ('.github/workflows/bind-plugin-release.yml', (False, True), (False, False)),
     ('dns/bind/tests/test_watcher.py', (False, False), (False, False)),
     ('.github/ci/ci-tests/test_package_release_workflow.py', (False, False), (False, False)),
@@ -362,7 +362,7 @@ def test_privileged_event_guards_do_not_trust_selector_mode(component):
         (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production'}), True),
         (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'development'}), False),
         (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production', 'github.ref': 'refs/heads/feature'}), False),
-        (merged, True),
+        (merged, component == 'bind_plugin'),
         (dict(merged, **{'github.event.pull_request.merged': False}), False),
         (dict(merged, **{'github.event.pull_request.base.ref': 'master'}), False),
         (dict(merged, **{'github.workflow_ref': f'example/plugins/.github/workflows/{workflow_name}@refs/heads/feature'}), False),

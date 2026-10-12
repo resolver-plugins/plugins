@@ -18,13 +18,12 @@ SHARED_FILES = {".resolver-plugins/upstream.json", ".resolver-plugins/bind-compa
 
 
 def watches(component, path):
+    if component == "bind_runtime":
+        return path == ".resolver-plugins/bind920.json"
     if path.startswith(("dns/bind/tests/", ".github/ci/ci-tests/")):
         return False
     if path in SHARED_FILES or path.startswith(SHARED_PATHS):
         return True
-    if component == "bind_runtime":
-        return path.startswith(".github/ci/bind/runtime/") or path in {
-            ".resolver-plugins/bind920.json", ".github/workflows/bind-runtime-release.yml"}
     return path.startswith(("dns/bind/", "Mk/", "Scripts/", "Templates/", ".github/ci/bind/plugin/")) or path == ".github/workflows/bind-plugin-release.yml"
 
 
@@ -59,7 +58,7 @@ def select_event(component, event, refs, changed_paths):
     elif name == "pull_request_target":
         if type(event["merged"]) is not bool:
             raise ValueError("invalid release-source merge state")
-        if not event["merged"]:
+        if not event["merged"] or component == "bind_runtime":
             return selected
         match = re.fullmatch(r"release/bind-rp/([0-9]+\.[0-9]+)", event["base_ref"] or "")
         if match is None or match[1] not in series_refs:

@@ -32,6 +32,8 @@ def trigger_paths(workflow, event):
     header = workflow.split('\njobs:', 1)[0]
     block = re.search(r'^  ' + re.escape(event) + r':\n(.*?)(?=^  [\w-]+:|\Z)',
                       header, re.MULTILINE | re.DOTALL)
+    if block is None:
+        return []
     paths = re.search(r'^    paths:\n((?:      [^\n]*\n)*)', block[1], re.MULTILINE)
     return re.findall(r"^      - '([^']+)'$", paths[1], re.MULTILINE) if paths else []
 

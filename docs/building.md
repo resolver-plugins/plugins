@@ -43,21 +43,24 @@ replaces the selected source commit's entire `dns/bind`, `Mk`, `Scripts` and
 legacy release branches, which intentionally do not carry control-plane code,
 and prevents a leftover development marker from changing the production name.
 
-Package-affecting pushes to `master` automatically run production for the
-newest numeric `release/bind-rp/<series>` branch. Release helpers are grouped in
-`.github/ci/bind/`, `.github/ci/ha_dhcp/`, and `.github/ci/shared/`;
-regression tests remain in `.github/ci/ci-tests/`. Runtime-owned helpers and
-`bind920.json` trigger the runtime workflow; plugin source, its helpers and
-the `Mk`, `Scripts` and `Templates` framework trigger the plugin workflow.
-Shared BIND policy, catalogue and package-manager helpers trigger both.
-HA-only source, helpers and workflows, test-only edits and documentation do not
-trigger BIND publication. PR tests retain broader validation filters.
+Automatic runtime production starts only when the approved
+`.resolver-plugins/bind920.json` pin changes on `master`. It selects the newest
+numeric `release/bind-rp/<series>` branch. Plugin source, its helpers and the
+`Mk`, `Scripts` and `Templates` framework trigger only the plugin workflow.
+Shared BIND policy, catalogue, package-manager, upstream profile, installer and
+key changes can also trigger the plugin workflow; they do not start runtime
+production. Release helpers are grouped in `.github/ci/bind/`,
+`.github/ci/ha_dhcp/`, and `.github/ci/shared/`; regression tests remain in
+`.github/ci/ci-tests/`. PR tests retain broader validation filters, including
+runtime helpers and workflow changes. HA-only changes, test-only edits and
+documentation do not trigger BIND publication.
 
-Merging a package-affecting pull request into a release-source branch automatically
-runs production for that series, pinned to the merge commit. The workflow and
-publication helpers still come from the trusted `master` control plane. Closing a pull request
-without merging does not build a release. Manual dispatch remains available
-for an explicit series or development build.
+Merging a plugin-affecting pull request into a release-source branch automatically
+runs plugin production for that series, pinned to the merge commit. It does not
+start the runtime workflow. The workflow and publication helpers still come from
+the trusted `master` control plane. Closing a pull request without merging does
+not build a release. Manual dispatch remains available for an explicit series
+or development build; use it to publish the approved runtime for another series.
 
 For a local unsigned build, start in a disposable clone of `master` and fetch
 the selected source once. Preserve its upstream profile separately from the

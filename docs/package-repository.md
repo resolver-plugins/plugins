@@ -297,18 +297,22 @@ its isolated pair before a plugin exists; it cannot expose an incomplete
 combined feed. Once a complete feed exists, every writer retains all registered
 peers or fails.
 
-Package-affecting pushes to `master` automatically publish the newest numeric
-`release/bind-rp/<series>` branch after review and merge. The trigger covers
-each component's own helpers and workflow. Plugin source and its `Mk`, `Scripts`
-and `Templates` framework trigger the plugin; `bind920.json` triggers the
-runtime. Shared compatibility policy, BIND/shared helpers, upstream profile,
-installer and committed key affect both. HA-only helpers, tests, documentation
-and discovery tooling do not trigger BIND publication. `workflow_dispatch` remains
-available for development builds and explicit production rebuilds or series selection; a production
+Automatic runtime production starts only when the approved `bind920.json` pin
+changes on `master`, targeting the newest numeric `release/bind-rp/<series>`
+branch. Plugin source, its helpers and workflow, and the `Mk`, `Scripts` and
+`Templates` framework trigger only the plugin workflow. Shared compatibility
+policy, BIND/shared helpers, upstream profile, installer and committed key can
+also trigger the plugin, without starting runtime production. Relevant merges
+into a release-source branch start only the plugin workflow for that series.
+Runtime helper and workflow changes run PR tests without starting a runtime
+release. HA-only helpers, tests, documentation and discovery tooling do not
+trigger BIND publication. `workflow_dispatch` remains available for development
+builds and explicit production retries or series selection; use the runtime
+workflow directly to publish the approved pair for another series. A production
 dispatch from any ref other than `master` is rejected. Release branches supply
-immutable build inputs only and never run publication helpers. Publication
-runs share one global lock so automatic and manual promotions cannot replace
-or restore the same current channel concurrently.
+immutable build inputs only and never run publication helpers. Publication runs
+share one global lock so automatic and manual promotions cannot replace or
+restore the same current channel concurrently.
 
 The `Propose bind920 candidate` workflow may open PRs that update only the
 pinned BIND profile. Those PRs provide review evidence and CI status and do not

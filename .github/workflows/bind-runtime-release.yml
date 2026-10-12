@@ -4,22 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - '.github/ci/bind/runtime/**'
-      - '.github/ci/bind/shared/**'
-      - '.github/ci/shared/**'
-      - '.github/workflows/bind-runtime-release.yml'
       - '.resolver-plugins/bind920.json'
-      - '.resolver-plugins/bind-compatibility.json'
-      - '.resolver-plugins/upstream.json'
-      - 'docs/package-repository/resolver-plugins.pub'
-      - 'scripts/install-os-bind-rp.sh'
-  pull_request_target:
-    types: [closed]
-    branches: ['release/bind-rp/**']
-    paths:
-      - '.resolver-plugins/upstream.json'
-      - '.resolver-plugins/bind920.json'
-      - '.resolver-plugins/bind-compatibility.json'
   workflow_dispatch:
     inputs:
       mode:
@@ -47,7 +32,6 @@ concurrency:
 
 jobs:
   select:
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     outputs:
       mode: ${{ steps.select.outputs.mode }}
@@ -250,10 +234,7 @@ jobs:
     if: >-
       needs.select.outputs.mode == 'production' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
-       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
-        startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
-        github.workflow_ref == format('{0}/.github/workflows/bind-runtime-release.yml@refs/heads/master', github.repository)))
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, producer]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -407,10 +388,7 @@ jobs:
     if: >-
       needs.select.outputs.mode == 'production' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
-       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
-        startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
-        github.workflow_ref == format('{0}/.github/workflows/bind-runtime-release.yml@refs/heads/master', github.repository)))
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, sign, verify]
     runs-on: ubuntu-24.04
     permissions:
@@ -546,10 +524,7 @@ jobs:
     if: >-
       needs.select.outputs.mode == 'production' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
-       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
-        startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
-        github.workflow_ref == format('{0}/.github/workflows/bind-runtime-release.yml@refs/heads/master', github.repository)))
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, sign, verify-published]
     runs-on: ubuntu-24.04
     permissions:

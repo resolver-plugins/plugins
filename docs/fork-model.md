@@ -51,9 +51,11 @@ independently authorize publication or a change to the installation contract.
 The runtime and plugin have independent producers, compatibility fingerprints
 and signed component histories. Runtime changes do not rebuild an unchanged
 plugin; plugin changes consume an already published approved runtime and do not
-build or dispatch it. Shared policy changes may require both producers. For a
-new series or runtime pin, publish the runtime first and retry the plugin if its
-required component is not yet available.
+build or dispatch it. Automatic runtime releases require an approved pin change
+on `master`; helper, policy and plugin changes do not start that pipeline.
+For a new series, dispatch runtime publication directly. For a new series or
+runtime pin, publish the runtime first and retry the plugin if its required
+component is not yet available.
 
 Composition preserves original component archives, build records and creator
 audit references, including the plugin's historical build-time runtime. Current

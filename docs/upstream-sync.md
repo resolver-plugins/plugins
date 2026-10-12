@@ -50,20 +50,23 @@ metadata profile first, then reproduce the build using [Building](building.md).
 
 ## Runtime and plugin publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) owns the
-reviewed BIND pin and runtime helper changes. The
+The [runtime workflow](../.github/workflows/bind-runtime-release.yml) starts
+automatically only for an approved BIND pin change on `master`. The
 [plugin workflow](../.github/workflows/bind-plugin-release.yml) owns the plugin
 and its `Mk`, `Scripts` and `Templates` build framework. Shared compatibility,
-catalogue and package-manager changes may select both. Documentation, tests,
-HA-only changes and upstream discovery changes do not select BIND production.
+catalogue, package-manager and upstream-profile changes can select the plugin;
+they do not select runtime production. Runtime helper and workflow changes run
+PR tests without starting a runtime release. Documentation, tests, HA-only
+changes and upstream discovery changes do not select BIND production.
 
 A relevant `master` push selects the newest numeric registered release series.
-A merged package-affecting PR into an exact `release/bind-rp/<series>` selects
-that series and its merged immutable source/profile commit; unmerged closure
-selects neither producer. Workflow code and privileged helpers remain pinned to
-the trusted default-branch workflow commit. A manual production dispatch requires
-`master` and an explicit registered series. Development dispatch requires a PR
-and writes only its unsigned component preview.
+A merged plugin-affecting PR into an exact `release/bind-rp/<series>` selects
+only plugin production for that series and its merged immutable source/profile
+commit; unmerged closure selects neither producer. Workflow code and privileged
+helpers remain pinned to the trusted default-branch workflow commit. A manual
+production dispatch requires `master` and an explicit registered series; use the
+runtime workflow directly to publish the approved runtime for another series.
+Development dispatch requires a PR and writes only its unsigned component preview.
 
 For a new series or approved runtime pin, run runtime production first, then
 plugin production. The plugin freezes an already published runtime receipt and
