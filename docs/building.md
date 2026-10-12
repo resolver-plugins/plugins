@@ -3,8 +3,9 @@
 ## Build inputs
 
 Build a release branch in the FreeBSD release declared by that branch's
-`.resolver-plugins/upstream.json`. The profile contains exactly these immutable
-inputs:
+`.resolver-plugins/upstream.json`. Release profiles live only on release branches;
+builds using the `master` control plane extract the selected release commit's
+profile before validation. The profile contains exactly these immutable inputs:
 
 - `series` and `upstream_branch`: the OPNsense stable series being built.
 - `upstream_commit`: the OPNsense plugins source commit.
@@ -47,7 +48,7 @@ Automatic runtime production starts only when the approved
 `.resolver-plugins/bind920.json` pin changes on `master`. It selects the newest
 numeric `release/bind-rp/<series>` branch. Plugin source, its helpers and the
 `Mk`, `Scripts` and `Templates` framework trigger only the plugin workflow.
-Shared BIND policy, catalogue, package-manager, upstream profile, installer and
+Shared BIND policy, catalogue, package-manager, installer and
 key changes can also trigger the plugin workflow; they do not start runtime
 production. Release helpers are grouped in `.github/ci/bind/`,
 `.github/ci/ha_dhcp/`, and `.github/ci/shared/`; regression tests remain in
@@ -330,11 +331,12 @@ suite when CI, workflow, package, framework, or installer inputs change. It uses
 read-only repository permissions and local Git and command fixtures. Package
 build and publication triggers are unchanged.
 
-Check that the metadata is valid before running a full VM build:
+Use the profile extracted in the local build steps above to check metadata
+before running a full VM build:
 
 ```sh
 python3 .github/ci/shared/metadata_profile.py \
-  .resolver-plugins/upstream.json "$series" freebsd_release
+  artifacts/source-upstream.json "$series" freebsd_release
 sh -n .github/ci/bind/runtime/build-bind920.sh .github/ci/bind/plugin/build-os-bind-rp.sh \
   .github/ci/bind/shared/verify-bind-release.sh .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
   .github/ci/shared/setup-opnsense-repository.sh

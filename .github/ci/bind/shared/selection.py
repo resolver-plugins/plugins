@@ -13,7 +13,7 @@ EVENT_FIELDS = {"name", "ref", "sha", "workflow_sha", "before", "merged", "base_
 OUTPUT_FIELDS = ("mode", "series", "source_ref", "profile_ref", "control_ref",
                  "prerelease_tag", "pull_number", "release")
 SHARED_PATHS = (".github/ci/bind/shared/", ".github/ci/shared/")
-SHARED_FILES = {".resolver-plugins/upstream.json", ".resolver-plugins/bind-compatibility.json",
+SHARED_FILES = {".resolver-plugins/bind-compatibility.json",
                 "docs/package-repository/resolver-plugins.pub", "scripts/install-os-bind-rp.sh"}
 
 
@@ -63,7 +63,8 @@ def select_event(component, event, refs, changed_paths):
         match = re.fullmatch(r"release/bind-rp/([0-9]+\.[0-9]+)", event["base_ref"] or "")
         if match is None or match[1] not in series_refs:
             raise ValueError("unsupported release-source merge base")
-        if not any(watches(component, path) for path in changed_paths):
+        if not any(path == ".resolver-plugins/upstream.json" or watches(component, path)
+                   for path in changed_paths):
             return selected
         series = match[1]
         profile, control = _commit(event["merge_commit_sha"]), _commit(event["workflow_sha"])

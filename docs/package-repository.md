@@ -301,7 +301,7 @@ Automatic runtime production starts only when the approved `bind920.json` pin
 changes on `master`, targeting the newest numeric `release/bind-rp/<series>`
 branch. Plugin source, its helpers and workflow, and the `Mk`, `Scripts` and
 `Templates` framework trigger only the plugin workflow. Shared compatibility
-policy, BIND/shared helpers, upstream profile, installer and committed key can
+policy, BIND/shared helpers, installer and committed key can
 also trigger the plugin, without starting runtime production. Relevant merges
 into a release-source branch start only the plugin workflow for that series.
 Runtime helper and workflow changes run PR tests without starting a runtime

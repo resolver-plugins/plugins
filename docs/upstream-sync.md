@@ -54,7 +54,7 @@ The [runtime workflow](../.github/workflows/bind-runtime-release.yml) starts
 automatically only for an approved BIND pin change on `master`. The
 [plugin workflow](../.github/workflows/bind-plugin-release.yml) owns the plugin
 and its `Mk`, `Scripts` and `Templates` build framework. Shared compatibility,
-catalogue, package-manager and upstream-profile changes can select the plugin;
+catalogue and package-manager changes can select the plugin;
 they do not select runtime production. Runtime helper and workflow changes run
 PR tests without starting a runtime release. Documentation, tests, HA-only
 changes and upstream discovery changes do not select BIND production.

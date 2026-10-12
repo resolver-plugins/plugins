@@ -9,7 +9,6 @@ on:
       - '.github/ci/shared/**'
       - '.github/workflows/bind-plugin-release.yml'
       - '.resolver-plugins/bind-compatibility.json'
-      - '.resolver-plugins/upstream.json'
       - 'docs/package-repository/resolver-plugins.pub'
       - 'dns/bind/**'
       - '!dns/bind/tests/**'
