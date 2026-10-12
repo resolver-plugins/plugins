@@ -94,6 +94,9 @@ published component receipts in a separate trusted directory. Consumers receive
 that artifact's immutable ID and the external SHA-256 of `selection.json`.
 Every wrapper requires `RP_TRUSTED_DIRECTORY` and `RP_SELECTION_SHA256` before
 package-manager or build operations; the old environment defaults are insufficient.
+Native VM jobs also trust their exact checkout directory for Git access by the
+VM's root user, so Git can verify the selected source objects despite the host
+runner's ownership of the checkout.
 
 Every selected runtime run builds a fresh pair, verifying the sealed exact Ports
 recipe and building `bind-tools` followed by `bind920`. It never searches old

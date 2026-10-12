@@ -181,6 +181,7 @@ jobs:
           run: |
             set -eu
             export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
             output="artifacts/$series/producer"
             python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$series" \
@@ -260,6 +261,7 @@ jobs:
           run: |
             set -eu
             export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
             python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$series" \
               --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
@@ -337,6 +339,7 @@ jobs:
           run: |
             set -eu
             export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
             .github/ci/bind/shared/verify-bind-release.sh --component bind_runtime --mode local \
               --repository-root 'artifacts/${{ needs.select.outputs.series }}/repository' \
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
@@ -473,6 +476,7 @@ jobs:
           run: |
             set -eu
             export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
             .github/ci/bind/shared/verify-bind-release.sh --component bind_runtime --mode public \
               --repository-root 'artifacts/${{ needs.select.outputs.series }}/repository' \
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
@@ -602,6 +606,7 @@ jobs:
           run: |
             set -eu
             export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
             python3 -I .github/ci/bind/shared/components.py stage --component bind_runtime --series "$series" \
               --directory "artifacts/$series/producer" --trusted-directory artifacts/trusted \
