@@ -4,7 +4,7 @@ from pathlib import Path
 
 PUBLIC_KEY = "/usr/local/etc/pkg/keys/resolver-plugins.pub"
 MAKEFILE = Path(__file__).resolve().parents[1] / "Makefile"
-PRIORITY_REVISIONS = {"26.1": 6, "26.7": 8}
+PRIORITY_REVISIONS = {"26.1": 7, "26.7": 9}
 
 
 def source_version():
