@@ -96,7 +96,8 @@ jobs:
             git checkout refs/remotes/origin/control-plane -- \
               .github/ci \
               .github/workflows/bind-tests.yml \
-              .github/workflows/bind920-candidate.yml
+              .github/workflows/bind920-candidate.yml \
+              docs/package-repository/resolver-plugins.pub
             git show refs/remotes/origin/control-plane:dns/bind/Makefile > "$RUNNER_TEMP/runtime-approval.mk"
           fi
           test -d .github/ci
