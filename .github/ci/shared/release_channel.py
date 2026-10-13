@@ -267,8 +267,9 @@ def validate_channel_package_manifests(
     bind_tools_version, _ = identities["bind-tools"]
     if ("bind-tools", "dns/bind-tools", bind_tools_version) not in dependencies["bind920"]:
         raise ValueError("bind920 does not depend on the channel bind-tools package")
-    if any(dependency[0] == "bind920" for dependency in dependencies["os-bind-rp"]):
-        raise ValueError("plugin package records an exact BIND dependency")
+    plugin_runtime = {edge for edge in dependencies["os-bind-rp"] if edge[0] == "bind920"}
+    if plugin_runtime != {("bind920", "dns/bind920", identities["bind920"][0])}:
+        raise ValueError("plugin package BIND dependency differs from channel runtime")
     if read_package_manifest(packages[2], pkg_command).get("dep_formula") != "bind920 >= 9.20.26":
         raise ValueError("plugin package does not declare the required BIND dependency formula")
     if common_abi is None:
