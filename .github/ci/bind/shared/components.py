@@ -41,36 +41,59 @@ RUNTIME_SIDECARS = {"upstream.json", "creator-target.json", "bind920-profile.jso
 PLUGIN_SIDECARS = {"upstream.json", "creator-target.json", "plugin-build-inputs.json",
                    "build-metadata.txt", "plugin-package.mk"}
 PLUGIN_SHARED_FILE = "/usr/local/etc/inc/plugins.inc.d/bind.inc"
-PLUGIN_PRE_INSTALL = r'''# Native dependency records do not enforce an installed core's minimum version.
+PLUGIN_PRE_INSTALL = r'''# OPNsense ignores ordinary script failures; exit 3 stops the pkg operation.
 set -eu
+
+bind_package_refuse() {
+    printf '%s\n' "$*" >&2 || :
+    exit 3
+}
 
 bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
 bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
-    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p')
-[ -n "${bind_package_minimum_core}" ] || {
-    printf '%s\n' 'os-bind-rp minimum OPNsense version is missing' >&2
-    exit 1
-}
-bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v')
-bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}")
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p') ||
+    bind_package_refuse 'os-bind-rp cannot read its minimum OPNsense version'
+[ -n "${bind_package_minimum_core}" ] ||
+    bind_package_refuse 'os-bind-rp minimum OPNsense version is missing'
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed OPNsense version'
+[ -n "${bind_package_core}" ] || bind_package_refuse 'os-bind-rp requires installed OPNsense'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed OPNsense version'
 case "${bind_package_comparison}" in
     '='|'>') ;;
-    *)
-        printf 'os-bind-rp requires OPNsense %s or later (installed %s)\n' \
-            "${bind_package_minimum_core}" "${bind_package_core}" >&2
-        exit 1
+    '<')
+        bind_package_refuse "os-bind-rp requires OPNsense ${bind_package_minimum_core} or later (installed ${bind_package_core})"
         ;;
+    *) bind_package_refuse 'os-bind-rp OPNsense comparison returned an invalid result' ;;
 esac
 
-# A native archive conflict list is an installed-package database relationship.
-# Replacement uses shared-file resolution; this read-only check fences name drift.
-bind_package_installed=$("${bind_package_pkg}" query '%n')
+bind_package_runtime_formula='%%PLUGIN_DEPEND_FORMULA%%'
+bind_package_minimum_runtime=${bind_package_runtime_formula#'bind920 >= '}
+if [ -z "${bind_package_minimum_runtime}" ] || [ "${bind_package_minimum_runtime}" = "${bind_package_runtime_formula}" ]; then
+    bind_package_refuse 'os-bind-rp minimum BIND version is missing'
+fi
+bind_package_runtime=$("${bind_package_pkg}" query -e '%n = bind920' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed bind920 version'
+[ -n "${bind_package_runtime}" ] || bind_package_refuse 'os-bind-rp requires installed bind920'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_runtime}" "${bind_package_minimum_runtime}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed bind920 version'
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    '<')
+        bind_package_refuse "os-bind-rp requires bind920 ${bind_package_minimum_runtime} or later (installed ${bind_package_runtime})"
+        ;;
+    *) bind_package_refuse 'os-bind-rp bind920 comparison returned an invalid result' ;;
+esac
+
+# Shared-file resolution replaces the official plugin; do not admit name drift.
+bind_package_installed=$("${bind_package_pkg}" query -a '%n') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed package inventory'
+[ -n "${bind_package_installed}" ] || bind_package_refuse 'os-bind-rp installed package inventory is empty'
 for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
     for bind_package_name in ${bind_package_installed}; do
         if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
-            printf 'os-bind-rp cannot coexist with installed %s\n' \
-                "${bind_package_conflict}" >&2
-            exit 1
+            bind_package_refuse "os-bind-rp cannot coexist with installed ${bind_package_conflict}"
         fi
     done
 done
@@ -91,11 +114,11 @@ def plugin_requirement_from_makefile(text):
     core = re.fullmatch(r'opnsense:\s*\{\s*version:\s*"([0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?)",\s*origin:\s*"opnsense/opnsense"\s*\}',
                         fields["PLUGIN_MANIFEST_DEPENDS"])
     if (fields["PLUGIN_NAME"] != "bind-rp" or fields["PLUGIN_DEPENDS"].split() != ["bind920"]
-            or fields["PLUGIN_DEPEND_FORMULA_DEPENDS"].split() != ["bind920"]
+            or fields["PLUGIN_DEPEND_FORMULA_DEPENDS"]
             or fields["PLUGIN_CONFLICTS"].split() != ["bind"] or formula is None or core is None):
         raise ValueError("unsupported plugin dependency, identity, conflict or core contract")
     return dict(name="os-" + fields["PLUGIN_NAME"], dependency="bind920", minimum_version=formula[1],
-                dependency_formula=f"bind920 >= {formula[1]}", formula_dependencies=["bind920"],
+                dependency_formula=f"bind920 >= {formula[1]}", formula_dependencies=[],
                 conflicts=["os-bind"], minimum_opnsense_version=core[1],
                 manifest_dependencies=fields["PLUGIN_MANIFEST_DEPENDS"])
 
@@ -110,6 +133,7 @@ def _plugin_conflicts(requirement, development=False):
 def expected_plugin_pre_install(requirement, *, development=False):
     """Render the trusted guard using only the original source's literal policy."""
     return (PLUGIN_PRE_INSTALL.replace("%%PLUGIN_MANIFEST_DEPENDS%%", requirement["manifest_dependencies"])
+            .replace("%%PLUGIN_DEPEND_FORMULA%%", requirement["dependency_formula"])
             .replace("%%PLUGIN_CONFLICTS%%", " ".join(_plugin_conflicts(requirement, development))))
 
 
@@ -386,14 +410,17 @@ def validate_plugin_replacement(record, requirement, *, development=False):
         raise ValueError("plugin archive shared BIND payload checksum is missing or invalid")
 
 
-def validate_plugin_archive(record, dependencies, requirement, *, development=False):
+def validate_plugin_archive(record, dependencies, requirement, *, built_runtime_version, development=False):
     """Archive dependency declarations must match the original source literally."""
     if record.get("dep_formula") != requirement["dependency_formula"]:
         raise ValueError("plugin archive dependency formula differs from source")
-    core = (record.get("deps") or {}).get("opnsense")
-    if (any(edge[0] in requirement["formula_dependencies"] for edge in dependencies)
-            or core != {"version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"}
-            or ("opnsense", "opnsense/opnsense", requirement["minimum_opnsense_version"]) not in dependencies):
+    if (not isinstance(built_runtime_version, str)
+            or compare_runtime_versions(built_runtime_version, requirement["minimum_version"]) == "<"):
+        raise ValueError("plugin original build runtime is below its source minimum")
+    expected = {"opnsense": {"version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"},
+                "bind920": {"version": built_runtime_version, "origin": "dns/bind920"}}
+    edges = {(name, edge["origin"], edge["version"]) for name, edge in expected.items()}
+    if record.get("deps") != expected or set(dependencies) != edges or len(dependencies) != len(edges):
         raise ValueError("plugin archive dependency or core floor differs from source")
     validate_plugin_replacement(record, requirement, development=development)
 
@@ -427,7 +454,8 @@ def _validate_archives(directory, manifest, sidecars, pkg_command):
         requirement = plugin_requirement_from_makefile(sidecars["plugin-package.mk"])
         archive = directory / next(iter(manifest["packages"]))
         record = releases.read_package_manifest(archive, pkg_command)
-        validate_plugin_archive(record, dependencies["os-bind-rp"], requirement)
+        validate_plugin_archive(record, dependencies["os-bind-rp"], requirement,
+                                built_runtime_version=manifest["built_against_runtime"]["version"])
         _validate_plugin_file_map(record, files["os-bind-rp"])
 
 
@@ -964,7 +992,7 @@ def stage_preview(producer, selection, trusted_directory, output, *, pkg_command
         validate_plugin_metadata(metadata, upstream, inputs, source, version)
         record = releases.read_package_manifest(packages[0], pkg_command)
         requirement = plugin_requirement_from_makefile((trusted_directory / "plugin-package.mk").read_text())
-        validate_plugin_archive(record, edges, requirement, development=True)
+        validate_plugin_archive(record, edges, requirement, built_runtime_version=version, development=True)
         _validate_plugin_file_map(record, checksums)
         packages += [runtime / name for name in receipt["packages"]]
     _select_role(trusted_directory, selection["series"], "creator", pkg_command)

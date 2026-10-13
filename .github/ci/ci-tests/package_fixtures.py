@@ -13,40 +13,63 @@ BIND_PROFILE = {
 PLUGIN_PACKAGE = '''PLUGIN_NAME= bind-rp
 PLUGIN_DEPENDS= bind920
 PLUGIN_DEPEND_FORMULA= bind920 >= 9.20.26
-PLUGIN_DEPEND_FORMULA_DEPENDS= bind920
+PLUGIN_DEPEND_FORMULA_DEPENDS=
 PLUGIN_CONFLICTS= bind
 PLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }
 '''
-PLUGIN_PRE_INSTALL = r'''# Native dependency records do not enforce an installed core's minimum version.
+PLUGIN_PRE_INSTALL = r'''# OPNsense ignores ordinary script failures; exit 3 stops the pkg operation.
 set -eu
+
+bind_package_refuse() {
+    printf '%s\n' "$*" >&2 || :
+    exit 3
+}
 
 bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
 bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
-    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p')
-[ -n "${bind_package_minimum_core}" ] || {
-    printf '%s\n' 'os-bind-rp minimum OPNsense version is missing' >&2
-    exit 1
-}
-bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v')
-bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}")
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p') ||
+    bind_package_refuse 'os-bind-rp cannot read its minimum OPNsense version'
+[ -n "${bind_package_minimum_core}" ] ||
+    bind_package_refuse 'os-bind-rp minimum OPNsense version is missing'
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed OPNsense version'
+[ -n "${bind_package_core}" ] || bind_package_refuse 'os-bind-rp requires installed OPNsense'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed OPNsense version'
 case "${bind_package_comparison}" in
     '='|'>') ;;
-    *)
-        printf 'os-bind-rp requires OPNsense %s or later (installed %s)\n' \
-            "${bind_package_minimum_core}" "${bind_package_core}" >&2
-        exit 1
+    '<')
+        bind_package_refuse "os-bind-rp requires OPNsense ${bind_package_minimum_core} or later (installed ${bind_package_core})"
         ;;
+    *) bind_package_refuse 'os-bind-rp OPNsense comparison returned an invalid result' ;;
 esac
 
-# A native archive conflict list is an installed-package database relationship.
-# Replacement uses shared-file resolution; this read-only check fences name drift.
-bind_package_installed=$("${bind_package_pkg}" query '%n')
+bind_package_runtime_formula='%%PLUGIN_DEPEND_FORMULA%%'
+bind_package_minimum_runtime=${bind_package_runtime_formula#'bind920 >= '}
+if [ -z "${bind_package_minimum_runtime}" ] || [ "${bind_package_minimum_runtime}" = "${bind_package_runtime_formula}" ]; then
+    bind_package_refuse 'os-bind-rp minimum BIND version is missing'
+fi
+bind_package_runtime=$("${bind_package_pkg}" query -e '%n = bind920' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed bind920 version'
+[ -n "${bind_package_runtime}" ] || bind_package_refuse 'os-bind-rp requires installed bind920'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_runtime}" "${bind_package_minimum_runtime}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed bind920 version'
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    '<')
+        bind_package_refuse "os-bind-rp requires bind920 ${bind_package_minimum_runtime} or later (installed ${bind_package_runtime})"
+        ;;
+    *) bind_package_refuse 'os-bind-rp bind920 comparison returned an invalid result' ;;
+esac
+
+# Shared-file resolution replaces the official plugin; do not admit name drift.
+bind_package_installed=$("${bind_package_pkg}" query -a '%n') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed package inventory'
+[ -n "${bind_package_installed}" ] || bind_package_refuse 'os-bind-rp installed package inventory is empty'
 for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
     for bind_package_name in ${bind_package_installed}; do
         if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
-            printf 'os-bind-rp cannot coexist with installed %s\n' \
-                "${bind_package_conflict}" >&2
-            exit 1
+            bind_package_refuse "os-bind-rp cannot coexist with installed ${bind_package_conflict}"
         fi
     done
 done
@@ -54,16 +77,19 @@ done
 BIND_COLLISION_PATH = '/usr/local/etc/inc/plugins.inc.d/bind.inc'
 
 
-def plugin_manifest(definition=PLUGIN_PACKAGE, *, development=False, payload=b'fixture bind.inc\n'):
+def plugin_manifest(definition=PLUGIN_PACKAGE, *, built_runtime_version='9.20.26_2',
+                    development=False, payload=b'fixture bind.inc\n'):
     """Independent source fixture and the actual ASCII native script representation."""
-    fields = dict(re.findall(r'^(PLUGIN_\w+)=\s*(.*)$', definition, re.M))
+    fields = dict(re.findall(r'^(PLUGIN_\w+)=[ \t]*(.*)$', definition, re.M))
     core = re.search(r'version: "([^"]+)"', fields['PLUGIN_MANIFEST_DEPENDS'])[1]
     conflicts = 'os-bind os-bind-devel ' + ('os-bind-rp' if development else 'os-bind-rp-devel')
     script = PLUGIN_PRE_INSTALL.replace('%%PLUGIN_MANIFEST_DEPENDS%%', fields['PLUGIN_MANIFEST_DEPENDS'])
+    script = script.replace('%%PLUGIN_DEPEND_FORMULA%%', fields['PLUGIN_DEPEND_FORMULA'])
     script = script.replace('%%PLUGIN_CONFLICTS%%', conflicts)
     name = 'os-bind-rp-devel' if development else 'os-bind-rp'
     return dict(name=name, origin='opnsense/' + name, dep_formula=fields['PLUGIN_DEPEND_FORMULA'],
-                deps={'opnsense': {'version': core, 'origin': 'opnsense/opnsense'}},
+                deps={'opnsense': {'version': core, 'origin': 'opnsense/opnsense'},
+                      'bind920': {'version': built_runtime_version, 'origin': 'dns/bind920'}},
                 files={BIND_COLLISION_PATH: '1$' + hashlib.sha256(payload).hexdigest()},
                 scripts={'pre-install': script.replace('%', '%25').strip(' \t\r\n\f\v')})
 
@@ -211,7 +237,8 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
     for name, archive_version, origin in archives:
         record = dict(name=name, version=archive_version, origin=origin, abi=creator['abi'])
         if name == 'os-bind-rp':
-            record.update(plugin_manifest((directory / 'plugin-package.mk').read_text()))
+            record.update(plugin_manifest((directory / 'plugin-package.mk').read_text(),
+                                          built_runtime_version=runtime_version))
         (directory / f'{name}-{archive_version}.pkg').write_bytes(json.dumps(record, sort_keys=True).encode())
     manifest['packages'] = {f'{name}-{archive_version}.pkg': hashlib.sha256(
         (directory / f'{name}-{archive_version}.pkg').read_bytes()).hexdigest()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,43 +38,74 @@ def plugin_requirement(directory, trusted, *, unsigned=False):
     return bind.plugin_requirement_from_makefile(path.read_text())
 
 
-def validate_plugin_manifest(record, requirement):
+def plugin_built_runtime_version(directory, trusted, *, unsigned=False):
+    """Read P's authenticated original build version, never the paired R version."""
+    if unsigned:
+        upstream = bind._json(trusted / "upstream.json")
+        runtime = bind.validate_receipt(bind._json(trusted / "runtime-selection.json"),
+                                        "bind_runtime", upstream["series"])
+        version = next(name.removeprefix("bind920-").removesuffix(".pkg")
+                       for name in runtime["packages"] if name.startswith("bind920-"))
+        metadata = bind._metadata((directory / "build-metadata.txt").read_text())
+    else:
+        prefix = "" if (directory / "plugin-package.mk").is_file() else "bind_plugin-"
+        original = bind._json(directory / (prefix + "channel.json"))
+        if original.get("kind") != "bind-plugin":
+            raise ValueError("original plugin component manifest is absent")
+        version = bind._runtime_reference(original["built_against_runtime"], original["series"])["version"]
+        metadata = bind._metadata((directory / (prefix + "build-metadata.txt")).read_text())
+    if metadata["bind920"] != version:
+        raise ValueError("original plugin build runtime metadata differs")
+    return version
+
+
+def validate_plugin_manifest(record, requirement, *, built_runtime_version):
     deps = record.get("deps") or {}
     dependencies = {(name, edge["origin"], edge["version"]) for name, edge in deps.items()}
-    bind.validate_plugin_archive(record, dependencies, requirement,
+    bind.validate_plugin_archive(record, dependencies, requirement, built_runtime_version=built_runtime_version,
                                  development=record.get("name") == requirement["name"] + "-devel")
 
 
-def validate_installed_plugin_manifest(record, requirement):
+def validate_installed_plugin_manifest(record, requirement, *, inventory=None):
     """Native info omits formulas; verify their installed prerequisites directly."""
     bind.validate_plugin_replacement(record, requirement,
         development=record.get("name") == requirement["name"] + "-devel")
-    core = native_identity("opnsense")
+    inventory = native_inventory() if inventory is None else inventory
+    core = native_identity("opnsense", inventory=inventory)
     if (core is None or core[2] != "opnsense/opnsense"
             or (record.get("deps") or {}).get("opnsense") != {"version": core[1], "origin": core[2]}
             or compare_versions(core[1], requirement["minimum_opnsense_version"]) == "<"):
         raise ValueError("installed plugin core dependency differs from native state or source minimum")
-    runtime, tools = native_identity("bind920"), native_identity("bind-tools")
+    runtime = native_identity("bind920", inventory=inventory)
+    tools = native_identity("bind-tools", inventory=inventory)
     if (runtime is None or tools is None
             or not bind.runtime_is_eligible(requirement, tuple(runtime[:3]), tuple(tools[:3]), compare_versions)
             or compare_versions(tools[1], requirement["minimum_version"]) == "<"):
         raise ValueError("installed plugin runtime differs from native state or source minimum")
+    if record.get("deps") != {"opnsense": {"version": core[1], "origin": core[2]},
+                              "bind920": {"version": runtime[1], "origin": runtime[2]}}:
+        raise ValueError("installed plugin ordinary dependencies differ from native state")
     edges = subprocess.check_output([PKG, "query", "-e", "%n = bind920", "%dn|%do|%dv"], text=True).splitlines()
     if f"bind-tools|dns/bind-tools|{tools[1]}" not in edges:
         raise ValueError("installed plugin runtime pair dependency differs")
 
 
-def native_identity(name):
-    result = subprocess.run([PKG, "query", "-e", f"%n = {name}", "%n|%v|%o|%q"],
-                            capture_output=True, text=True)
-    if result.returncode not in {0, 1}:
-        raise RuntimeError("cannot read installed native package")
-    if not result.stdout.strip():
-        return None
-    fields = result.stdout.strip().split("|")
-    if len(fields) != 4 or fields[0] != name or not all(fields):
-        raise ValueError("installed native package identity is ambiguous")
-    return fields
+def native_inventory():
+    """A successful nonempty whole query proves both presence and absence."""
+    rows = subprocess.check_output([PKG, "query", "-a", "%n|%v|%o|%q"], text=True).splitlines()
+    if not rows:
+        raise ValueError("installed native package inventory is empty")
+    inventory = {}
+    for row in rows:
+        fields = row.split("|")
+        if len(fields) != 4 or not all(fields) or fields[0] in inventory:
+            raise ValueError("installed native package inventory is ambiguous")
+        inventory[fields[0]] = fields
+    return inventory
+
+
+def native_identity(name, *, inventory=None):
+    return (native_inventory() if inventory is None else inventory).get(name)
 
 
 def native_files(name):
@@ -84,8 +116,8 @@ def native_files(name):
     return sorted(files)
 
 
-def native_package(name):
-    identity = native_identity(name)
+def native_package(name, *, inventory=None):
+    identity = native_identity(name, inventory=inventory)
     if identity is None:
         return None
     repository = subprocess.check_output([PKG, "query", "-e", f"%n = {name}", "%R"], text=True).strip()
@@ -205,9 +237,9 @@ def authenticate(plan, trusted, evidence, mode):
             if name.startswith("os-bind-rp"):
                 record = releases.read_package_manifest(archive, PKG)
                 requirement = plugin_requirement(directory, trusted, unsigned=entry["unsigned"])
-                validate_plugin_manifest(record, requirement)
-                if any(edge[0] == "bind920" for edge in edges):
-                    raise ValueError("formula dependency appears in the ordinary dependency table")
+                built_version = plugin_built_runtime_version(directory, trusted, unsigned=entry["unsigned"])
+                bind.validate_plugin_archive(record, edges, requirement, built_runtime_version=built_version,
+                    development=name == requirement["name"] + "-devel")
             checksums = package_checksums.verify_archive(PKG, archive)
             if name.startswith("os-bind-rp"):
                 bind._validate_plugin_file_map(record, checksums)
@@ -227,10 +259,11 @@ def authenticate(plan, trusted, evidence, mode):
 def installed(packages, evidence, label, *, exact=True, requirement=None):
     observations = []
     names = []
+    inventory = native_inventory()
     for archive in packages:
         expected, _ = releases.query_package(archive, PKG)
         name = expected[0]
-        state = native_package(name)
+        state = native_package(name, inventory=inventory)
         if state is None:
             raise ValueError("qualified package is not installed")
         actual, checksums = state["identity"], state["files"]
@@ -244,7 +277,7 @@ def installed(packages, evidence, label, *, exact=True, requirement=None):
             if requirement is None:
                 raise ValueError("installed plugin requires its original source definition")
             record = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", name], text=True))
-            validate_installed_plugin_manifest(record, requirement)
+            validate_installed_plugin_manifest(record, requirement, inventory=inventory)
             bind._validate_plugin_file_map(record, checksums)
             if not stat.S_ISREG(Path(bind.PLUGIN_SHARED_FILE).lstat().st_mode):
                 raise ValueError("installed shared BIND payload is not a regular file")
@@ -265,8 +298,7 @@ def installed(packages, evidence, label, *, exact=True, requirement=None):
     if any(name.startswith("os-bind-rp") for name in names):
         development = requirement["name"] + "-devel" in names
         for conflict in bind._plugin_conflicts(requirement, development):
-            official = subprocess.run([PKG, "query", "-e", f"%n = {conflict}", "%n"], capture_output=True, text=True)
-            if official.returncode not in {0, 1} or official.stdout.strip():
+            if conflict in inventory:
                 raise ValueError("conflicting BIND plugin remains installed")
     subprocess.run([PKG, "check", "-s", *names], check=True, stdout=sys.stderr)
     save_evidence(evidence, label, observations)
@@ -277,25 +309,16 @@ def prepare_installer(plan, trusted, evidence):
     directory = Path(next(entry["directory"] for entry in plan["repositories"]
                           if Path(entry["directory"]).name == "combined"))
     requirement = plugin_requirement(directory, trusted)
-    retained = {}
-    for name in ("bind-tools", "bind920"):
-        result = subprocess.run([PKG, "query", "-e", f"%n = {name}", "%n|%v|%o|%q"],
-                                capture_output=True, text=True)
-        if result.returncode not in (0, 1):
-            raise RuntimeError("cannot read pre-installer runtime")
-        fields = result.stdout.strip().split("|")
-        archive = next(directory.glob(name + "-*.pkg"))
-        expected, _ = releases.query_package(archive, PKG)
-        if (len(fields) == 4 and (fields[0], fields[2], fields[3]) == (expected[0], expected[2], expected[3])
-                and subprocess.check_output([PKG, "version", "-t", fields[1], expected[1]], text=True).strip() in {"=", ">"}):
-            files = subprocess.check_output([PKG, "query", "-e", f"%n = {name}", "%Fp|%Fs"], text=True).splitlines()
-            retained[name] = dict(identity=fields, files=sorted(row.split("|", 1) for row in files))
-    if len(retained) != 2 or not bind.runtime_is_eligible(
-            requirement, tuple(retained["bind920"]["identity"][:3]), tuple(retained["bind-tools"]["identity"][:3]), compare_versions):
-        retained = {}
+    inventory = native_inventory()
+    runtime, tools = inventory.get("bind920"), inventory.get("bind-tools")
+    retained = (retained_runtime_snapshot(inventory) if runtime is not None and tools is not None
+                and bind.runtime_is_eligible(requirement, tuple(runtime[:3]), tuple(tools[:3]), compare_versions)
+                and compare_versions(tools[1], requirement["minimum_version"]) in {"=", ">"}
+                and all(inventory[name][3] == releases.query_package(next(directory.glob(name + "-*.pkg")), PKG)[0][3]
+                        for name in ("bind920", "bind-tools")) else {})
     config = Path("/conf/config.xml")
     save_evidence(evidence, "installer-before", dict(config_sha256=releases.sha256(config),
-        config_mode=stat.S_IMODE(config.stat().st_mode), retained_runtime=retained))
+        config_mode=stat.S_IMODE(config.stat().st_mode), inventory=inventory, retained_runtime=retained))
     shim = evidence / "installer-bin"
     shim.mkdir()
     version = "26.1.11_10" if plan["selection"]["series"] == "26.1" else plan["selection"]["series"]
@@ -307,6 +330,65 @@ def prepare_installer(plan, trusted, evidence):
         path.write_text(body)
         path.chmod(0o755)
     (evidence / "installer-approval").write_text("yes\n")
+
+
+def retained_file_snapshot(path):
+    """Measure stable existing bytes without treating them as supplier digests."""
+    path = Path(path)
+    before = path.lstat()
+    stable = lambda metadata: (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_gid, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+    if stat.S_ISREG(before.st_mode):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or stable(opened) != stable(before):
+                raise ValueError("retained runtime file changed while opening it")
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, 1024 * 1024):
+                digest.update(chunk)
+            if stable(os.fstat(descriptor)) != stable(before):
+                raise ValueError("retained runtime file changed while reading it")
+            observation = dict(type="regular", sha256=digest.hexdigest())
+        finally:
+            os.close(descriptor)
+    elif stat.S_ISLNK(before.st_mode):
+        target = os.readlink(path)
+        observation = dict(type="symlink", target=target,
+                           sha256=hashlib.sha256(os.fsencode(target)).hexdigest())
+    else:
+        raise ValueError("retained runtime path is not a regular file or symlink")
+    if stable(path.lstat()) != stable(before):
+        raise ValueError("retained runtime path changed while observing it")
+    return dict(observation, uid=before.st_uid, gid=before.st_gid, mode=stat.S_IMODE(before.st_mode))
+
+
+def retained_runtime_snapshot(inventory):
+    """Migration-only measured bytes and untouched raw native DB file records."""
+    retained = {}
+    for name in ("bind-tools", "bind920"):
+        identity = inventory.get(name)
+        if identity is None:
+            raise ValueError("retained runtime package is absent from the native inventory")
+        rows = subprocess.check_output([PKG, "query", "-e", f"%n = {name}", "%Fp|%Fs"], text=True).splitlines()
+        files = sorted(row.split("|", 1) for row in rows)
+        if (not files or any(len(row) != 2 or not Path(row[0]).is_absolute() for row in files)
+                or len({row[0] for row in files}) != len(files)):
+            raise ValueError("retained runtime owned file set is incomplete")
+        physical = {}
+        for path, _ in files:
+            observation = retained_file_snapshot(path)
+            owner = subprocess.check_output([PKG, "which", "-q", path], text=True).strip()
+            if owner != f"{name}-{identity[1]}":
+                raise ValueError("retained runtime path owner differs from native identity")
+            physical[path] = dict(observation, owner=owner)
+        repository = subprocess.check_output([PKG, "query", "-e", f"%n = {name}", "%R"], text=True).strip()
+        retained[name] = dict(identity=identity, files=files, repository=repository,
+                              physical_files=physical, validation="retained-native-physical")
+    edges = subprocess.check_output([PKG, "query", "-e", "%n = bind920", "%dn|%do|%dv"], text=True).splitlines()
+    if f"bind-tools|dns/bind-tools|{retained['bind-tools']['identity'][1]}" not in edges:
+        raise ValueError("retained runtime pair dependency differs")
+    return retained
 
 
 def audit_installer(plan, evidence):
@@ -347,13 +429,30 @@ def audit_installer(plan, evidence):
             installed_plugin |= " os-bind-rp-" in command
     if not installed_plugin:
         raise ValueError("installer log omits the planned plugin transaction")
-    observations = bind._json(evidence / "public-installer.json")
+    requirement = bind.plugin_requirement_from_makefile((Path(entry["directory"]) / "bind_plugin-plugin-package.mk").read_text())
+    archives = [Path(path) for path in entry["packages"] if Path(path).name.startswith(("os-bind-rp-", "bind920-", "bind-tools-"))]
+    if before["retained_runtime"]:
+        inventory = native_inventory()
+        retained = retained_runtime_snapshot(inventory)
+        if retained != before["retained_runtime"]:
+            raise ValueError("installer changed retained runtime bytes, ownership or raw native DB file records")
+        plugin = next(path for path in archives if path.name.startswith("os-bind-rp-"))
+        observations = installed([plugin], evidence, "public-installer-plugin", requirement=requirement)
+        for name in ("bind-tools", "bind920"):
+            archive = next(path for path in archives if path.name.startswith(name + "-"))
+            staged, _ = releases.query_package(archive, PKG)
+            record = retained[name]
+            observations.append(dict(staged=staged, installed=record["identity"], files=record["files"],
+                physical_files=record["physical_files"], repository=record["repository"], validation=record["validation"]))
+        save_evidence(evidence, "public-installer", observations)
+    else:
+        observations = installed(archives, evidence, "public-installer", requirement=requirement)
     if len(observations) != 3 or {row["installed"][0] for row in observations} != {"bind-tools", "bind920", "os-bind-rp"}:
         raise ValueError("installer evidence omits an installed BIND package")
     for row in observations:
         name = row["installed"][0]
         retained = before["retained_runtime"].get(name)
-        expected_identity = retained["identity"] if retained else row["staged"]
+        expected_identity = retained["identity"] if retained else list(row["staged"])
         if row["installed"] != expected_identity or retained and sorted(row["files"]) != retained["files"]:
             raise ValueError("installer changed the expected original runtime identity or file set")
     save_evidence(evidence, "installer-audit", dict(state_mode="0700", backup="original bytes and mode",
@@ -380,34 +479,32 @@ def native_install(plan, trusted, evidence, case):
     entry = next(entry for entry in plan["repositories"] if Path(entry["directory"]).name == "combined")
     directory = Path(entry["directory"])
     requirement = plugin_requirement(directory, trusted)
+    inventory = native_inventory()
+    if any(name in inventory for name in ("os-bind", "os-bind-devel")):
+        raise ValueError("official BIND replacements require the existing migration installer")
+    if case == "upstream":
+        raise ValueError("upstream BIND migration requires the existing migration installer")
     names = ("os-bind-rp", "bind920", "bind-tools")
-    before = {name: native_package(name) for name in names}
-    official = native_identity("os-bind")
-    core = native_identity("opnsense")
-    if core is None or before["os-bind-rp"] is not None or native_identity("os-bind-rp-devel") is not None:
+    before = {name: native_package(name, inventory=inventory) for name in names}
+    official = None
+    core = native_identity("opnsense", inventory=inventory)
+    if core is None or before["os-bind-rp"] is not None or native_identity("os-bind-rp-devel", inventory=inventory) is not None:
         raise ValueError("native installation checkpoint has an invalid initial plugin/core state")
     if case == "fresh" and (official is not None or any(before.values())):
         raise ValueError("fresh dependency acceptance requires plugin, BIND and tools absent")
-    if case in {"upstream", "below-minimum"}:
+    if case == "below-minimum":
         runtime, tools = before["bind920"], before["bind-tools"]
         if runtime is None or tools is None:
             raise ValueError("native runtime acceptance requires an actual installed pair")
-        eligible = bind.runtime_is_eligible(requirement, tuple(runtime["identity"][:3]),
-                                             tuple(tools["identity"][:3]), compare_versions)
-        if case == "upstream" and (official is None or not eligible
-                or any(state["repository"] != "OPNsense" for state in (runtime, tools))):
-            raise ValueError("upstream migration requires official plugin and eligible authenticated upstream pair")
-        if case == "below-minimum" and compare_versions(runtime["identity"][1], requirement["minimum_version"]) != "<":
+        if compare_versions(runtime["identity"][1], requirement["minimum_version"]) != "<":
             raise ValueError("below-minimum acceptance requires an actual lower runtime version")
     if case == "below-core" and compare_versions(core[1], requirement["minimum_opnsense_version"]) != "<":
         raise ValueError("below-core acceptance requires an actual lower core version")
     protected = install_protection()
-    if case == "upstream" and (not protected["domains"] or not protected["primary_zones"]):
-        raise ValueError("upstream lifecycle acceptance requires the prepared customer domain/zone fixture")
-    package_set = lambda: sorted(subprocess.check_output([PKG, "query", "-a", "%n|%v|%o|%q"], text=True).splitlines())
+    package_set = lambda: native_inventory()
     before_setup = package_set()
     save_evidence(evidence, "native-" + case + "-before", dict(packages=before, official=official,
-        core=core, package_manager=native_identity("pkg"), protected=protected))
+        core=core, package_manager=native_identity("pkg", inventory=inventory), inventory=inventory, protected=protected))
     subprocess.run(["sh", str(CHECKOUT / "scripts/install-repository.sh")], check=True)
     if package_set() != before_setup:
         raise ValueError("repository setup changed installed packages")
@@ -427,16 +524,24 @@ def native_install(plan, trusted, evidence, case):
         save_evidence(evidence, "native-" + case + "-transaction", dict(repositories=repository_evidence, commands=commands))
         if arguments[1] == "-n" and result.returncode not in {0, 1}:
             raise RuntimeError("native installation dry run failed")
-    if result.returncode:
-        if case not in {"below-minimum", "below-core"} or native_identity("os-bind-rp") is not None:
-            raise RuntimeError("native plugin installation failed or left an unsupported plugin")
-        if case == "below-core" and ("os-bind-rp requires OPNsense " + requirement["minimum_opnsense_version"]) not in result.stdout + result.stderr:
-            raise ValueError("native core refusal was not intercepted by the source floor guard")
+    after_inventory = native_inventory()
+    if "os-bind-rp" not in after_inventory:
+        if case not in {"below-minimum", "below-core"}:
+            raise RuntimeError("native plugin installation failed or left no installed plugin")
+        diagnostic = ("os-bind-rp requires OPNsense " + requirement["minimum_opnsense_version"]
+                      if case == "below-core" else "os-bind-rp requires bind920 " + requirement["minimum_version"])
+        if diagnostic not in result.stdout + result.stderr:
+            raise ValueError("native refusal was not intercepted by the source floor guard")
+        if after_inventory != before_setup or install_protection() != protected:
+            raise ValueError("native refusal changed installed packages or protected customer state")
+        for name, original in before.items():
+            if original is not None and native_package(name, inventory=after_inventory) != original:
+                raise ValueError("native refusal changed an original package file map")
         save_evidence(evidence, "native-" + case + "-result", dict(outcome="refused", plugin_absent=True,
-            cause="source-core-floor-guard" if case == "below-core" else "requires native solver investigation"))
-        if case == "below-minimum":
-            raise RuntimeError("native runtime refusal requires a separate bounded solver-cause proof")
+            inventory=after_inventory, cause="source-core-floor-guard" if case == "below-core" else "source-runtime-floor-guard"))
         return
+    if result.returncode:
+        raise RuntimeError("native plugin installation failed or left an unsupported plugin")
     archives = [Path(path) for path in entry["packages"] if Path(path).name.startswith(("os-bind-rp-", "bind920-", "bind-tools-"))]
     observations = installed(archives, evidence, "native-" + case + "-installed", exact=False, requirement=requirement)
     manifest = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", "os-bind-rp"], text=True))

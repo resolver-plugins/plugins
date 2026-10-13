@@ -76,7 +76,7 @@ class StageProvenanceTest(unittest.TestCase):
                             patch.object(components.subprocess,'check_output',side_effect=output),
                             patch.object(components.releases,'snapshot_release',return_value=SimpleNamespace(existed=True,draft=False,directory=runtime)),
                             patch.object(components.releases,'query_package',side_effect=query),
-                            patch.object(components.releases,'read_package_manifest',side_effect=lambda archive,command:plugin_manifest(development='devel' in archive.name)),
+                            patch.object(components.releases,'read_package_manifest',side_effect=lambda archive,command:json.loads(archive.read_text())),
                             patch.object(components.package_checksums,'verify_archive',side_effect=lambda command,archive:list(json.loads(archive.read_text()).get('files',{}).items())),
                             patch.object(components,'_select_role'),
                             patch.object(package_catalogue,'verify_packages'), patch.object(package_catalogue,'verify_repository')):
@@ -181,7 +181,8 @@ class StageProvenanceTest(unittest.TestCase):
                         if kind=='bind_plugin':
                             package=raw / 'os-bind-rp-26.7_1.pkg'
                             development=json.loads(package.read_text())
-                            development.update(name='os-bind-rp-devel',origin='opnsense/os-bind-rp-devel')
+                            development.update(plugin_manifest(source_definition.read_text(),development=True,
+                                built_runtime_version=development['deps']['bind920']['version']))
                             write_json(raw / 'os-bind-rp-devel-26.7_1.pkg',development)
                             package.unlink()
                         preview=root / 'preview-repository'

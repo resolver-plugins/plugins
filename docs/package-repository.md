@@ -170,21 +170,32 @@ pkg update -f -r resolver-plugins
 
 ### Native plugin installation
 
-After configuring the repository, use `pkg install os-bind-rp`. Native package
-dependencies select BIND and its tools. Fresh installs must select this feed's
-approved pair; an already installed compatible OPNsense pair may remain because
-pkg preserves repository affinity. Qualification records the actual provider
-and installed file maps. A below-minimum BIND or core state must upgrade or
-refuse the plugin, never install an unsupported state. The reviewed source
-package emits its core dependency and a read-only pre-install guard for the
-actual core version and incompatible installed plugin names. Native file
-ownership resolution replaces official `os-bind` through the shared `bind.inc`
-payload. Native manifest `conflicts` entries are installed database relationships
-and do not express this prohibited-name policy.
+For a fresh installation, configure the repository and use
+`pkg install os-bind-rp`. The plugin's ordinary dependency selects missing BIND,
+which in turn selects its tools. An already installed compatible OPNsense pair
+may remain. The recorded dependency version identifies the original build;
+the source formula defines the minimum compatible BIND version. Qualification
+records the actual provider and installed file maps. The pinned pkg reader can
+retain an older installed dependency even when a compatible candidate exists.
+The source-generated read-only guard prevents registering an unsupported
+plugin, but command exit0 alone is not evidence that installation succeeded.
 
-The custom installer is retained only until the replacement native acceptance
-cases pass on both supported series. Before mutation, that retained harness
-fetches exact candidate archives,
+For official `os-bind` replacement or an installed BIND below the plugin's
+minimum, use the retained migration installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
+```
+
+The installer reads core and BIND requirements from the authenticated plugin
+archive, verifies the installed core, retains a compatible pair, and upgrades
+an older pair before replacing the plugin. Native file ownership resolution
+replaces official `os-bind` through the shared `bind.inc` payload. That removal
+can happen before P's guard, making migration preflight necessary. Native
+manifest `conflicts` entries are installed database relationships and do not
+express the prohibited-name policy enforced by the source guard.
+
+Before mutation, the installer fetches exact candidate archives,
 requires non-null per-file checksums, records their SHA-256 values, creates a
 local isolated repository, and dry-runs the frozen transaction. It locks the
 installed `pkg` package for the transaction, attempts to restore its original
@@ -227,9 +238,13 @@ confirm the actual service state before taking recovery action.
 
 After replacement, the installer requires the official package to be absent,
 checks exact Resolver package origins and retained BIND identities, verifies
-ownership of paths listed in archives installed by the transaction, rejects null
-installed-file checksums, and runs a scoped
-`pkg check -s`. The operator must still validate the generated configuration,
+ownership of paths listed in archives installed by the transaction, and requires
+complete native checksums for newly installed own packages. A retained upstream
+pair must preserve its complete native file records, identities and owners, plus
+the measured full file maps from genuine native recovery archives created before
+and after installation. These measured digests describe the existing files;
+they do not replace missing supplier digests in the package database. A scoped
+`pkg check -s` also runs. The operator must still validate the generated configuration,
 all managed zones, authoritative answers, and the service state after package
 installation.
 
@@ -408,8 +423,9 @@ minimum pkg reader, then runs repository setup and native
 are not preinstalled for this checkpoint. It records the native dry run,
 transaction, providers and file maps, compares the plugin with the qualified
 archive, checks source-defined floors/conflicts, and runs the existing named,
-rndc and DNS canaries. Separate clean cases exercise official-plugin replacement
-with an eligible upstream pair and below-minimum runtime/core refusal or upgrade.
+rndc and DNS canaries. Separate clean cases exercise the retained migration
+installer with an eligible upstream pair or a runtime upgrade, and ordinary
+below-minimum runtime/core refusal with no official plugin installed.
 The public `channel.json` must match the qualified bytes. The
 immutable source release is created only by the plugin workflow, after this
 verified public-channel installation succeeds. Its tag is
@@ -448,10 +464,10 @@ the caller-owned temporary archives, compares their recorded hashes with both
 the fetched and staged packages, and observes the isolated repository dry run
 before the installer's live transaction. Archive ownership checks cover packages
 installed from those archives. Retained BIND packages must keep their original
-identities, and all three installed BIND/plugin packages pass file checksum checks.
-These observations qualify only the selected series in a successful native run;
-both 26.1 and 26.7 need successful runs before retiring the corresponding local
-official-replacement regression test.
+identities, native records, owned paths and measured physical file maps. Own
+packages retain strict archive-to-installed checksum checks. These observations
+qualify only the selected series in a successful native run. Local migration
+protection tests remain alongside native qualification.
 These stock FreeBSD VM checks cover packages, catalogues and BIND runtime;
 appliance UI and PHP plugin migrations require separate appliance qualification.
 

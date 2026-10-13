@@ -132,7 +132,16 @@ def validate_output(directory, selection, trusted, pkg_command):
         _, dependencies = releases.query_package(archive, pkg_command)
         record = releases.read_package_manifest(archive, pkg_command)
         requirement = components.plugin_requirement_from_makefile((trusted / "plugin-package.mk").read_text())
-        components.validate_plugin_archive(record, dependencies, requirement, development=True)
+        runtime = components.validate_receipt(json.loads((trusted / "runtime-selection.json").read_text()),
+                                              "bind_runtime", selection["series"])
+        built_version = next(name.removeprefix("bind920-").removesuffix(".pkg")
+                             for name in runtime["packages"] if name.startswith("bind920-"))
+        upstream = json.loads((trusted / "upstream.json").read_text())
+        _, source = components._role(json.loads((trusted / "creator-target.json").read_text()), upstream, "creator")
+        components.validate_plugin_metadata(components._metadata((directory / "build-metadata.txt").read_text()),
+                                            upstream, inputs, source, built_version)
+        components.validate_plugin_archive(record, dependencies, requirement,
+                                           built_runtime_version=built_version, development=True)
         components._validate_plugin_file_map(record, package_checksums.verify_archive(pkg_command, archive))
     # FreeBSD tar understands the native pkg compression; target Python need not.
     entries = subprocess.check_output(["tar", "-tf", str(archive)], text=True).splitlines()

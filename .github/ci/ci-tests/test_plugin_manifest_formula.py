@@ -13,6 +13,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ])
 def test_framework_omits_only_formula_dependencies_from_exact_revision_pins(formula_dependencies, expected):
     framework = (REPOSITORY_ROOT / 'Mk/plugins.mk').read_text(encoding='utf-8')
+    framework = framework.split('manifest: check\n', 1)[1]
     # Execute the real recipe bodies with make variables supplied through the shell.
     # The surrounding defined() conditions are selected explicitly for this fixture.
     recipe = '\n'.join(framework.split(f'.if defined({name})\n', 1)[1].split('.endif', 1)[0]
@@ -28,8 +29,3 @@ def test_framework_omits_only_formula_dependencies_from_exact_revision_pins(form
         'deps: {', *[f'  {name}: {{ version: "1.0", origin: "fixture/{name}" }}' for name in expected],
         '}', 'dep_formula: "bind920 >= 9.20.26"',
     ]
-
-
-def test_bind_links_its_dependency_formula_to_the_bind920_manifest_entry():
-    makefile = (REPOSITORY_ROOT / 'dns/bind/Makefile').read_text(encoding='utf-8')
-    assert re.search(r'^PLUGIN_DEPEND_FORMULA_DEPENDS=\s*bind920$', makefile, re.MULTILINE)

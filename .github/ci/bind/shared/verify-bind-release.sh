@@ -155,7 +155,7 @@ then
             --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
         exit 0
     fi
-    # Retain the previous installer qualification until native replacement proof passes.
+    # Official-plugin replacement uses the retained migration installer.
     /usr/local/sbin/pkg-static delete -f -y os-bind-rp
     /usr/local/sbin/pkg-static install -y -r OPNsense os-bind
     metadata installer-before
@@ -164,7 +164,6 @@ then
         RP_TTY_PATH="$evidence/installer-approval" RP_STATE_DIRECTORY="$evidence/installer-state" \
         RP_TEMPORARY_DIRECTORY="$evidence/installer-transaction" RP_VERIFY_INSTALLER_LOG="$evidence/installer-pkg.log" \
         PATH="$evidence/installer-bin:$PATH" "$checkout/scripts/install-os-bind-rp.sh"
-    metadata installed --directory "$repository_root/combined" --allow-upstream --label public-installer
     metadata installer-after
     metadata source
     "$ci/bind/runtime/verify-bind-runtime.sh"

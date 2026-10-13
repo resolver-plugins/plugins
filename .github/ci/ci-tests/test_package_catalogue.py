@@ -530,7 +530,8 @@ def channels(tmp_path, monkeypatch):
     def query(path,command):
         identity=identities[path.name]
         edges={('bind-tools','dns/bind-tools',identity[1])} if identity[0]=='bind920' else (
-            {('opnsense','opnsense/opnsense','26.1.11_10')} if identity[0]=='os-bind-rp' else set())
+            {(name,edge['origin'],edge['version']) for name,edge in json.loads(path.read_text())['deps'].items()}
+            if identity[0]=='os-bind-rp' else set())
         return identity,edges
     def sign(packages,output,key,pkg,metadata):
         output.mkdir()
@@ -748,27 +749,33 @@ def test_published_corrupt_pair_is_refused_without_rebuilding(channels,tmp_path,
 def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtime(tmp_path,monkeypatch):
     from bind.shared import verification
     identities={name:(name,version,origin,'FreeBSD:15:amd64') for name,version,origin in [
-        ('bind-tools','9.20.26_2','dns/bind-tools'),('bind920','9.20.26_2','dns/bind920'),
+        ('bind-tools','9.20.29','dns/bind-tools'),('bind920','9.20.29','dns/bind920'),
         ('os-bind-rp','26.7_1','opnsense/os-bind-rp')]}
-    packages=[tmp_path / f'{name}-{identity[1]}.pkg' for name,identity in identities.items()]
+    archived={name:(name,'9.20.27',*identity[2:]) if name.startswith('bind') else identity
+              for name,identity in identities.items()}
+    packages=[tmp_path / f'{name}-{identity[1]}.pkg' for name,identity in archived.items()]
     expected=[('/usr/local/file','1'*64)]
     actual={name:[(f'/usr/local/{name}','2'*64 if name.startswith('bind') else '1'*64)] for name in identities}
-    manifest=plugin_manifest()
+    manifest=plugin_manifest(built_runtime_version='9.20.27')
     del manifest['dep_formula']
     actual['os-bind-rp']=list(manifest['files'].items())
     owners={path:f'{name}-{identities[name][1]}' for name,rows in actual.items() for path,_ in rows}
     core=('opnsense','26.7.3','opnsense/opnsense','FreeBSD:15:amd64')
     manifest['deps']['opnsense']['version']=core[1]
+    manifest['deps']['bind920']['version']=identities['bind920'][1]
     anchor=tmp_path / 'bind.inc';anchor.write_bytes(b'fixture bind.inc\n')
     native_path=verification.Path
     monkeypatch.setattr(verification,'Path',lambda value:anchor if str(value)==BIND_COLLISION_PATH else native_path(value))
-    monkeypatch.setattr(verification.releases,'query_package',lambda path,command:(identities[next(name for name in identities if path.name.startswith(name+'-'))],set()))
+    monkeypatch.setattr(verification.releases,'query_package',lambda path,command:(archived[next(name for name in archived if path.name.startswith(name+'-'))],set()))
     monkeypatch.setattr(verification.package_checksums,'verify_archive',lambda command,path:
         list(manifest['files'].items()) if path.name.startswith('os-bind-rp-') else expected)
     def output(command,**kwargs):
         if command[1]=='version': return fixture_version_comparison(*command[-2:])+'\n'
         if command[1]=='which': return owners[command[-1]]+'\n'
         if command[1]=='info': return json.dumps(manifest)
+        if '-a' in command:
+            assert command[-1]=='%n|%v|%o|%q'
+            return '\n'.join('|'.join(identity) for identity in (*identities.values(),core))+'\n'
         name=command[command.index('-e')+1].removeprefix('%n = ')
         if command[-1]=='%R': return 'OPNsense'
         if command[-1]=='%Fp|%Fs': return '\n'.join('|'.join(row) for row in actual[name])
@@ -779,10 +786,6 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
         return '|'.join(identities[name])
     monkeypatch.setattr(verification.subprocess,'check_output',output)
     def native_run(command,**kwargs):
-        if command[1]=='query' and command[-1]=='%n|%v|%o|%q':
-            name=command[command.index('-e')+1].removeprefix('%n = ')
-            return SimpleNamespace(returncode=0,stdout='|'.join(core if name=='opnsense' else identities[name]))
-        if command[1]=='query': return SimpleNamespace(returncode=1,stdout='')
         if command[1]=='check': return SimpleNamespace(returncode=0,stdout='')
         raise AssertionError(command)
     native=Mock(side_effect=native_run)
@@ -791,9 +794,10 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     verification.installed(packages,tmp_path / 'evidence','public',exact=False,requirement=requirement)
     observed=json.loads((tmp_path / 'evidence/public.json').read_text())
     assert [row['validation'] for row in observed]==['eligible-runtime','eligible-runtime','exact-archive']
+    assert (observed[1]['staged'][1],observed[1]['installed'][1])==('9.20.27','9.20.29')
     assert observed[0]['files']==[['/usr/local/bind-tools','2'*64]]
     assert any(call.args[0]==[verification.PKG,'check','-s','bind-tools','bind920','os-bind-rp'] for call in native.call_args_list)
-    with pytest.raises(ValueError,match='file set differs'):
+    with pytest.raises(ValueError,match='identity differs'):
         verification.installed(packages,tmp_path / 'evidence','local')
     actual['os-bind-rp']=[(BIND_COLLISION_PATH,'3'*64)]
     with pytest.raises(ValueError,match='file set differs'):

@@ -111,19 +111,27 @@ It never falls back to building BIND. If the approved runtime is absent or
 incompatible, publish it with the runtime workflow and retry the plugin run.
 The plugin's recorded build-time runtime remains historical provenance; a later
 compatible runtime can be qualified with the same original plugin bytes.
-The plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
-built BIND revision. The reviewed source emits its declared core dependency and
-a read-only pre-install guard for the minimum core version and incompatible
-installed plugin names. Native file ownership resolution replaces official
-`os-bind` through the shared `bind.inc` payload. Qualification checks the exact
-source-generated guard and both installation directions. Native manifest
-`conflicts` entries describe installed database relationships and cannot express
-this prohibited-name policy; dependency metadata alone also does not enforce
-the core floor.
-Archive checks require the exact declared formula and core floor. Installed
-`pkg info` omits dependency formulas and reports the current core dependency
-version. Qualification checks the installed core, BIND and tools against the
-source minimums and verifies BIND's native tools dependency directly. See the
+The plugin manifest records an ordinary `bind920` dependency at its original
+authenticated build version, alongside `dep_formula: "bind920 >= 9.20.26"`.
+The ordinary edge lets native pkg discover missing BIND and its tools. Its
+recorded version remains build provenance; installed compatibility follows the
+source minimum. The reviewed source also emits its core dependency and a
+read-only pre-install guard for actual core/runtime versions and incompatible
+installed plugin names. Qualification checks the exact source-generated guard
+and both installation directions. Native manifest `conflicts` entries describe
+installed database relationships and cannot express this prohibited-name policy.
+The pinned reader prefers existing dependencies during `install` and does not
+automatically enforce the formula's minimum. The guard uses its native stop
+status to prevent registering an unsupported plugin; ordinary script failure
+is insufficient. Successful command exit alone does not prove installation.
+Official `os-bind` replacement uses the retained migration installer, which
+checks prerequisites and upgrades an older pair before replacing the plugin.
+Native shared-file resolution can remove official `os-bind` before running P's
+guard, so the guard cannot provide safe migration preflight.
+Archive checks require the exact declared formula, core floor and original
+runtime edge. Installed `pkg info` omits dependency formulas and reports current
+dependency versions. Qualification checks the installed core, BIND and tools
+against the source minimums and verifies current ordinary edges directly. See the
 [minimum reader's installed-package query](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkgdb_query.c).
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
 `make clean` target after materializing a release source, because that target
@@ -227,7 +235,14 @@ installed identity with the archive. Public native pkg qualification also checks
 the supported behavior of keeping a newer compatible upstream BIND pair.
 File checksum validation accepts SHA256 hex and BLAKE2b z-base32, as supported
 by the [minimum reader's checksum implementation](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkg_checksum.c).
-Installed file contents still require a successful `pkg check -s`.
+Own installed packages require complete native file checksums and a successful
+`pkg check -s`. The minimum reader can lose upstream object-valued BLAKE file
+digests while installing them. For a retained upstream pair, migration records
+those raw native rows separately and compares complete measured file maps from
+genuine native recovery archives before and after replacement. Identity,
+path-set and ownership checks remain mandatory. Native qualification also
+independently measures the retained physical files; a successful `check -s`
+with missing native digests is insufficient.
 The runtime canary uses its own RNDC client configuration and key. An installed
 plugin's default `rndc.conf` therefore cannot change the probe's control key;
 installed and customer configuration files remain untouched by that probe.

@@ -204,7 +204,8 @@ def build_fixture(tmp_path):
         bind = pathlib.Path(args[1]) / 'src/etc/inc/plugins.inc.d/bind.inc'
         record = dict(name='os-bind-rp', version='26.1_1', origin='opnsense/os-bind-rp',
             abi='FreeBSD:14:amd64')
-        record.update(plugin_manifest((pathlib.Path(args[1]) / 'Makefile').read_text(), payload=bind.read_bytes()))
+        record.update(plugin_manifest((pathlib.Path(args[1]) / 'Makefile').read_text(),
+            built_runtime_version=state['bind920']['version'], payload=bind.read_bytes()))
         version = json.dumps(dict(product_hash=os.environ['SOURCE_COMMIT'])).encode()
         record['files']['/usr/local/opnsense/version/bind-rp'] = '1$' + hashlib.sha256(version).hexdigest()
         with tarfile.open(output / 'os-bind-rp-26.1_1.pkg', 'w') as package:

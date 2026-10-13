@@ -655,8 +655,8 @@ class PublicationRecoveryTest(unittest.TestCase):
 class ChannelManifestValidationTest(unittest.TestCase):
     def test_manifest_contract(self):
         from git_fixtures import upstream_profile
-        for fault,error in [('valid',None),('formula','differs from source'),('exact-edge','differs from source'),
-                            ('guard','native package script'),('collision','shared BIND payload checksum'),('legacy-conflicts','source'),
+        for fault,error in [('valid',None),('formula','differs from source'),('historical-edge','differs from source'),
+                            ('guard','pre-install program'),('collision','shared BIND payload checksum'),('legacy-conflicts','source'),
                             ('version','plugin version differs from series'),('filename','original build inputs')]:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
                 directory=make_bind_component('bind_plugin',Path(temporary) / 'plugin',series='26.7',creator=creator_identity(),
@@ -670,12 +670,13 @@ class ChannelManifestValidationTest(unittest.TestCase):
                     manifest['assets']=byte_hashes({name:data for name,data in directory_bytes(directory).items() if name!='channel.json'})
                     write_json(directory / 'channel.json',manifest)
                 identity=('os-bind-rp',manifest['plugin_version'],'opnsense/os-bind-rp','FreeBSD:15:amd64')
-                edges={('opnsense','opnsense/opnsense','26.1.11_10')}
-                if fault=='exact-edge': edges.add(('bind920','dns/bind920','9.20.26_2'))
+                edges={('opnsense','opnsense/opnsense','26.1.11_10'),
+                       ('bind920','dns/bind920','9.20.29' if fault=='historical-edge' else '9.20.26_2')}
                 formula='bind920 = 9.20.26' if fault=='formula' else 'bind920 >= 9.20.26'
                 record = plugin_manifest()
+                if fault=='historical-edge': record['deps']['bind920']['version']='9.20.29'
                 record['dep_formula'] = formula
-                if fault=='guard': record['scripts'].pop('pre-install')
+                if fault=='guard': record['scripts']['pre-install']=record['scripts']['pre-install'].replace('exit 3','exit 1')
                 if fault=='collision': record['files'].clear()
                 if fault=='legacy-conflicts': record['conflicts']=['os-bind']
                 with patch.object(components.releases,'query_package',return_value=(identity,edges)), \
