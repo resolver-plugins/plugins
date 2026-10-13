@@ -348,7 +348,9 @@ the FreeBSD VM's package repository configuration.
 
 The `Test BIND plugin` pull-request workflow discovers every active
 `release/bind-rp/<series>` branch, materializes its `dns/bind/src` tree, and
-runs the canonical `dns/bind/tests` suite from the pull request. It also runs
+runs the canonical `dns/bind/tests` suite from the pull request. Release-source
+helper checks load the CI code and committed repository key from the same
+`master` checkout. The workflow also runs
 the CI helper tests for BIND profile changes, including package-owned
 runtime approval candidate PRs. Do not add a static release
 matrix: a newly created release branch is included automatically.
