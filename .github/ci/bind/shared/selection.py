@@ -19,7 +19,8 @@ OUTPUT_FIELDS = ("mode", "series", "source_ref", "profile_ref", "control_ref",
 SHARED_PATHS = (".github/ci/bind/shared/", ".github/ci/shared/")
 PACKAGE_DEFINITION = "dns/bind/Makefile"
 APPROVAL_LINE = re.compile(r"^\s*RP_BIND_(?:VERSION|PORTS_COMMIT)\s*[?+:!]?=")
-SHARED_FILES = {"docs/package-repository/resolver-plugins.pub", "scripts/install-os-bind-rp.sh"}
+SHARED_FILES = {"docs/package-repository/resolver-plugins.pub", "scripts/install-os-bind-rp.sh",
+                "scripts/install-os-bind-rp-prerequisites.py"}
 
 
 def watches(component, path):
@@ -166,15 +167,30 @@ def discover_changed_paths(event, document):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("select-event",))
-    parser.add_argument("--component", choices=KINDS, required=True)
-    parser.add_argument("--event-file", type=Path, required=True)
-    parser.add_argument("--refs-file", type=Path, required=True)
-    parser.add_argument("--changed-paths-file", type=Path, help="explicit paths; otherwise discover the complete event delta")
-    parser.add_argument("--output", type=Path, required=True, help="JSON selection output")
-    parser.add_argument("--github-output", type=Path, help="append fixed Actions outputs")
-    parser.add_argument("--pr-base-ref")
+    commands = parser.add_subparsers(dest="command", required=True)
+    matrix = commands.add_parser("release-matrix")
+    matrix.add_argument("--refs-file", type=Path, required=True)
+    matrix.add_argument("--output", type=Path, required=True)
+    event_parser = commands.add_parser("select-event")
+    event_parser.add_argument("--component", choices=KINDS, required=True)
+    event_parser.add_argument("--event-file", type=Path, required=True)
+    event_parser.add_argument("--refs-file", type=Path, required=True)
+    event_parser.add_argument("--changed-paths-file", type=Path, help="explicit paths; otherwise discover the complete event delta")
+    event_parser.add_argument("--output", type=Path, required=True, help="JSON selection output")
+    event_parser.add_argument("--github-output", type=Path, help="append fixed Actions outputs")
+    event_parser.add_argument("--pr-base-ref")
     args = parser.parse_args()
+    if args.command == "release-matrix":
+        series = []
+        for line in args.refs_file.read_text().splitlines():
+            _object_id, ref = line.split("\t", maxsplit=1)
+            candidate = ref.removeprefix("refs/heads/release/bind-rp/")
+            if re.fullmatch(r"\d+\.\d+", candidate) is None:
+                raise ValueError(f"invalid release branch name: {ref}")
+            series.append(candidate)
+        with args.output.open("a") as stream:
+            print(f"series={json.dumps(sorted(set(series)))}", file=stream)
+        return
     document = json.loads(args.event_file.read_text())
     event = normalize_event(document, pr_base_ref=args.pr_base_ref)
     if (event["name"] == "workflow_dispatch" and event["inputs"]["mode"] == "development"

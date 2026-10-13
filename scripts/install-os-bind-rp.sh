@@ -4,6 +4,8 @@ set -eu
 
 readonly public_key_sha256=bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e
 readonly repository_base_url=https://resolver-plugins.github.io/repository/pkg
+readonly prerequisite_helper_url=https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp-prerequisites.py
+readonly prerequisite_helper_sha256=8612f183e333a9de8ff09177511a8612cb9e5446f1a03928d727f468599a2764
 # pkg uses legacy/SHA256 hex and type-2 BLAKE2b z-base32 file digests.
 readonly file_checksum_pattern='^((1\$)?[[:xdigit:]]{64}|2\$[ybndrfg8ejkmcpqxot1uwisza345h769]{103})$'
 
@@ -364,25 +366,12 @@ read_plugin_requirements() {
     plugin_archive=$(archive_path_for "os-bind-rp-$candidate_plugin_version")
     "$pkg_static_command" info -F "$plugin_archive" --raw --raw-format json \
         > "$temporary_directory/plugin-manifest.json" || fail 'could not inspect plugin prerequisites'
-    requirements=$(python3 - "$temporary_directory/plugin-manifest.json" <<'PY'
-import json
-from pathlib import Path
-import re
-import sys
-
-record = json.loads(Path(sys.argv[1]).read_text())
-formula = re.fullmatch(r"bind920 >= (9\.20\.[0-9]+(?:_[1-9][0-9]*)?)", record.get("dep_formula", ""))
-deps = record.get("deps") or {}
-core = deps.get("opnsense") or {}
-runtime = deps.get("bind920") or {}
-if (formula is None or set(deps) != {"opnsense", "bind920"}
-        or core.get("origin") != "opnsense/opnsense"
-        or runtime.get("origin") != "dns/bind920"
-        or re.fullmatch(r"[0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?", core.get("version", "")) is None):
-    raise SystemExit("invalid plugin prerequisite manifest")
-print(formula[1] + "|" + core["version"])
-PY
-    ) || fail 'could not read authenticated plugin prerequisites'
+    prerequisite_helper="$temporary_directory/install-os-bind-rp-prerequisites.py"
+    fetch -o "$prerequisite_helper" "$prerequisite_helper_url" || fail 'could not fetch plugin prerequisite reader'
+    [ "$(sha256 -q "$prerequisite_helper")" = "$prerequisite_helper_sha256" ] || \
+        fail 'plugin prerequisite reader fingerprint verification failed'
+    requirements=$(python3 "$prerequisite_helper" "$temporary_directory/plugin-manifest.json") || \
+        fail 'could not read authenticated plugin prerequisites'
     minimum_bind920_version=${requirements%%|*}
     minimum_opnsense_version=${requirements#*|}
     installed_core=$(installed_record opnsense)

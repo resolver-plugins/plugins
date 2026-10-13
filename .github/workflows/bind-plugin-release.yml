@@ -14,7 +14,7 @@ on:
       - 'Mk/**'
       - 'Scripts/**'
       - 'Templates/**'
-      - 'scripts/install-os-bind-rp.sh'
+      - 'scripts/install-os-bind-rp*'
   pull_request_target:
     types: [closed]
     branches: ['release/bind-rp/**']
@@ -122,13 +122,8 @@ jobs:
             --trusted-directory artifacts/trusted --intake-directory "artifacts/$SERIES/intake" \
             --repository resolver-plugins/repository --output "$RUNNER_TEMP/controller.json"
           printf 'control_commit=%s\nsource_commit=%s\n' "$control_commit" "$source_commit" >> "$GITHUB_OUTPUT"
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os
-          with open(os.environ['RUNNER_TEMP'] + '/controller.json') as stream:
-              controller = json.load(stream)
-          for field in ('freebsd_release', 'producer_action', 'selection_sha256'):
-              print(field + '=' + controller[field])
-          PY
+          python3 -I .github/ci/shared/workflow_data.py outputs "$RUNNER_TEMP/controller.json" \
+            freebsd_release producer_action selection_sha256 >> "$GITHUB_OUTPUT"
       - id: trusted
         uses: actions/upload-artifact@v4
         with:
@@ -207,7 +202,7 @@ jobs:
             python3 -I .github/ci/bind/shared/components.py validate \
               --component bind_plugin --series "$series" --trusted-directory "$RP_TRUSTED_DIRECTORY" \
               --selection-sha256 "$RP_SELECTION_SHA256" >/dev/null
-            action=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["producer_action"])' "$RP_TRUSTED_DIRECTORY/selection.json")
+            action=$(python3 -I .github/ci/shared/workflow_data.py field "$RP_TRUSTED_DIRECTORY/selection.json" producer_action)
             if [ "$action" = build ]; then
               if [ '${{ needs.select.outputs.mode }}' = development ]; then
                 export RP_PLUGIN_DEVEL=yes
@@ -409,12 +404,8 @@ jobs:
         env:
           SERIES: ${{ needs.select.outputs.series }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import hashlib, os
-          with open('artifacts/' + os.environ['SERIES'] + '/repository/composition-inputs.json', 'rb') as stream:
-              digest = hashlib.sha256(stream.read()).hexdigest()
-          print('composition_sha256=' + digest)
-          PY
+          composition_sha256=$(sha256sum "artifacts/$SERIES/repository/composition-inputs.json" | cut -d ' ' -f 1)
+          printf 'composition_sha256=%s\n' "$composition_sha256" >> "$GITHUB_OUTPUT"
       - id: repository
         uses: actions/upload-artifact@v4
         with:

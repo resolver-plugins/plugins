@@ -520,6 +520,9 @@ def main() -> None:
     discover_parser.add_argument('--metadata-path', required=True)
     discover_parser.add_argument('--tools-repository', required=True)
     discover_parser.add_argument('--control-commit', required=True)
+    outputs_parser = commands.add_parser('github-outputs')
+    outputs_parser.add_argument('--discovery', required=True)
+    outputs_parser.add_argument('--output', required=True)
     seal_parser = commands.add_parser('seal-plan')
     seal_parser.add_argument('--discovery', required=True)
     seal_parser.add_argument('--core-commit', required=True)
@@ -534,6 +537,15 @@ def main() -> None:
     try:
         if arguments.command == 'discover':
             print(json.dumps(discover(arguments), sort_keys=True))
+        elif arguments.command == 'github-outputs':
+            discovery = json.loads(Path(arguments.discovery).read_text())
+            if discovery.get('action') == 'blocked':
+                raise ValueError(f"upstream synchronization is blocked: {discovery.get('reason')}")
+            with Path(arguments.output).open('a') as stream:
+                for field in ('action', 'series', 'upstream_commit', 'source_release',
+                              'target_release', 'tools_tag', 'freebsd_release'):
+                    value = discovery.get(field)
+                    print(f'{field}={value if value is not None else ""}', file=stream)
         elif arguments.command == 'seal-plan':
             discovery = json.loads(Path(arguments.discovery).read_text(encoding='utf-8'))
             sealed = seal_plan(discovery, arguments.core_commit, arguments.core_archive_url,

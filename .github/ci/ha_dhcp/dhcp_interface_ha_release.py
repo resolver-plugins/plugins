@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select HA DHCP releases and their reviewed OPNsense build repository."""
+"""Select HA DHCP releases and authenticate their reviewed BIND peers."""
 import argparse
 import json
 import os
@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bind.runtime import bind920_profile
+from bind.shared import components
 from shared import metadata_profile
 
 MAKEFILE = "net/dhcp-interface-ha/Makefile"
@@ -50,6 +51,26 @@ def validate_bind_inputs(directory, upstream, control_commit, digest):
     if recipe["ports_commit"] != approval["ports_commit"] or bind920_profile.package_version(recipe) != approval["version"]:
         raise ValueError("HA runtime recipe differs from sealed approval")
     metadata_profile.validate_tools_record(json.loads((directory / "tools-profile.json").read_text()), upstream)
+
+
+def authenticate_peers(runtime_channel, plugin_channel, *, series, upstream,
+                       reader_target, creator_target, approved_profile, runtime_approval,
+                       pkg_command):
+    """Authenticate retained BIND peers with the reader before selecting the creator."""
+    from shared import package_catalogue
+
+    components.select_role(upstream, reader_target, series, "reader", pkg_command)
+    package_catalogue.authenticate_components(runtime_channel, plugin_channel, None,
+        series=series, reader_target=reader_target, upstream=upstream, pkg_command=pkg_command,
+        approved_profile=approved_profile, runtime_approval=runtime_approval)
+    components.select_role(upstream, creator_target, series, "creator", pkg_command)
+
+
+def check_peers(repository_root, *, series, composition_sha256, repository,
+                owned_must_match=False):
+    composition = components.load_composition(repository_root, component="dhcp",
+        series=series, composition_sha256=composition_sha256)
+    components.check_composition_peers(repository, composition, owned_must_match=owned_must_match)
 
 
 def repository_snapshot(series):
@@ -95,18 +116,43 @@ def select(event, ref, source, before=None):
     return current != previous
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["select", "snapshot", "bind-inputs", "validate-bind-inputs"])
+    parser.add_argument("command", choices=["select", "snapshot", "bind-inputs", "validate-bind-inputs",
+                                           "authenticate-peers", "check-peers"])
     parser.add_argument("--series", default="26.7")
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--upstream", type=Path)
     parser.add_argument("--tools-repository", type=Path)
     parser.add_argument("--control-commit")
     parser.add_argument("--sha256")
-    args = parser.parse_args()
+    parser.add_argument("--runtime-channel", type=Path)
+    parser.add_argument("--plugin-channel", type=Path)
+    parser.add_argument("--reader-target", type=Path)
+    parser.add_argument("--creator-target", type=Path)
+    parser.add_argument("--approved-profile", type=Path)
+    parser.add_argument("--runtime-approval", type=Path)
+    parser.add_argument("--pkg-command", default="/usr/local/sbin/pkg-static")
+    parser.add_argument("--repository-root", type=Path)
+    parser.add_argument("--composition-sha256")
+    parser.add_argument("--repository", default="resolver-plugins/repository")
+    parser.add_argument("--owned-must-match", action="store_true")
+    args = parser.parse_args(argv)
     snapshot = repository_snapshot(args.series)
-    if args.command in {"bind-inputs", "validate-bind-inputs"}:
+    if args.command == "authenticate-peers":
+        if any(value is None for value in (args.runtime_channel, args.plugin_channel, args.upstream,
+               args.reader_target, args.creator_target, args.approved_profile, args.runtime_approval)):
+            parser.error("authenticate-peers requires both channels, upstream, both roles, approved profile and runtime approval")
+        authenticate_peers(args.runtime_channel, args.plugin_channel, series=args.series,
+            upstream=args.upstream, reader_target=args.reader_target, creator_target=args.creator_target,
+            approved_profile=args.approved_profile, runtime_approval=args.runtime_approval,
+            pkg_command=args.pkg_command)
+    elif args.command == "check-peers":
+        if args.repository_root is None or args.composition_sha256 is None:
+            parser.error("check-peers requires repository root and composition SHA-256")
+        check_peers(args.repository_root, series=args.series, composition_sha256=args.composition_sha256,
+            repository=args.repository, owned_must_match=args.owned_must_match)
+    elif args.command in {"bind-inputs", "validate-bind-inputs"}:
         if args.directory is None or args.upstream is None or not re.fullmatch(r"[0-9a-f]{40}", args.control_commit or ""):
             parser.error("shared BIND input commands require directory, upstream and immutable control commit")
         upstream = metadata_profile.load_profile(args.upstream, args.series)
@@ -125,3 +171,7 @@ if __name__ == "__main__":
         release = select(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"],
                          source, payload.get("before"))
         print(f"release={str(release).lower()}\nseries={args.series}\nsource_commit={source}")
+
+
+if __name__ == "__main__":
+    main()

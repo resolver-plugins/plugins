@@ -284,6 +284,12 @@ def render_commit_log_markdown(title: str, commit_log_text: str, empty_message: 
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+    evaluate_parser = subparsers.add_parser("evaluate")
+    evaluate_parser.add_argument("--makefile", type=Path, required=True)
+    evaluate_parser.add_argument("--ports-directory", type=Path, required=True)
+    evaluate_parser.add_argument("--ports-repository", required=True)
+    evaluate_parser.add_argument("--ports-commit", required=True)
+    evaluate_parser.add_argument("--output", type=Path, required=True)
     update_parser = subparsers.add_parser("update-approval")
     update_parser.add_argument("--ports-commit", required=True)
     update_parser.add_argument("--makefile", type=Path, required=True)
@@ -305,7 +311,22 @@ def main() -> None:
     render_parser.add_argument("--empty-message", required=True)
     render_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
-    if arguments.command == "update-approval":
+    if arguments.command == "evaluate":
+        current = current_from_approval(arguments.makefile, arguments.ports_directory)
+        candidate = candidate_from_files(
+            arguments.ports_repository, arguments.ports_commit,
+            arguments.ports_directory / "dns/bind920/Makefile",
+            arguments.ports_directory / "dns/bind920/distinfo", arguments.ports_commit)
+        old_version = current.distversion + (f"_{current.portrevision}" if current.portrevision else "")
+        package_version = candidate.distversion + (f"_{candidate.portrevision}" if candidate.portrevision else "")
+        outputs = dict(newer=str(candidate_is_newer(current, candidate)).lower(),
+            old_version=old_version, old_distversion=current.distversion, new_version=package_version,
+            candidate_distversion=candidate.distversion, portrevision=candidate.portrevision,
+            package_version=package_version)
+        with arguments.output.open("a", encoding="utf-8") as output:
+            for field, value in outputs.items():
+                print(f"{field}={value}", file=output)
+    elif arguments.command == "update-approval":
         arguments.makefile.write_text(render_updated_approval(
             arguments.makefile.read_text(encoding="utf-8"), arguments.version,
             arguments.ports_commit), encoding="utf-8")

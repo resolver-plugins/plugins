@@ -80,12 +80,30 @@ class Bind920CandidateTest(unittest.TestCase):
                 current = directory / 'plugin.Makefile'
                 preserved = '# Runtime approval follows the package definition.\n' + PLUGIN_PACKAGE
                 current.write_text(preserved + old_approval)
+                subprocess.run(['git', '-C', str(ports), 'fetch', '--quiet', '--no-tags',
+                                str(old_ports), old_profile['ports_commit']], check=True)
+                output = directory / 'candidate.outputs'
+                output.write_text('previous=retained\n')
+                evaluate = [sys.executable, str(MODULE_PATH), 'evaluate', '--makefile', str(current),
+                            '--ports-directory', str(ports), '--ports-repository', expected_profile['ports_repository'],
+                            '--ports-commit', expected_profile['ports_commit'], '--output', str(output)]
+                result = subprocess.run(evaluate, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(dict(previous='retained', newer='true', old_version='9.20.26_1',
+                    old_distversion='9.20.26', new_version=package_version,
+                    candidate_distversion=package_version.split('_')[0],
+                    portrevision=str(expected_profile['portrevision']), package_version=package_version),
+                    dict(line.split('=', 1) for line in output.read_text().splitlines()))
+                self.assertEqual(preserved + old_approval, current.read_text())
                 result = subprocess.run([
                     sys.executable, str(MODULE_PATH), 'update-approval', '--makefile', str(current),
                     '--ports-commit', expected_profile['ports_commit'], '--version', package_version,
                 ], capture_output=True, text=True)
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(preserved + approval, current.read_text())
+                result = subprocess.run(evaluate, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual('false', dict(line.split('=', 1) for line in output.read_text().splitlines())['newer'])
                 generated = bind920_candidate.bind920_profile.resolve_profile(
                     bind920_candidate.bind920_profile.approval_from_makefile(current.read_text()), repository=ports)
                 self.assertEqual(expected_profile, generated)

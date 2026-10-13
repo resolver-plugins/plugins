@@ -169,7 +169,7 @@ def test_failed_uploaded_verification_keeps_release_draft(release):
     assert "--draft" in calls.run_gh.call_args.args[0]
 
 
-def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification():
+def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification(tmp_path, monkeypatch):
     test_workflow = (ROOT / '.github/workflows/ha-dhcp-interface-tests.yml').read_text()
     watched = ['.github/ci/ha_dhcp/build.sh', '.github/ci/shared/package_catalogue.py',
                '.github/ci/bind/shared/components.py', '.github/ci/bind/runtime/bind920_profile.py',
@@ -203,8 +203,28 @@ def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verifi
             if 'uses: actions/checkout@' in step:
                 assert re.search(r'^          ref: ([^\n]+)$', step, re.MULTILINE)[1] == expected, name
 
+    publish = jobs['publish']
+    assert publish.index('package_catalogue.py validate') < publish.index('check-peers') < publish.index('Mint distribution repository token')
+    assert publish.index('dhcp_interface_ha_channel.py promote') < publish.index('--owned-must-match') < publish.index('package_catalogue.py publish')
+    composition = dict(component='dhcp', series='26.7', components={
+        name: {'current_tag': name} for name in ('bind_runtime', 'bind_plugin', 'dhcp')})
+    monkeypatch.setattr(selection.components, 'load_composition', Mock(return_value=composition))
+    from shared import package_catalogue
+    fetch = Mock(side_effect=lambda repository, component, *args: composition['components'][component])
+    monkeypatch.setattr(package_catalogue, 'fetch', fetch)
+    command = ['check-peers', '--series', '26.7', '--repository-root', str(tmp_path),
+               '--composition-sha256', 'd' * 64, '--repository', 'example.invalid/distribution']
+    for owned, expected in [(False, ['bind_runtime', 'bind_plugin']),
+                            (True, ['bind_runtime', 'bind_plugin', 'dhcp'])]:
+        fetch.reset_mock()
+        selection.main(command + (['--owned-must-match'] if owned else []))
+        assert [call.args[1] for call in fetch.call_args_list] == expected
+    fetch.side_effect = lambda *args: {'current_tag': 'changed-peer'}
+    with pytest.raises(RuntimeError, match='registered component changed'):
+        selection.main(command)
 
-def test_builder_retains_target_parser_and_native_installation_gates():
+
+def test_builder_retains_target_parser_and_native_installation_gates(tmp_path, monkeypatch):
     builder = (CI / 'ha_dhcp/build-dhcp-interface-ha.sh').read_text()
     assert builder.index('package_checksums.py"') < builder.index('"$pkg_static" add "$package"')
     assert builder.index('"$pkg_static" check -s') < builder.index('cp "$package" "$output/"')
@@ -216,11 +236,26 @@ def test_builder_retains_target_parser_and_native_installation_gates():
         assert 'export RP_OPNSENSE_SNAPSHOT' in script
     native = next(step for step in workflow_steps(signer) if 'uses: vmactions/freebsd-vm@' in step)
     body = textwrap.dedent(re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', native, re.MULTILINE)[1])
-    assert body.index('dhcp_interface_ha_release.py') < body.index("series, 'reader', pkg)")
+    assert body.index('snapshot --series') < body.index('authenticate-peers')
     assert 'export RP_OPNSENSE_SNAPSHOT' in body
-    assert body.index("series, 'reader', pkg)") < body.index('package_catalogue.authenticate_components(')
-    assert body.index('package_catalogue.authenticate_components(') < body.index("series, 'creator', pkg)")
-    assert body.index("series, 'creator', pkg)") < body.index('base64 -d')
+    assert body.index('authenticate-peers') < body.index('base64 -d')
+    from shared import package_catalogue
+    calls = Mock()
+    monkeypatch.setattr(selection.components, 'select_role', calls.select_role)
+    monkeypatch.setattr(package_catalogue, 'authenticate_components', calls.authenticate)
+    command = ['authenticate-peers', '--series', '26.7',
+        '--runtime-channel', str(tmp_path / 'runtime'), '--plugin-channel', str(tmp_path / 'plugin'),
+        '--upstream', str(tmp_path / 'upstream.json'), '--reader-target', str(tmp_path / 'reader.json'),
+        '--creator-target', str(tmp_path / 'creator.json'), '--approved-profile', str(tmp_path / 'recipe.json'),
+        '--runtime-approval', str(tmp_path / 'approval.mk')]
+    selection.main(command)
+    assert [call[0] for call in calls.mock_calls] == ['select_role', 'authenticate', 'select_role']
+    assert [call.args[3] for call in calls.select_role.call_args_list] == ['reader', 'creator']
+    calls.reset_mock()
+    calls.authenticate.side_effect = ValueError('untrusted peer')
+    with pytest.raises(ValueError, match='untrusted peer'):
+        selection.main(command)
+    assert [call[0] for call in calls.mock_calls] == ['select_role', 'authenticate']
     for line in verifier.splitlines():
         if 'target_pkg.py" install' in line or 'target_pkg.py" verify' in line:
             assert '"$RP_READER_PKG_METADATA"' in line

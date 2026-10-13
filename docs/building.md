@@ -41,6 +41,9 @@ GitHub Actions implementations use floating major release tags, such as
 Package source, build input, signing and archive provenance checks still use
 their recorded immutable identities.
 
+Shell scripts and workflow shell steps call standalone Python commands. Keep
+Python logic in `.py` files rather than inline strings or shell heredocs.
+
 ## Local build
 
 The [runtime release workflow](../.github/workflows/bind-runtime-release.yml)
@@ -301,7 +304,7 @@ python3 -I .github/ci/bind/shared/components.py inputs \
   --trusted-directory artifacts/trusted/runtime --intake-directory "artifacts/$series/runtime-intake" \
   --output artifacts/runtime-controller.json
 export RP_TRUSTED_DIRECTORY=artifacts/trusted/runtime
-export RP_SELECTION_SHA256=$(python3 -c 'import json; print(json.load(open("artifacts/runtime-controller.json"))["selection_sha256"])')
+export RP_SELECTION_SHA256=$(python3 -I .github/ci/shared/workflow_data.py field artifacts/runtime-controller.json selection_sha256)
 # In the profile's matching disposable FreeBSD environment:
 .github/ci/bind/runtime/build-bind920.sh "$series" "artifacts/$series/runtime-producer"
 ```
@@ -320,7 +323,7 @@ python3 -I .github/ci/bind/shared/components.py inputs \
   --trusted-directory artifacts/trusted/plugin --intake-directory "artifacts/$series/plugin-intake" \
   --repository resolver-plugins/repository --output artifacts/plugin-controller.json
 export RP_TRUSTED_DIRECTORY=artifacts/trusted/plugin
-export RP_SELECTION_SHA256=$(python3 -c 'import json; print(json.load(open("artifacts/plugin-controller.json"))["selection_sha256"])')
+export RP_SELECTION_SHA256=$(python3 -I .github/ci/shared/workflow_data.py field artifacts/plugin-controller.json selection_sha256)
 RP_RUNTIME_DIRECTORY="artifacts/$series/plugin-intake/bind_runtime" RP_PLUGIN_DEVEL=yes \
 SOURCE_COMMIT="$source_commit" \
 .github/ci/bind/plugin/build-os-bind-rp.sh "$series" "artifacts/$series/plugin-producer"

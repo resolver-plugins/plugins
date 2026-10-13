@@ -256,26 +256,10 @@ jobs:
             git config --global --add safe.directory "$PWD"
             RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py snapshot --series "$SERIES")
             export RP_OPNSENSE_SNAPSHOT
-            python3 -I - "$SERIES" <<'PY'
-            import os
-            import sys
-            from pathlib import Path
-            sys.path.insert(0, str(Path('.github/ci').resolve()))
-            from bind.shared import components
-            from shared import package_catalogue
-            series = sys.argv[1]
-            upstream = Path('artifacts/trusted/upstream.json')
-            reader = Path(os.environ['RP_READER_PKG_METADATA'])
-            pkg = '/usr/local/sbin/pkg-static'
-            components.select_role(upstream, reader, series, 'reader', pkg)
-            package_catalogue.authenticate_components(
-                Path('artifacts') / series / 'bind-runtime',
-                Path('artifacts') / series / 'bind-plugin', None,
-                series=series, reader_target=reader, upstream=upstream, pkg_command=pkg,
-                approved_profile=Path('artifacts/trusted/bind920-profile.json'),
-                runtime_approval=Path('artifacts/trusted/runtime-approval.mk'))
-            components.select_role(upstream, Path(os.environ['RP_TARGET_PKG_METADATA']), series, 'creator', pkg)
-            PY
+            python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py authenticate-peers \
+              --series "$SERIES" --runtime-channel "artifacts/$SERIES/bind-runtime" --plugin-channel "artifacts/$SERIES/bind-plugin" \
+              --upstream artifacts/trusted/upstream.json --reader-target "$RP_READER_PKG_METADATA" --creator-target "$RP_TARGET_PKG_METADATA" \
+              --approved-profile artifacts/trusted/bind920-profile.json --runtime-approval artifacts/trusted/runtime-approval.mk
             umask 077
             key=.rp-dhcpha-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
@@ -410,17 +394,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
           python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
             --component dhcp --series "$SERIES" --composition-sha256 "$RP_COMPOSITION_SHA256"
-          python3 -I - "$SERIES" <<'PY'
-          import os
-          import sys
-          from pathlib import Path
-          sys.path.insert(0, str(Path('.github/ci').resolve()))
-          from bind.shared import components
-          composition = components.load_composition(
-              Path('artifacts') / sys.argv[1] / 'repository', component='dhcp',
-              series=sys.argv[1], composition_sha256=os.environ['RP_COMPOSITION_SHA256'])
-          components.check_composition_peers('resolver-plugins/repository', composition)
-          PY
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py check-peers \
+            --series "$SERIES" --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256"
       - name: Mint distribution repository token
         id: distribution-token
         uses: actions/create-github-app-token@v2
@@ -438,17 +413,8 @@ jobs:
           set -eu
           python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py promote \
             --directory "artifacts/$SERIES/repository/current" --recovery "$RUNNER_TEMP/dhcpha-recovery"
-          python3 -I - "$SERIES" <<'PY'
-          import os
-          import sys
-          from pathlib import Path
-          sys.path.insert(0, str(Path('.github/ci').resolve()))
-          from bind.shared import components
-          composition = components.load_composition(
-              Path('artifacts') / sys.argv[1] / 'repository', component='dhcp',
-              series=sys.argv[1], composition_sha256=os.environ['RP_COMPOSITION_SHA256'])
-          components.check_composition_peers('resolver-plugins/repository', composition, owned_must_match=True)
-          PY
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py check-peers \
+            --series "$SERIES" --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256" --owned-must-match
           python3 .github/ci/shared/package_catalogue.py publish \
             --repository-root "artifacts/$SERIES/repository" --component dhcp --series "$SERIES" \
             --composition-sha256 "$RP_COMPOSITION_SHA256" --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/catalogue-recovery"

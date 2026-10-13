@@ -1349,6 +1349,7 @@ def main():
             command.add_argument("--profile-control-commit")
             command.add_argument("--repository-root", type=Path)
             command.add_argument("--composition-sha256")
+            command.add_argument("--build-recipe", type=Path)
     stage = commands.add_parser("stage")
     stage.add_argument("--component", choices=KINDS, required=True)
     stage.add_argument("--series", required=True)
@@ -1467,6 +1468,14 @@ def main():
                 raise ValueError("authenticated runtime differs from frozen controller receipt")
         elif args.directory is not None:
             result = validate_candidate(args.directory, result, args.trusted_directory, pkg_command=args.pkg_command)
+        if args.command == "validate" and args.build_recipe is not None:
+            if result["producer_action"] != "build":
+                raise ValueError("build wrapper requires the sealed build action")
+            digest = releases.sha256(args.build_recipe)
+            if digest != _json(args.trusted_directory / "producer-inputs.json")["build_recipe_sha256"]:
+                raise ValueError("build wrapper differs from the selected recipe")
+            print(digest)
+            return
     encoded = json.dumps(result, sort_keys=True, indent=2) + "\n"
     if args.output is not None:
         args.output.write_text(encoded, encoding="utf-8")

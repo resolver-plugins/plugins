@@ -111,13 +111,8 @@ jobs:
       - name: Run focused CI helper tests
         run: |
           python -m compileall -q .github/ci
-          python -I - "$RUNNER_TEMP/runtime-approval.mk" <<'PYAPPROVAL'
-          from pathlib import Path
-          import sys
-          sys.path.insert(0, str(Path('.github/ci').resolve()))
-          from bind.runtime import bind920_profile
-          print(bind920_profile.approval_from_makefile(Path(sys.argv[1]).read_text())['version'])
-          PYAPPROVAL
+          python -I .github/ci/bind/runtime/bind920_profile.py approval-field \
+            --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" --field version
           python .github/ci/ci-tests/test_bind920_candidate.py
           python .github/ci/ci-tests/test_bind920_reuse.py
           python .github/ci/ci-tests/test_release_channel_provenance.py
@@ -135,27 +130,18 @@ jobs:
       - id: releases
         name: Discover supported release branches
         shell: bash
+        env:
+          PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
+          if [[ "$PR_BASE" == release/bind-rp/* ]]; then
+            git fetch --no-tags origin \
+              'refs/heads/master:refs/remotes/origin/control-plane'
+            git checkout refs/remotes/origin/control-plane -- .github/ci
+          fi
           git ls-remote --heads origin 'refs/heads/release/bind-rp/*' > "$RUNNER_TEMP/release-refs"
-          python3 - "$RUNNER_TEMP/release-refs" "$GITHUB_OUTPUT" <<'PY'
-          import json
-          import pathlib
-          import re
-          import sys
-
-          refs_path, output_path = map(pathlib.Path, sys.argv[1:])
-          prefix = 'refs/heads/release/bind-rp/'
-          series = []
-          for line in refs_path.read_text(encoding='utf-8').splitlines():
-              _commit, ref = line.split('\t', maxsplit=1)
-              candidate = ref.removeprefix(prefix)
-              if not re.fullmatch(r'\d+\.\d+', candidate):
-                  raise SystemExit(f'invalid release branch name: {ref}')
-              series.append(candidate)
-          with output_path.open('a', encoding='utf-8') as output:
-              print(f'series={json.dumps(sorted(set(series)))}', file=output)
-          PY
+          python3 .github/ci/bind/shared/selection.py release-matrix \
+            --refs-file "$RUNNER_TEMP/release-refs" --output "$GITHUB_OUTPUT"
 
   test:
     needs: [changes, discover]

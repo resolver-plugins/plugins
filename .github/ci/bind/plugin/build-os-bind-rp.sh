@@ -37,8 +37,7 @@ command -v "$python_command" >/dev/null 2>&1 || fail 'python3 is not available a
     --component bind_plugin --series "$series" --trusted-directory "$trusted" \
     --selection-sha256 "$RP_SELECTION_SHA256" >/dev/null
 selection_field() {
-    "$python_command" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' \
-        "$trusted/selection.json" "$1"
+    "$python_command" -I "$script_directory/../../shared/workflow_data.py" field "$trusted/selection.json" "$1"
 }
 [ "$(selection_field producer_action)" = build ] || fail 'plugin wrapper requires sealed build action'
 [ "$(selection_field source_commit)" = "$SOURCE_COMMIT" ] || fail 'source differs from sealed selection'
@@ -115,16 +114,9 @@ creator_release=$(creator_field release)
 creator_ports_commit=$(creator_field ports_commit)
 creator_recipe_path=$(creator_field recipe_path)
 opnsense_version=$("$pkg_static" rquery -r OPNsense -e '%n = opnsense' '%v')
-minimum_opnsense=$(
-    "$python_command" -I -c '
-import pathlib, sys
-sys.path.insert(0, sys.argv[1])
-from bind.shared.components import plugin_requirement_from_makefile, validate_plugin_source
-requirement = plugin_requirement_from_makefile(pathlib.Path(sys.argv[2]).read_text())
-validate_plugin_source(pathlib.Path(sys.argv[3]), requirement)
-print(requirement["minimum_opnsense_version"])
-' "$script_directory/../.." "$trusted/plugin-package.mk" "$repository_root"
-)
+minimum_opnsense=$("$python_command" -I "$script_directory/plugin_release.py" source-minimum \
+    --series "$series" --trusted-directory "$trusted" --selection-sha256 "$RP_SELECTION_SHA256" \
+    --repository-root "$repository_root")
 case "$("$pkg_static" version -t "$opnsense_version" "$minimum_opnsense")" in
     '='|'>') ;;
     *) fail "OPNsense $opnsense_version is below the required $minimum_opnsense" ;;

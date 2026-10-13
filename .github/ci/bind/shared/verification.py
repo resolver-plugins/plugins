@@ -596,9 +596,29 @@ def source_binding(plan, evidence):
     save_evidence(evidence, "source-binding", dict(product_hash=product["product_hash"], source_commit=selection["source_commit"]))
 
 
+def prepare_feeds(plan, root):
+    """Prepare isolated catalogue configuration for each authenticated feed."""
+    key = str(CHECKOUT / "docs/package-repository/resolver-plugins.pub")
+    entries = plan["repositories"]
+    if plan["selection"]["component"] == "bind_plugin" and plan["selection"]["mode"] == "production":
+        entries = entries[2:] + entries[:2]
+    for index, entry in enumerate(entries):
+        directory = root / str(index)
+        repos = directory / "repos"
+        repos.mkdir(parents=True)
+        signature = "none" if entry["unsigned"] else "pubkey"
+        (repos / "qualification.conf").write_text('qualification: {\n'
+            f' url: {json.dumps(entry["url"])}, mirror_type: "none", signature_type: "{signature}",\n'
+            f' pubkey: {json.dumps(key)}, enabled: yes\n}}\n')
+        (directory / "archives.txt").write_text("".join(path + "\n" for path in entry["packages"]))
+        (directory / "directory.txt").write_text(entry["directory"] + "\n")
+        (directory / "complete.txt").write_text(str(any(Path(path).name.startswith("os-bind-rp") for path in entry["packages"])))
+    (root / "indices.txt").write_text("".join(str(index) + "\n" for index in range(len(entries))))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("preflight", "authenticate", "installed", "source", "canary", "installer-before", "installer-after", "native-install"))
+    parser.add_argument("command", choices=("preflight", "authenticate", "installed", "source", "canary", "installer-before", "installer-after", "native-install", "prepare-feeds"))
     parser.add_argument("--component", required=True, choices=bind.KINDS)
     parser.add_argument("--series", required=True)
     parser.add_argument("--mode", required=True, choices=("local", "public"))
@@ -615,6 +635,10 @@ def main():
     plan = preflight(args.repository_root, args.trusted_directory, args.component, args.series, args.mode)
     if args.command == "preflight":
         save_evidence(args.evidence_directory, "preflight", plan)
+    elif args.command == "prepare-feeds":
+        if args.directory is None:
+            parser.error("prepare-feeds requires --directory")
+        prepare_feeds(plan, args.directory)
     elif args.command == "authenticate":
         authenticate(plan, args.trusted_directory, args.evidence_directory, args.mode)
     elif args.command == "installed":

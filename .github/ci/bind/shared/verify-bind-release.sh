@@ -95,28 +95,7 @@ require_once "config.inc";
 '
 
 # An isolated feed configuration prevents a global repository from hiding a missing payload.
-python3 - "$evidence/preflight.json" "$temporary" "$checkout/docs/package-repository/resolver-plugins.pub" <<'PY'
-import json
-from pathlib import Path
-import sys
-plan=json.loads(Path(sys.argv[1]).read_text())
-root,key=Path(sys.argv[2]),sys.argv[3]
-entries=plan['repositories']
-if plan['selection']['component']=='bind_plugin' and plan['selection']['mode']=='production':
-    entries=entries[2:]+entries[:2]
-for index,entry in enumerate(entries):
-    directory=root / str(index)
-    repos=directory / 'repos'
-    repos.mkdir(parents=True)
-    signature='none' if entry['unsigned'] else 'pubkey'
-    (repos / 'qualification.conf').write_text('qualification: {\n'
-        f' url: {json.dumps(entry["url"])}, mirror_type: "none", signature_type: "{signature}",\n'
-        f' pubkey: {json.dumps(key)}, enabled: yes\n}}\n')
-    (directory / 'archives.txt').write_text(''.join(path+'\n' for path in entry['packages']))
-    (directory / 'directory.txt').write_text(entry['directory']+'\n')
-    (directory / 'complete.txt').write_text(str(any(Path(path).name.startswith('os-bind-rp') for path in entry['packages'])))
-(root / 'indices.txt').write_text(''.join(str(index)+'\n' for index in range(len(entries))))
-PY
+metadata prepare-feeds --directory "$temporary"
 
 set --
 while IFS= read -r dependency
@@ -141,8 +120,7 @@ then
         /usr/local/sbin/pkg-static install -y -r OPNsense os-bind
     fi
     metadata native-install --install-case "$install_case"
-    outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["outcome"])' \
-        "$evidence/native-$install_case-result.json")
+    outcome=$(python3 -I "$ci/shared/workflow_data.py" field "$evidence/native-$install_case-result.json" outcome)
     if [ "$outcome" = installed ]
     then
         metadata source

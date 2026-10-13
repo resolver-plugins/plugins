@@ -195,6 +195,11 @@ can happen before P's guard, making migration preflight necessary. Native
 manifest `conflicts` entries are installed database relationships and do not
 express the prohibited-name policy enforced by the source guard.
 
+The installer fetches its standalone Python prerequisite reader from this
+repository and checks its expected SHA-256 before execution. Keep the shell
+installer and reader in the same commit; when changing the reader, update its
+expected digest in the installer.
+
 Before mutation, the installer fetches exact candidate archives,
 requires non-null per-file checksums, records their SHA-256 values, creates a
 local isolated repository, and dry-runs the frozen transaction. It locks the

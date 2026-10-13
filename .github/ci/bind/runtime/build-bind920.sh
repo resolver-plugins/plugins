@@ -28,28 +28,10 @@ export RP_UPSTREAM_METADATA RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
 target_pkg_metadata=$RP_TARGET_PKG_METADATA
 profile_path=$trusted_directory/bind920-profile.json
 
-build_recipe_sha256=$("$python_command" - "$script_directory" "$trusted_directory" \
-    "$series" "$RP_SELECTION_SHA256" <<'PY'
-import json
-from pathlib import Path
-import sys
-
-script = Path(sys.argv[1])
-sys.path.insert(0, str(script.parents[1]))
-from bind.shared import components
-from shared import release_channel
-
-trusted = Path(sys.argv[2])
-selection = components.load_selection(trusted, component="bind_runtime", series=sys.argv[3],
-                                      selection_sha256=sys.argv[4])
-if selection["producer_action"] != "build":
-    raise SystemExit("runtime wrapper requires the sealed build action")
-recipe = release_channel.sha256(script / "build-bind920.sh")
-if recipe != json.loads((trusted / "producer-inputs.json").read_text())["build_recipe_sha256"]:
-    raise SystemExit("runtime build wrapper differs from the selected recipe")
-print(recipe)
-PY
-) || fail 'invalid sealed runtime build inputs'
+build_recipe_sha256=$("$python_command" -I "$script_directory/../shared/components.py" validate \
+    --component bind_runtime --series "$series" --trusted-directory "$trusted_directory" \
+    --selection-sha256 "$RP_SELECTION_SHA256" --build-recipe "$script_directory/build-bind920.sh") ||
+    fail 'invalid sealed runtime build inputs'
 
 metadata_field() {
     "$python_command" "$script_directory/bind920_profile.py" "$profile_path" "$1"
@@ -98,19 +80,8 @@ makefile="$ports_directory/dns/bind920/Makefile"
 distinfo="$ports_directory/dns/bind920/distinfo"
 [ "$(sha256 -q "$makefile")" = "$makefile_sha256" ] || fail 'BIND Makefile hash does not match pinned metadata'
 [ "$(sha256 -q "$distinfo")" = "$distinfo_sha256" ] || fail 'BIND distinfo hash does not match pinned metadata'
-"$python_command" - "$script_directory" "$profile_path" "$resolved_commit" "$makefile" "$distinfo" <<'PYVERIFY'
-import json
-from pathlib import Path
-import sys
-sys.path.insert(0, str(Path(sys.argv[1]).parents[1]))
-from bind.runtime import bind920_profile
-expected = json.loads(Path(sys.argv[2]).read_text())
-actual = bind920_profile.profile_from_recipe(
-    {"version": bind920_profile.package_version(expected), "ports_commit": expected["ports_commit"]},
-    sys.argv[3], Path(sys.argv[4]).read_bytes(), Path(sys.argv[5]).read_bytes())
-if actual != expected:
-    raise SystemExit("native Ports recipe differs from the sealed approval")
-PYVERIFY
+"$python_command" -I "$script_directory/bind920_profile.py" "$profile_path" verify-recipe \
+    --ports-commit "$resolved_commit" --makefile "$makefile" --distinfo "$distinfo"
 
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \

@@ -14,6 +14,7 @@ def test_pr_workflow_runs_the_full_suite_without_publication_authority():
     for path in ('.github/ci/example.py', '.github/workflows/example.yml',
                  'dns/bind/Makefile', 'net/dhcp-interface-ha/Makefile', 'Mk/plugins.mk',
                  'Scripts/version.sh', 'Templates/plugin.in', 'scripts/install-os-bind-rp.sh',
+                 'scripts/install-os-bind-rp-prerequisites.py',
                  'docs/package-repository/resolver-plugins.pub'):
         selected = False
         for pattern in patterns:

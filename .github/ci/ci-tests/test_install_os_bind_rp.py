@@ -9,6 +9,7 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 INSTALLER = REPOSITORY_ROOT / "scripts" / "install-os-bind-rp.sh"
+PREREQUISITES = REPOSITORY_ROOT / "scripts" / "install-os-bind-rp-prerequisites.py"
 PUBLIC_KEY_SHA256 = "bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e"
 FIXTURE_ROOT = REPOSITORY_ROOT / ".github" / "ci-local"
 
@@ -50,6 +51,7 @@ def installer_environment(
     minimum_runtime: str = "9.20.26",
     minimum_core: str = "26.1.11_10",
     retained_checksum: str = "(null)",
+    altered_helper: bool = False,
 ) -> tuple[dict[str, str], Path, Path]:
     log = tmp_path / "commands.log"
     tty = tmp_path / "tty"
@@ -94,6 +96,8 @@ def installer_environment(
             "RP_TEST_RETAINED_CHECKSUM": retained_checksum,
             "RP_TEST_PAYLOAD_ROOT": str(tmp_path / "payloads"),
             "RP_TEST_KEY_SHA256": key_sha256,
+            "RP_TEST_ALTERED_HELPER": "yes" if altered_helper else "no",
+            "RP_TEST_HELPER_EXECUTION_MARKER": str(tmp_path / "helper-executed"),
             "RP_TEST_LOG": str(log),
             "RP_TEST_OPNSENSE_VERSION": opnsense_version,
             "RP_TEST_ABI": pkg_abi,
@@ -125,6 +129,12 @@ def assert_recovery_archive(path, root, name, version, origin):
 
 
 def write_command_fixtures(directory: Path) -> None:
+    altered_helper = directory / "altered-prerequisite-reader.py"
+    altered_helper.write_text(
+        "import os\nfrom pathlib import Path\n"
+        "Path(os.environ['RP_TEST_HELPER_EXECUTION_MARKER']).touch()\n",
+        encoding="utf-8",
+    )
     write_executable(
         directory / "opnsense-version",
         "#!/bin/sh\nprintf '%s\\n' \"$RP_TEST_OPNSENSE_VERSION\"\n",
@@ -134,7 +144,12 @@ def write_command_fixtures(directory: Path) -> None:
         "#!/bin/sh\n"
         "{ printf 'fetch'; for argument in \"$@\"; do printf ' %s' \"$argument\"; done; printf '\\n'; } >> \"$RP_TEST_LOG\"\n"
         "[ \"$1\" = -o ] || exit 64\n"
-        "printf 'test public key\\n' > \"$2\"\n",
+        "case \"$3\" in\n"
+        "  */install-os-bind-rp-prerequisites.py)\n"
+        f"    cp {shlex.quote(str(PREREQUISITES))} \"$2\"\n"
+        f"    if [ \"$RP_TEST_ALTERED_HELPER\" = yes ]; then cp {shlex.quote(str(altered_helper))} \"$2\"; fi;;\n"
+        "  *) printf 'test public key\\n' > \"$2\";;\n"
+        "esac\n",
     )
     write_executable(
         directory / "sha256",
@@ -525,6 +540,16 @@ def test_preserves_a_trusted_key_when_the_replacement_fails_verification(tmp_pat
     calls = log.read_text(encoding="utf-8")
     assert " update " not in calls
     assert " install " not in calls
+
+
+def test_rejects_altered_prerequisite_reader_before_execution(tmp_path: Path) -> None:
+    result, log, _ = run_installer(tmp_path, altered_helper=True)
+
+    assert result.returncode != 0
+    assert "plugin prerequisite reader fingerprint verification failed" in result.stderr
+    assert not (tmp_path / "helper-executed").exists()
+    assert " install " not in log.read_text(encoding="utf-8")
+    assert not (tmp_path / "backups").exists()
 
 
 def test_prompts_for_and_installs_the_fallback_when_bind_is_ineligible(tmp_path: Path) -> None:

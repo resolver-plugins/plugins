@@ -168,7 +168,7 @@ def prepare_source_assets(component, output, series, selection):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("materialize", "intake", "installed-runtime", "reuse", "validate-output", "source-assets"):
+    for name in ("materialize", "intake", "installed-runtime", "reuse", "validate-output", "source-assets", "source-minimum"):
         command = commands.add_parser(name)
         command.add_argument("--series", required=True)
         command.add_argument("--trusted-directory", type=Path, required=True)
@@ -183,6 +183,8 @@ def main():
             command.add_argument("--repository-root", type=Path, required=True)
             command.add_argument("--composition-sha256", required=True)
             command.add_argument("--output-directory", type=Path, required=True)
+        elif name == "source-minimum":
+            command.add_argument("--repository-root", type=Path, required=True)
         else:
             command.add_argument("--directory", type=Path, required=True)
             if name == "reuse":
@@ -209,6 +211,10 @@ def main():
         fetch_intake(args.repository, args.trusted_directory, selection, args.output_directory)
     elif args.command == "installed-runtime":
         print(installed_runtime(args.directory, args.trusted_directory, args.series, args.pkg_command))
+    elif args.command == "source-minimum":
+        requirement = components.plugin_requirement_from_makefile((args.trusted_directory / "plugin-package.mk").read_text())
+        components.validate_plugin_source(args.repository_root, requirement)
+        print(requirement["minimum_opnsense_version"])
     elif args.command == "reuse":
         copy_cached_producer(args.directory, args.output_directory, selection, args.trusted_directory, args.pkg_command)
     elif args.command == "validate-output":

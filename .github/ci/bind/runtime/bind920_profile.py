@@ -292,6 +292,14 @@ def write_provenance(
 
 
 def main() -> None:
+    if sys.argv[1:2] == ["approval-field"]:
+        parser = argparse.ArgumentParser(description="Read the package-owned runtime approval")
+        parser.add_argument("command", choices=("approval-field",))
+        parser.add_argument("--runtime-approval", type=Path, required=True)
+        parser.add_argument("--field", choices=("version", "ports_commit"), required=True)
+        arguments = parser.parse_args()
+        print(approval_from_makefile(arguments.runtime_approval.read_text())[arguments.field])
+        return
     if sys.argv[1:2] == ["generate"]:
         parser = argparse.ArgumentParser(description="Generate exact approved Ports recipe input")
         parser.add_argument("command", choices=("generate",))
@@ -303,7 +311,7 @@ def main() -> None:
         return
     parser = argparse.ArgumentParser()
     parser.add_argument("metadata_path", type=Path)
-    parser.add_argument("command", choices=(*FIELDS, "package_version", "fingerprint", "provenance"))
+    parser.add_argument("command", choices=(*FIELDS, "package_version", "fingerprint", "provenance", "verify-recipe"))
     parser.add_argument("series", nargs="?")
     parser.add_argument("freebsd_release", nargs="?")
     parser.add_argument("--architecture", default="x86_64")
@@ -312,8 +320,20 @@ def main() -> None:
     parser.add_argument("--bind-tools", type=Path)
     parser.add_argument("--bind920", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--ports-commit")
+    parser.add_argument("--makefile", type=Path)
+    parser.add_argument("--distinfo", type=Path)
     arguments = parser.parse_args()
     profile = load_profile(arguments.metadata_path)
+    if arguments.command == "verify-recipe":
+        if arguments.ports_commit is None or arguments.makefile is None or arguments.distinfo is None:
+            parser.error("verify-recipe requires --ports-commit, --makefile and --distinfo")
+        actual = profile_from_recipe(
+            {"version": package_version(profile), "ports_commit": profile["ports_commit"]},
+            arguments.ports_commit, arguments.makefile.read_bytes(), arguments.distinfo.read_bytes())
+        if actual != profile:
+            raise ValueError("native Ports recipe differs from the sealed approval")
+        return
     if arguments.command in FIELDS:
         print(profile[arguments.command])
         return

@@ -150,12 +150,20 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
     command = [sys.executable, '-I', str(REPOSITORY_ROOT / '.github/ci/bind/shared/components.py'),
                'validate', '--component', component, '--series', '26.7', '--trusted-directory', str(trusted),
                '--selection-sha256', digest, '--expected-control-commit', control,
-               '--profile-control-commit', profile_control]
+               '--profile-control-commit', profile_control, '--build-recipe', str(recipe)]
     checked = subprocess.run(['sh', '-c', shlex.join(command) + ' && : > ' + shlex.quote(str(sentinel))],
                              cwd=repository, capture_output=True, text=True)
     assert (checked.returncode == 0) is (changed is None), checked.stderr
     assert sentinel.exists() is (changed is None)
     if changed is None:
+        assert checked.stdout.strip() == hashlib.sha256(recipe.read_bytes()).hexdigest()
+        if component == 'bind_runtime':
+            verified = subprocess.run([sys.executable, '-I',
+                REPOSITORY_ROOT / '.github/ci/bind/runtime/bind920_profile.py',
+                trusted / 'bind920-profile.json', 'verify-recipe', '--ports-commit', pin['ports_commit'],
+                '--makefile', ports / 'dns/bind920/Makefile', '--distinfo', ports / 'dns/bind920/distinfo'],
+                capture_output=True, text=True)
+            assert verified.returncode == 0, verified.stderr
         producer = tmp_path / 'producer'
         producer.mkdir()
         inputs = json.loads((trusted / 'producer-inputs.json').read_text())
