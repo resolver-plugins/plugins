@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and publish os-bind-rp repositories as GitHub Release assets."""
+"""Shared package Release, Pages publication and recovery primitives."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import shutil
 import re
 import subprocess
@@ -19,15 +20,13 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from bind import bind920_profile
+from bind.runtime import bind920_profile
 from shared import target_pkg
 
 
 SERIES_PATTERN = re.compile(r"[0-9]+\.[0-9]+")
 PULL_REQUEST_PATTERN = re.compile(r"[1-9][0-9]*")
-DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)")
-PLUGIN_PATTERN = re.compile(r"os-bind-rp-(?!devel-).+\.pkg")
-PROVENANCE_NAME = "bind920-provenance.json"
+DEVELOPMENT_RELEASE_PATTERN = re.compile(r"pr-([1-9][0-9]*)-([0-9]+\.[0-9]+)(?:-bind-(?:runtime|plugin))?")
 PACKAGE_VERSION_PATTERN = re.compile(r"[0-9][0-9A-Za-z._-]*")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -56,24 +55,6 @@ def validate_bind_fingerprint(fingerprint: object) -> str:
     return fingerprint
 
 
-def snapshot_channel_tag(series: str, version: str, fingerprint: object) -> str:
-    """Return an immutable, self-contained rollback snapshot tag."""
-    if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
-        raise ValueError("invalid package version")
-    fingerprint = validate_bind_fingerprint(fingerprint)
-    return f"{channel_tag(series)}-os-bind-rp-{version}-bind-{fingerprint}"
-
-
-def source_release_tag(series: str, version: str, fingerprint: object) -> str:
-    """Return the immutable, human-facing plugin release tag."""
-    if SERIES_PATTERN.fullmatch(series) is None:
-        raise ValueError("invalid series")
-    if PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
-        raise ValueError("invalid package version")
-    fingerprint = validate_bind_fingerprint(fingerprint)
-    return f"os-bind-rp-{series}-{version}-bind-{fingerprint}"
-
-
 def validate_package_abi(abi: str) -> None:
     """Accept only package ABIs supported by the static package channel."""
     if not isinstance(abi, str) or PACKAGE_ABI_PATTERN.fullmatch(abi) is None:
@@ -94,6 +75,10 @@ def package_release_title(tag: str) -> str:
     if ha_channel:
         series, version = ha_channel.groups()
         return f"HA DHCP Interface {series} — {version or 'latest'}"
+    component = re.fullmatch(r"pkg-(\d+\.\d+)-bind-(runtime|plugin)(?:-(.+)-[0-9a-f]{64})?", tag)
+    if component:
+        series, kind, version = component.groups()
+        return f"BIND {kind} {series} — {version or 'latest'}"
     value = tag.removeprefix("pkg-")
     if value == tag:
         raise ValueError("invalid package release tag")
@@ -109,44 +94,6 @@ def package_release_title(tag: str) -> str:
     raise ValueError("invalid package release tag")
 
 
-def select_plugin_packages(directory: Path) -> list[Path]:
-    """Return production plugin archives supplied for one signed catalogue."""
-    packages = sorted(
-        path for path in directory.glob("os-bind-rp-*.pkg") if PLUGIN_PATTERN.fullmatch(path.name)
-    )
-    if not packages:
-        if list(directory.glob("os-bind-rp-devel-*.pkg")):
-            raise ValueError("development os-bind-rp package is not a production package")
-        raise ValueError("missing production os-bind-rp package")
-    return packages
-
-
-def read_bind_package_records(provenance_path: Path) -> dict[str, dict[str, str]]:
-    """Read the exact BIND package identities from trusted build provenance."""
-    try:
-        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-        records = provenance["packages"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise ValueError("BIND provenance is invalid") from error
-    if not isinstance(records, dict) or set(records) != {"bind-tools", "bind920"}:
-        raise ValueError("BIND provenance is invalid")
-    expected_origins = {"bind-tools": "dns/bind-tools", "bind920": "dns/bind920"}
-    validated = {}
-    for package_name, expected_origin in expected_origins.items():
-        record = records[package_name]
-        if not isinstance(record, dict) or set(record) != {"name", "version", "origin", "filename"}:
-            raise ValueError("BIND provenance is invalid")
-        if (
-            record["name"] != package_name
-            or record["origin"] != expected_origin
-            or not all(isinstance(record[field], str) and record[field] for field in record)
-            or Path(record["filename"]).name != record["filename"]
-        ):
-            raise ValueError("BIND provenance is invalid")
-        validated[package_name] = record
-    return validated
-
-
 def validate_bind_provenance(
     provenance: object,
     profile: object,
@@ -155,7 +102,9 @@ def validate_bind_provenance(
     package_creator: object,
 ) -> dict[str, dict[str, str]]:
     """Accept only the BIND pair implied by trusted control-plane metadata."""
-    if not isinstance(provenance, dict):
+    if (not isinstance(provenance, dict)
+            or type(provenance.get("schema")) is not int
+            or provenance["schema"] != bind920_profile.PROVENANCE_SCHEMA):
         raise ValueError("BIND provenance is invalid")
     try:
         expected = bind920_profile.build_provenance(
@@ -165,6 +114,7 @@ def validate_bind_provenance(
             "x86_64",
             package_creator,
             provenance["packages"],
+            recipe_sha256=provenance["build_recipe_sha256"],
         )
     except (KeyError, ValueError) as error:
         raise ValueError("BIND provenance is invalid") from error
@@ -173,19 +123,6 @@ def validate_bind_provenance(
     if provenance != expected:
         raise ValueError("BIND provenance does not match the trusted profile")
     return expected["packages"]
-
-
-def select_channel_packages(directory: Path) -> list[Path]:
-    """Select a plugin and the exact BIND archive names recorded in provenance."""
-    records = read_bind_package_records(directory / PROVENANCE_NAME)
-    selected = []
-    for package_name in ("bind-tools", "bind920"):
-        filename = records[package_name]["filename"]
-        package = directory / filename
-        if not package.is_file():
-            raise ValueError(f"missing production {package_name} package")
-        selected.append(package)
-    return [*selected, *select_plugin_packages(directory)]
 
 
 def query_package(package: Path, pkg_command: str) -> tuple[tuple[str, str, str, str], set[tuple[str, str, str]]]:
@@ -227,57 +164,6 @@ def read_package_manifest(package: Path, pkg_command: str) -> dict[str, object]:
     return manifest
 
 
-def validate_channel_package_manifests(
-    packages: list[Path], provenance_path: Path, pkg_command: str, series: str
-) -> str:
-    """Validate a self-contained package set against its BIND provenance."""
-    if len(packages) != 3:
-        raise ValueError("channel does not contain one BIND pair and one plugin")
-    if SERIES_PATTERN.fullmatch(series) is None:
-        raise ValueError("invalid series")
-    records = read_bind_package_records(provenance_path)
-    common_abi = None
-    identities = {}
-    dependencies = {}
-    for expected_name, package in zip(("bind-tools", "bind920", "os-bind-rp"), packages, strict=True):
-        identity, package_dependencies = query_package(package, pkg_command)
-        name, version, origin, abi = identity
-        if name != expected_name:
-            raise ValueError("channel package has an unexpected identity")
-        if expected_name in records:
-            expected = records[expected_name]
-            if (name, version, origin, package.name) != (
-                expected["name"], expected["version"], expected["origin"], expected["filename"]
-            ):
-                raise ValueError(f"{expected_name} package does not match BIND provenance")
-        elif origin != "opnsense/os-bind-rp":
-            raise ValueError("channel plugin has an unexpected origin")
-        else:
-            match = SERIES_PLUGIN_VERSION_PATTERN.fullmatch(version)
-            if match is None or match.group("series") != series:
-                raise ValueError("channel plugin version does not match OPNsense series")
-            if package.name != f"{name}-{version}.pkg":
-                raise ValueError("channel plugin filename does not match package identity")
-        if common_abi is None:
-            common_abi = abi
-        elif abi != common_abi:
-            raise ValueError("channel package ABI does not match the BIND pair")
-        identities[name] = (version, origin)
-        dependencies[name] = package_dependencies
-    bind_tools_version, _ = identities["bind-tools"]
-    if ("bind-tools", "dns/bind-tools", bind_tools_version) not in dependencies["bind920"]:
-        raise ValueError("bind920 does not depend on the channel bind-tools package")
-    plugin_runtime = {edge for edge in dependencies["os-bind-rp"] if edge[0] == "bind920"}
-    if plugin_runtime != {("bind920", "dns/bind920", identities["bind920"][0])}:
-        raise ValueError("plugin package BIND dependency differs from channel runtime")
-    if read_package_manifest(packages[2], pkg_command).get("dep_formula") != "bind920 >= 9.20.26":
-        raise ValueError("plugin package does not declare the required BIND dependency formula")
-    if common_abi is None:
-        raise ValueError("channel does not contain package ABIs")
-    validate_package_abi(common_abi)
-    return common_abi
-
-
 def stage_selected_repository(
     packages: list[Path],
     output: Path,
@@ -296,148 +182,20 @@ def stage_selected_repository(
         shutil.copy2(package, destination)
     for source in metadata:
         shutil.copy2(source, output / source.name)
-    subprocess.run([pkg_command, "repo", str(output), f"rsa:{private_key}"], check=True)
+    subprocess.run([pkg_command, "repo", str(output), f"rsa:{private_key}"], check=True, stdout=sys.stderr)
+    for alias, target in (("data.tzst", "data.pkg"), ("packagesite.tzst", "packagesite.pkg")):
+        link, source = output / alias, output / target
+        if link.is_symlink():
+            if os.readlink(link) != target or source.is_symlink() or not source.is_file():
+                raise ValueError("generated catalogue alias has an unexpected target")
+            link.unlink()
+            shutil.copy2(source, link)
     assets = sorted(path for path in output.iterdir() if path.is_file())
     if any(package not in assets for package in copied) or any(
         output / source.name not in assets for source in metadata
     ) or not any(path.name.startswith("meta") for path in assets):
         raise ValueError("pkg repo did not produce a repository catalog")
     return assets
-
-
-def read_build_metadata(path: Path) -> dict[str, str]:
-    """Read the small, line-oriented build identity used by channel.json."""
-    if not path.is_file():
-        raise ValueError("plugin build metadata does not exist")
-    fields = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        if not separator or not key or not value or key in fields:
-            raise ValueError("plugin build metadata is invalid")
-        fields[key] = value
-    if (
-        set(fields) != BUILD_METADATA_FIELDS
-        or SERIES_PATTERN.fullmatch(fields.get("series", "")) is None
-        or not all(fields.values())
-    ):
-        raise ValueError("plugin build metadata is invalid")
-    return fields
-
-
-def validate_build_metadata(
-    metadata_path: Path,
-    upstream_path: Path,
-    provenance_path: Path,
-    target_pkg_metadata: Path,
-    series: str,
-    source_commit: str,
-) -> dict[str, str]:
-    """Match every security-relevant build field to trusted release inputs."""
-    metadata = read_build_metadata(metadata_path)
-    try:
-        upstream = json.loads(upstream_path.read_text(encoding="utf-8"))
-        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-        bind_version = provenance["packages"]["bind920"]["version"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise ValueError("trusted release metadata is invalid") from error
-    if not isinstance(upstream, dict) or any(
-        not isinstance(upstream.get(field), str) or not upstream[field]
-        for field in TRUSTED_BUILD_FIELDS
-    ):
-        raise ValueError("trusted release metadata is invalid")
-    expected = {field: upstream[field] for field in TRUSTED_BUILD_FIELDS}
-    target = target_pkg.load_target(target_pkg_metadata, series, upstream=upstream_path, role="creator")
-    package_creator = target.record()
-    if (
-        {field: metadata[field] for field in TRUSTED_BUILD_FIELDS} != expected
-        or metadata["series"] != series
-        or metadata["source_commit"] != source_commit
-        or metadata["opnsense_core_commit"] != metadata["core_commit"]
-        or metadata["bind920"] != bind_version
-        or metadata["bind_source"] != "resolver"
-        or provenance.get("series") != series
-        or provenance.get("freebsd_release") != metadata["freebsd_release"]
-        or provenance.get("package_creator") != package_creator
-        or metadata["pkg_creator"] != package_creator["version"]
-        or metadata["pkg_abi"] != package_creator["abi"]
-        or metadata["creator_release"] != target.release
-        or metadata["creator_ports_commit"] != target.ports_commit
-        or metadata["creator_recipe_path"] != target.recipe_path
-    ):
-        raise ValueError("build artifact does not match trusted release metadata")
-    return metadata
-
-
-def stage_channel_repository(
-    packages_directory: Path,
-    output: Path,
-    private_key: Path,
-    pkg_command: str,
-    target_pkg_metadata: Path,
-    control_commit: str,
-) -> list[Path]:
-    """Create one signed, self-contained current or rollback channel."""
-    if COMMIT_PATTERN.fullmatch(control_commit) is None:
-        raise ValueError("invalid control commit")
-    provenance = packages_directory / PROVENANCE_NAME
-    if not provenance.is_file():
-        raise ValueError("BIND provenance does not exist")
-    packages = select_channel_packages(packages_directory)
-    build_metadata = packages_directory / "build-metadata.txt"
-    metadata = read_build_metadata(build_metadata)
-    required_build_fields = {"upstream_commit", "core_commit", "tools_tag", "freebsd_release"}
-    try:
-        bind_metadata = json.loads(provenance.read_text(encoding="utf-8"))
-        bind_identity = {
-            field: bind_metadata[field]
-            for field in ("fingerprint", "freebsd_release", "architecture")
-        }
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise ValueError("BIND provenance is invalid") from error
-    if bind_metadata.get("series") != metadata["series"]:
-        raise ValueError("BIND provenance series does not match plugin build metadata")
-    target_package = target_pkg.load_target(target_pkg_metadata, metadata["series"])
-    package_creator = target_package.record()
-    records = read_bind_package_records(provenance)
-    if (
-        bind_metadata.get("freebsd_release") != metadata["freebsd_release"]
-        or records["bind920"]["version"] != metadata["bind920"]
-        or metadata["opnsense_core_commit"] != metadata["core_commit"]
-        or bind_metadata.get("package_creator") != package_creator
-        or metadata["pkg_creator"] != package_creator["version"]
-        or target_package.role != "creator"
-        or target_package.release != metadata["tools_tag"]
-        or metadata["pkg_abi"] != package_creator["abi"]
-        or metadata["creator_release"] != target_package.release
-        or metadata["creator_ports_commit"] != target_package.ports_commit
-        or metadata["creator_recipe_path"] != target_package.recipe_path
-    ):
-        raise ValueError("BIND provenance does not match plugin build metadata")
-    package_abi = validate_channel_package_manifests(
-        packages, provenance, pkg_command, metadata["series"]
-    )
-    if package_abi != target_package.identity.abi:
-        raise ValueError("channel package ABI does not match the trusted target package profile")
-    stage_selected_repository(
-        packages, output, private_key, pkg_command, [provenance, build_metadata]
-    )
-    channel_manifest = {
-        "schema": 5,
-        "creator_source": target_package.source_record(),
-        "control_commit": control_commit,
-        "series": metadata["series"],
-        "package_abi": package_abi,
-        "plugin_version": packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"),
-        "source_commit": metadata["source_commit"],
-        "build": {field: metadata[field] for field in sorted(required_build_fields)},
-        "bind": bind_identity,
-        "package_creator": package_creator,
-        "packages": {package.name: sha256(package) for package in packages},
-    }
-    (output / "channel.json").write_text(
-        json.dumps(channel_manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
-    return sorted(path for path in output.iterdir() if path.is_file())
 
 
 def asset_order(directory: Path) -> list[Path]:
@@ -659,148 +417,14 @@ def verify_abi_endpoint(url: str, expected_channel: Path) -> None:
 
 def validate_static_channel(directory: Path) -> None:
     data = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
-    if data.get("kind") == "combined":
+    if data.get("kind") in {"combined", "bind-stack"}:
         from shared import package_catalogue
         package_catalogue.validate(directory)
+    elif data.get("kind") in {"bind-runtime", "bind-plugin"}:
+        from bind.shared import components
+        components.validate_component(directory, data["kind"].replace("-", "_"), data["series"])
     else:
-        validate_channel_directory(directory)
-
-
-def validate_bind_component(channel: object, provenance: object, metadata: dict[str, str]) -> None:
-    """Check current-format sidecars using their recorded build identity."""
-    if not isinstance(channel, dict) or not isinstance(provenance, dict):
-        raise ValueError("prior channel audit metadata is inconsistent")
-    fields = {
-        "schema", "series", "plugin_version", "source_commit", "build", "bind", "packages",
-        "package_creator", "package_abi", "control_commit", "creator_source",
-    }
-    if type(channel.get("schema")) is not int or channel["schema"] != 5 or set(channel) != fields:
-        raise ValueError("prior channel audit metadata is inconsistent")
-    provenance_fields = {
-        "schema", "fingerprint", "series", "freebsd_release", "architecture", "packages",
-        "package_creator", "build_recipe_sha256",
-    }
-    if (type(provenance.get("schema")) is not int or provenance["schema"] != 4
-            or set(provenance) != provenance_fields):
-        raise ValueError("prior BIND provenance is inconsistent")
-    validate_bind_fingerprint(provenance.get("fingerprint"))
-    validate_bind_fingerprint(provenance.get("build_recipe_sha256"))
-    records = provenance.get("packages")
-    if not isinstance(records, dict) or set(records) != {"bind-tools", "bind920"}:
-        raise ValueError("prior BIND provenance is inconsistent")
-    for name, record in records.items():
-        expected = dict(name=name, version=metadata["bind920"], origin=f"dns/{name}",
-                        filename=f"{name}-{metadata['bind920']}.pkg")
-        if record != expected:
-            raise ValueError("prior BIND package identity is inconsistent")
-    expected_bind = {key: provenance.get(key) for key in ("fingerprint", "freebsd_release", "architecture")}
-    if (channel["series"] != metadata["series"] or provenance.get("series") != metadata["series"]
-            or channel["source_commit"] != metadata["source_commit"]
-            or channel["build"] != {key: metadata[key] for key in TRUSTED_BUILD_FIELDS - {"series"}}
-            or channel["bind"] != expected_bind
-            or provenance.get("freebsd_release") != metadata["freebsd_release"]
-            or provenance.get("architecture") != "x86_64"
-            or metadata["opnsense_core_commit"] != metadata["core_commit"]):
-        raise ValueError("prior channel audit metadata is inconsistent")
-    if (not isinstance(channel["control_commit"], str)
-            or COMMIT_PATTERN.fullmatch(channel["control_commit"]) is None):
-        raise ValueError("prior channel control commit is invalid")
-    creator = target_pkg.normalize_creator(channel["package_creator"])
-    if (channel["package_creator"] != provenance.get("package_creator")
-            or creator["version"] != metadata["pkg_creator"]
-            or creator["abi"] != metadata["pkg_abi"]):
-        raise ValueError("prior channel creator is inconsistent")
-    if channel["package_abi"] != creator["abi"]:
-        raise ValueError("prior channel ABI is inconsistent")
-    source = channel["creator_source"]
-    target_pkg.validate_source(source, creator, channel["series"])
-    if (source["release"] != metadata["tools_tag"] or source["release"] != metadata["creator_release"]
-            or source["commit"] != metadata["creator_ports_commit"]
-            or source["path"] != metadata["creator_recipe_path"]):
-        raise ValueError("prior channel creator source is inconsistent")
-
-
-def validate_channel_directory(directory: Path, *, target_metadata: Path | None = None, upstream: Path | None = None) -> None:
-    """Reject malformed recovery bytes before mutating the current channel."""
-    packages = select_channel_packages(directory)
-    if len(packages) != 3:
-        raise ValueError("prior channel has an unexpected package set")
-    try:
-        channel = json.loads((directory / "channel.json").read_text(encoding="utf-8"))
-        provenance = json.loads((directory / PROVENANCE_NAME).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError("prior channel audit metadata is invalid") from error
-    expected_checksums = {package.name: sha256(package) for package in packages}
-    if not isinstance(channel, dict) or channel.get("packages") != expected_checksums:
-        raise ValueError("prior channel package checksum does not match its audit manifest")
-    metadata = read_build_metadata(directory / "build-metadata.txt")
-    validate_bind_component(channel, provenance, metadata)
-    if target_metadata is not None:
-        target = target_pkg.load_target(target_metadata, channel["series"], upstream=upstream, role="creator")
-        creator = target_pkg.normalize_creator(channel.get("package_creator"))
-        if creator != target.record():
-            raise ValueError("channel creator differs from trusted creator")
-    if channel["plugin_version"] != packages[2].name.removeprefix("os-bind-rp-").removesuffix(".pkg"):
-        raise ValueError("prior channel plugin version is inconsistent")
-    public_key = directory / "resolver-plugins.pub"
-    assets = [path.name for path in directory.iterdir() if path.is_file()]
-    if (
-        not public_key.is_file()
-        or public_key.stat().st_size == 0
-        or not any(name.startswith("meta") for name in assets)
-        or not any(name.startswith(("data", "packagesite")) for name in assets)
-    ):
-        raise ValueError("prior channel signed catalogue is incomplete")
-
-
-def materialize_existing_snapshot(
-    repository: str,
-    series: str,
-    version: str,
-    source_commit: str,
-    output: Path,
-    public_key: Path,
-    package_creator: dict[str, str],
-    provenance: dict[str, object],
-) -> bool:
-    """Reuse the signed immutable bytes for an already-published package version."""
-    expected_bind = {
-        field: provenance.get(field)
-        for field in ("fingerprint", "freebsd_release", "architecture")
-    }
-    tag = snapshot_channel_tag(series, version, expected_bind["fingerprint"])
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        snapshot = snapshot_release(repository, tag, Path(temporary_directory))
-        if not snapshot.existed:
-            return False
-        validate_channel_directory(snapshot.directory)
-        try:
-            channel = json.loads(
-                (snapshot.directory / "channel.json").read_text(encoding="utf-8")
-            )
-        except (OSError, json.JSONDecodeError) as error:
-            raise ValueError("immutable snapshot audit metadata is invalid") from error
-        if (
-            not isinstance(channel, dict)
-            or channel.get("series") != series
-            or channel.get("plugin_version") != version
-            or channel.get("source_commit") != source_commit
-            or target_pkg.normalize_creator(channel.get("package_creator")) != package_creator
-            or channel.get("bind") != expected_bind
-            or any(value is None for value in expected_bind.values())
-        ):
-            raise ValueError("immutable snapshot does not match requested release")
-        try:
-            trusted_key = public_key.read_bytes()
-            snapshot_key = (snapshot.directory / "resolver-plugins.pub").read_bytes()
-        except OSError as error:
-            raise ValueError("immutable snapshot public key is unavailable") from error
-        if not trusted_key or snapshot_key != trusted_key:
-            raise ValueError("immutable snapshot public key does not match trusted key")
-        output.mkdir(parents=True, exist_ok=False)
-        shutil.copytree(snapshot.directory, output / "current")
-        shutil.copytree(snapshot.directory, output / "snapshot")
-    return True
+        raise ValueError("unsupported static channel format")
 
 
 class ReleaseSnapshot:
@@ -815,6 +439,7 @@ class ReleaseSnapshot:
         *,
         draft: bool = False,
         immutable: bool = False,
+        metadata: dict | None = None,
     ) -> None:
         self.tag = tag
         self.existed = existed
@@ -822,6 +447,7 @@ class ReleaseSnapshot:
         self.manifest = manifest
         self.draft = draft
         self.immutable = immutable
+        self.metadata = metadata
 
 
 def release_snapshots_match(left: ReleaseSnapshot, right: ReleaseSnapshot) -> bool:
@@ -830,6 +456,7 @@ def release_snapshots_match(left: ReleaseSnapshot, right: ReleaseSnapshot) -> bo
         left.existed != right.existed
         or left.draft != right.draft
         or left.immutable != right.immutable
+        or left.metadata != right.metadata
     ):
         return False
     if not left.existed:
@@ -869,49 +496,12 @@ def commit_is_ancestor_or_equal(current_commit: str, staged_commit: str) -> bool
     return result.returncode == 0
 
 
-def staged_source_descends_from_current(current: Path, staged: Path) -> bool:
-    """Return whether staged source and control lineages are non-decreasing."""
-    try:
-        current_channel = json.loads(
-            (current / "channel.json").read_text(encoding="utf-8")
-        )
-        staged_channel = json.loads(
-            (staged / "channel.json").read_text(encoding="utf-8")
-        )
-        current_commit = current_channel["source_commit"]
-        staged_commit = staged_channel["source_commit"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-        raise RuntimeError("cannot compare package channel source history") from error
-    if (
-        not isinstance(current_commit, str)
-        or not isinstance(staged_commit, str)
-        or COMMIT_PATTERN.fullmatch(current_commit) is None
-        or COMMIT_PATTERN.fullmatch(staged_commit) is None
-    ):
-        return False
-    if current_channel.get("schema") != 5 or staged_channel.get("schema") != 5:
-        return False
-    staged_control = staged_channel.get("control_commit")
-    if not isinstance(staged_control, str) or COMMIT_PATTERN.fullmatch(staged_control) is None:
-        return False
-    if not commit_is_ancestor_or_equal(current_commit, staged_commit):
-        return False
-    current_control = current_channel.get("control_commit")
-    if (
-        not isinstance(current_control, str)
-        or COMMIT_PATTERN.fullmatch(current_control) is None
-        or not commit_is_ancestor_or_equal(current_control, staged_control)
-    ):
-        return False
-    return current_commit != staged_commit or current_control != staged_control
-
-
 def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapshot:
     """Download and checksum every pre-promotion asset before changing a Release."""
     result = subprocess.run(
         [
             "gh", "release", "view", tag, "--repo", repository,
-            "--json", "assets,isDraft,isImmutable",
+            "--json", "assets,isDraft,isImmutable,name,body,isPrerelease",
         ],
         capture_output=True,
         text=True,
@@ -926,10 +516,14 @@ def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapsh
     assets = payload.get("assets")
     draft = payload.get("isDraft")
     immutable = payload.get("isImmutable")
+    metadata = {field: payload.get(field) for field in ("name", "body", "isPrerelease")}
     if (
         not isinstance(assets, list)
         or not isinstance(draft, bool)
         or not isinstance(immutable, bool)
+        or not isinstance(metadata["name"], str)
+        or metadata["body"] is not None and not isinstance(metadata["body"], str)
+        or not isinstance(metadata["isPrerelease"], bool)
         or not all(
             isinstance(asset, dict)
             and isinstance(asset.get("name"), str)
@@ -948,8 +542,10 @@ def snapshot_release(repository: str, tag: str, recovery: Path) -> ReleaseSnapsh
             raise RuntimeError(f"cannot preserve GitHub Release asset {tag}/{name}")
         checksums[name] = sha256(downloaded)
     manifest.write_text(json.dumps(checksums, sort_keys=True) + "\n", encoding="utf-8")
+    metadata["body"] = metadata["body"] or ""
+    (recovery / f"{tag}-release.json").write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
     return ReleaseSnapshot(
-        tag, True, directory, manifest, draft=draft, immutable=immutable
+        tag, True, directory, manifest, draft=draft, immutable=immutable, metadata=metadata
     )
 
 
@@ -1013,105 +609,113 @@ def restore_release(repository: str, snapshot: ReleaseSnapshot) -> None:
         for name, digest in checksums.items()
     ):
         raise RuntimeError(f"recovery assets for {snapshot.tag} do not match their manifest")
-    publish(repository, snapshot.tag, snapshot.directory, False)
+    metadata = snapshot.metadata
+    publish(repository, snapshot.tag, snapshot.directory,
+            metadata["isPrerelease"] if metadata is not None else False, draft=snapshot.draft)
+    if metadata is not None:
+        notes = snapshot.manifest.with_name(f"{snapshot.tag}-notes.md")
+        notes.write_text(metadata["body"], encoding="utf-8")
+        run_gh(["release", "edit", snapshot.tag, "--repo", repository,
+                "--title", metadata["name"], "--notes-file", str(notes),
+                f"--prerelease={str(metadata['isPrerelease']).lower()}",
+                f"--draft={str(snapshot.draft).lower()}"])
+        with tempfile.TemporaryDirectory() as temporary:
+            restored = snapshot_release(repository, snapshot.tag, Path(temporary))
+            if not release_snapshots_match(snapshot, restored):
+                raise RuntimeError(f"restored release metadata/bytes differ: {snapshot.tag}; saved at {snapshot.manifest.parent}")
 
 
-def publish_channels(
-    repository: str, channels: list[tuple[str, Path]], recovery: Path
-) -> None:
-    """Publish related channels while preserving immutable snapshot identity."""
+def publish_snapshot(repository: str, tag: str, directory: Path) -> None:
+    """Finalize exact draft bytes; published snapshots are never rewritten."""
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        before = snapshot_release(repository, tag, root / "before")
+        if before.existed and not before.draft:
+            if not snapshot_matches_directory(before, directory):
+                raise RuntimeError(f"published snapshot has different bytes: {tag}")
+            return
+        if not snapshot_matches_directory(before, directory):
+            publish(repository, tag, directory, False, draft=True)
+        uploaded = snapshot_release(repository, tag, root / "uploaded")
+        if not uploaded.draft or not snapshot_matches_directory(uploaded, directory):
+            raise RuntimeError(f"snapshot draft has different bytes: {tag}")
+        run_gh(["release", "edit", tag, "--draft=false", "--latest=false", "--repo", repository], attempts=1)
+        completed = snapshot_release(repository, tag, root / "completed")
+        if completed.draft or not snapshot_matches_directory(completed, directory):
+            raise RuntimeError(f"completed snapshot has different bytes: {tag}")
+
+
+def publish_channels(repository: str, groups: list[dict], recovery: Path) -> None:
+    """Complete immutable snapshots, then recover all touched mutable currents."""
+    fields = {"current_tag", "snapshot_tag", "directory", "validate", "can_advance"}
+    if not groups or any(set(group) != fields or not callable(group["validate"])
+                         or not callable(group["can_advance"]) for group in groups):
+        raise ValueError("invalid trusted publication groups")
+    tags = [group[key] for group in groups for key in ("current_tag", "snapshot_tag")]
+    if len(tags) != len(set(tags)):
+        raise ValueError("publication destinations must be distinct")
     recovery.mkdir(parents=True, exist_ok=False)
-    snapshots = [snapshot_release(repository, tag, recovery) for tag, _ in channels]
-    reusable_channels: set[str] = set()
-    for snapshot, (tag, directory) in zip(snapshots, channels, strict=True):
-        if snapshot.tag != tag:
-            raise RuntimeError("release snapshot does not match its requested channel")
-        if "-os-bind-rp-" in snapshot.tag and snapshot.existed:
-            if not snapshot_matches_directory(snapshot, directory):
-                raise RuntimeError(
-                    f"immutable rollback snapshot has different bytes: {snapshot.tag}"
-                )
-            reusable_channels.add(snapshot.tag)
-        if snapshot.existed and SERIES_PATTERN.fullmatch(snapshot.tag.removeprefix("pkg-")):
-            validate_channel_directory(snapshot.directory)
-    reusing_immutable = bool(reusable_channels)
-    for snapshot, (tag, directory) in zip(snapshots, channels, strict=True):
-        if (
-            snapshot.existed
-            and SERIES_PATTERN.fullmatch(tag.removeprefix("pkg-"))
-        ):
-            if snapshot_matches_directory(snapshot, directory):
-                reusable_channels.add(tag)
-            elif reusing_immutable:
-                raise RuntimeError(
-                    f"current channel has different bytes during snapshot retry: {tag}"
-                )
-            elif not staged_source_descends_from_current(snapshot.directory, directory):
-                raise RuntimeError(
-                    f"stale package promotion cannot replace current channel: {tag}"
-                )
+    snapshots = {tag: snapshot_release(repository, tag, recovery / "before") for tag in tags}
+    for group in groups:
+        directory = group["directory"]
+        group["validate"](directory)
+        current, snapshot = (snapshots[group[key]] for key in ("current_tag", "snapshot_tag"))
+        if current.existed:
+            if current.draft or current.immutable:
+                raise RuntimeError(f"registered current must be mutable and published: {current.tag}")
+            group["validate"](current.directory)
+            if (not snapshot_matches_directory(current, directory)
+                    and not group["can_advance"](current.directory, directory)):
+                raise RuntimeError(f"stale package promotion cannot replace current: {current.tag}")
+        if snapshot.existed and not snapshot.draft and not snapshot_matches_directory(snapshot, directory):
+            raise RuntimeError(f"published snapshot has different bytes: {snapshot.tag}")
     preflight_root = recovery / "preflight"
     preflight_root.mkdir()
-    preflight = [snapshot_release(repository, tag, preflight_root) for tag, _ in channels]
-    if any(
-        not release_snapshots_match(before, after)
-        for before, after in zip(snapshots, preflight, strict=True)
-    ):
+    preflight = {tag: snapshot_release(repository, tag, preflight_root) for tag in tags}
+    if any(not release_snapshots_match(snapshots[tag], preflight[tag]) for tag in tags):
         raise RuntimeError("package channel changed during publication preflight")
+    for group in groups:
+        group["validate"](group["directory"])
     mutated = []
     try:
-        for snapshot, (tag, directory) in zip(snapshots, channels, strict=True):
-            if tag in reusable_channels:
-                edit_package_release_title(repository, tag)
+        for group in groups:
+            group["validate"](group["directory"])
+            publish_snapshot(repository, group["snapshot_tag"], group["directory"])
+            completed = snapshot_release(repository, group["snapshot_tag"], recovery / "completed")
+            if completed.draft or not snapshot_matches_directory(completed, group["directory"]):
+                raise RuntimeError(f"completed snapshot readback differs: {completed.tag}")
+        for group in groups:
+            group["validate"](group["directory"])
+            snapshot = snapshots[group["current_tag"]]
+            if snapshot_matches_directory(snapshot, group["directory"]):
                 continue
             mutated.append(snapshot)
-            publish(repository, tag, directory, False)
-    except Exception:
+            publish(repository, snapshot.tag, group["directory"], False)
+            readback = snapshot_release(repository, snapshot.tag, recovery / "advanced")
+            if readback.draft or not snapshot_matches_directory(readback, group["directory"]):
+                raise RuntimeError(f"current readback differs: {snapshot.tag}")
+    except Exception as failure:
+        unfinished = {}
+        for group in groups:
+            try:
+                state = snapshot_release(repository, group["snapshot_tag"], recovery / "unfinished")
+                unfinished[state.tag] = {"existed": state.existed, "draft": state.draft}
+            except Exception as error:
+                unfinished[group["snapshot_tag"]] = {"read_error": str(error)}
+        (recovery / "unfinished-snapshots.json").write_text(json.dumps(unfinished, indent=2) + "\n")
         restore_errors = []
         for snapshot in reversed(mutated):
             try:
                 restore_release(repository, snapshot)
             except Exception as error:  # pragma: no cover - exercised against GitHub, not a fixture.
                 restore_errors.append(f"{snapshot.tag}: {error}")
+        (recovery / "restoration.json").write_text(json.dumps(dict(
+            failure=str(failure), restored=[snapshot.tag for snapshot in reversed(mutated)],
+            restore_errors=restore_errors), indent=2) + "\n")
         if restore_errors:
-            raise RuntimeError("promotion failed and recovery failed: " + "; ".join(restore_errors))
+            raise RuntimeError(f"promotion failed: {failure}; recovery at {recovery} also failed: "
+                               + "; ".join(restore_errors)) from failure
         raise
-
-
-def prune_snapshots(repository: str, series: str, keep: int = 5) -> None:
-    """Retain only the newest immutable self-contained snapshots for one series."""
-    if keep < 1:
-        raise ValueError("snapshot retention must be positive")
-    result = subprocess.run(
-        ["gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    pages = json.loads(result.stdout)
-    prefix = f"{channel_tag(series)}-os-bind-rp-"
-    snapshots = []
-    if not isinstance(pages, list):
-        raise RuntimeError("cannot list snapshot releases")
-    releases = [
-        release
-        for page in pages
-        for release in (page if isinstance(page, list) else [page])
-    ]
-    for release in releases:
-        if not isinstance(release, dict):
-            continue
-        tag = release.get("tag_name")
-        created = release.get("created_at")
-        if (
-            isinstance(tag, str)
-            and isinstance(created, str)
-            and tag.startswith(prefix)
-            and PACKAGE_VERSION_PATTERN.fullmatch(tag.removeprefix(prefix))
-        ):
-            snapshots.append((created, tag))
-    for _, tag in sorted(snapshots, reverse=True)[keep:]:
-        run_gh(["release", "delete", tag, "--yes", "--repo", repository])
 
 
 def mark_latest_package_channel(repository: str) -> None:
@@ -1246,15 +850,7 @@ def cleanup_pull_request_releases(repository: str, pull_number: str) -> None:
         cleanup_development_release(repository, tag)
 
 
-def parse_channel(value: str) -> tuple[str, Path]:
-    """Parse one exact mutable channel tag and its staged repository path."""
-    tag, separator, directory = value.partition("=")
-    if not separator or not tag or not directory:
-        raise argparse.ArgumentTypeError("channel must be TAG=DIRECTORY")
-    return tag, Path(directory)
-
-
-def publish(repository: str, tag: str, directory: Path, prerelease: bool) -> None:
+def publish(repository: str, tag: str, directory: Path, prerelease: bool, *, draft=False) -> None:
     """Create (if needed) and replace the assets of one GitHub Release."""
     title = package_release_title(tag)
     create = ["release", "create", tag, "--repo", repository, "--title", title]
@@ -1262,9 +858,16 @@ def publish(repository: str, tag: str, directory: Path, prerelease: bool) -> Non
         create.append("--prerelease")
     else:
         create.append("--latest=false")
+    if draft:
+        create.append("--draft")
     result = subprocess.run(["gh", *create], capture_output=True, text=True)
     if result.returncode and "already exists" not in result.stderr.lower():
         raise RuntimeError(result.stderr.strip() or "cannot create GitHub Release")
+    if draft:
+        with tempfile.TemporaryDirectory() as temporary:
+            state = snapshot_release(repository, tag, Path(temporary))
+            if not state.existed or not state.draft:
+                raise RuntimeError(f"snapshot is no longer an unpublished draft: {tag}")
     edit_package_release_title(repository, tag, prerelease)
     assets = asset_order(directory)
     existing = subprocess.run(
@@ -1329,46 +932,6 @@ def main() -> None:
     validate_provenance.add_argument("--series", required=True)
     validate_provenance.add_argument("--freebsd-release", required=True)
     validate_provenance.add_argument("--target-pkg-metadata", type=Path, required=True)
-    validate_metadata = commands.add_parser("validate-build-metadata")
-    validate_metadata.add_argument("--metadata", type=Path, required=True)
-    validate_metadata.add_argument("--upstream", type=Path, required=True)
-    validate_metadata.add_argument("--provenance", type=Path, required=True)
-    validate_metadata.add_argument("--series", required=True)
-    validate_metadata.add_argument("--source-commit", required=True)
-    validate_metadata.add_argument("--target-pkg-metadata", type=Path, required=True)
-    validate_channel = commands.add_parser("validate-channel")
-    validate_channel.add_argument("--directory", type=Path, required=True)
-    validate_channel.add_argument("--target-pkg-metadata", type=Path)
-    validate_channel.add_argument("--upstream", type=Path)
-    snapshot_tag = commands.add_parser("snapshot-tag")
-    snapshot_tag.add_argument("series")
-    snapshot_tag.add_argument("version")
-    snapshot_tag.add_argument("--provenance", type=Path, required=True)
-    source_tag = commands.add_parser("source-release-tag")
-    source_tag.add_argument("series")
-    source_tag.add_argument("version")
-    source_tag.add_argument("--provenance", type=Path, required=True)
-    stage_channel = commands.add_parser("stage-channel")
-    stage_channel.add_argument("--packages-directory", type=Path, required=True)
-    stage_channel.add_argument("--output", type=Path, required=True)
-    stage_channel.add_argument("--private-key", type=Path, required=True)
-    stage_channel.add_argument("--pkg-command", default="pkg")
-    stage_channel.add_argument("--target-pkg-metadata", type=Path, required=True)
-    stage_channel.add_argument("--control-commit", required=True)
-    reuse_snapshot = commands.add_parser("reuse-snapshot")
-    reuse_snapshot.add_argument("--repository", required=True)
-    reuse_snapshot.add_argument("--series", required=True)
-    reuse_snapshot.add_argument("--version", required=True)
-    reuse_snapshot.add_argument("--source-commit", required=True)
-    reuse_snapshot.add_argument("--output", type=Path, required=True)
-    reuse_snapshot.add_argument("--public-key", type=Path, required=True)
-    reuse_snapshot.add_argument("--target-pkg-metadata", type=Path, required=True)
-    reuse_snapshot.add_argument("--provenance", type=Path, required=True)
-    publish_parser = commands.add_parser("publish")
-    publish_parser.add_argument("--repository", required=True)
-    publish_parser.add_argument("--series", required=True)
-    publish_parser.add_argument("--directory", type=Path, required=True)
-    publish_parser.add_argument("--prerelease", action="store_true")
     publish_tag = commands.add_parser("publish-tag")
     publish_tag.add_argument("--repository", required=True)
     publish_tag.add_argument("--tag", required=True)
@@ -1378,10 +941,6 @@ def main() -> None:
     publish_immutable.add_argument("--tag", required=True)
     publish_immutable.add_argument("--directory", type=Path, required=True)
     publish_immutable.add_argument("--title", required=True)
-    publish_channels_parser = commands.add_parser("publish-channels")
-    publish_channels_parser.add_argument("--repository", required=True)
-    publish_channels_parser.add_argument("--recovery", type=Path, required=True)
-    publish_channels_parser.add_argument("--channel", type=parse_channel, action="append", required=True)
     publish_abi = commands.add_parser("publish-abi-channel")
     publish_abi.add_argument("--repository", required=True)
     publish_abi.add_argument("--directory", type=Path, required=True)
@@ -1389,10 +948,6 @@ def main() -> None:
     verify_abi = commands.add_parser("verify-abi-endpoint")
     verify_abi.add_argument("--url", required=True)
     verify_abi.add_argument("--expected-channel", type=Path, required=True)
-    prune = commands.add_parser("prune-snapshots")
-    prune.add_argument("--repository", required=True)
-    prune.add_argument("--series", required=True)
-    prune.add_argument("--keep", type=int, default=5)
     mark_latest = commands.add_parser("mark-latest-package-channel")
     mark_latest.add_argument("--repository", required=True)
     cleanup_tag = commands.add_parser("cleanup-tag")
@@ -1407,9 +962,7 @@ def main() -> None:
     bootstrap.add_argument("--series", required=True)
     bootstrap.add_argument("--public-key-path", required=True)
     arguments = parser.parse_args()
-    if arguments.command == "validate-channel":
-        validate_channel_directory(arguments.directory, target_metadata=arguments.target_pkg_metadata, upstream=arguments.upstream)
-    elif arguments.command == "validate-bind-provenance":
+    if arguments.command == "validate-bind-provenance":
         provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
         validate_bind_provenance(
             provenance, bind920_profile.load_profile(arguments.profile),
@@ -1418,69 +971,16 @@ def main() -> None:
                 arguments.target_pkg_metadata, arguments.series
             ).record(),
         )
-    elif arguments.command == "validate-build-metadata":
-        validate_build_metadata(
-            arguments.metadata,
-            arguments.upstream,
-            arguments.provenance,
-            arguments.target_pkg_metadata,
-            arguments.series,
-            arguments.source_commit,
-        )
-    elif arguments.command == "snapshot-tag":
-        provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
-        print(
-            snapshot_channel_tag(
-                arguments.series, arguments.version, provenance.get("fingerprint")
-            )
-        )
-    elif arguments.command == "source-release-tag":
-        provenance = json.loads(arguments.provenance.read_text(encoding="utf-8"))
-        print(
-            source_release_tag(
-                arguments.series, arguments.version, provenance.get("fingerprint")
-            )
-        )
-    elif arguments.command == "stage-channel":
-        for asset in stage_channel_repository(
-            arguments.packages_directory,
-            arguments.output,
-            arguments.private_key,
-            arguments.pkg_command,
-            arguments.target_pkg_metadata,
-            arguments.control_commit,
-        ):
-            print(asset)
-    elif arguments.command == "reuse-snapshot":
-        reused = materialize_existing_snapshot(
-            arguments.repository,
-            arguments.series,
-            arguments.version,
-            arguments.source_commit,
-            arguments.output,
-            arguments.public_key,
-            target_pkg.load_target(
-                arguments.target_pkg_metadata, arguments.series
-            ).record(),
-            json.loads(arguments.provenance.read_text(encoding="utf-8")),
-        )
-        print("true" if reused else "false")
-    elif arguments.command == "publish":
-        publish(arguments.repository, channel_tag(arguments.series), arguments.directory, arguments.prerelease)
     elif arguments.command == "publish-tag":
         publish(arguments.repository, arguments.tag, arguments.directory, False)
     elif arguments.command == "publish-immutable":
         publish_immutable_release(
             arguments.repository, arguments.tag, arguments.directory, arguments.title
         )
-    elif arguments.command == "publish-channels":
-        publish_channels(arguments.repository, arguments.channel, arguments.recovery)
     elif arguments.command == "publish-abi-channel":
         publish_abi_channel(arguments.repository, arguments.directory, arguments.recovery)
     elif arguments.command == "verify-abi-endpoint":
         verify_abi_endpoint(arguments.url, arguments.expected_channel)
-    elif arguments.command == "prune-snapshots":
-        prune_snapshots(arguments.repository, arguments.series, arguments.keep)
     elif arguments.command == "mark-latest-package-channel":
         mark_latest_package_channel(arguments.repository)
     elif arguments.command == "cleanup-tag":

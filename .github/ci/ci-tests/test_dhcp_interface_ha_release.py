@@ -9,8 +9,7 @@ from ha_dhcp import dhcp_interface_ha_channel as channel
 from ha_dhcp import dhcp_interface_ha_release as selection
 from ha_fixtures import make_ha_channel
 from package_fixtures import write_resolved_target, creator_identity
-from workflow_fixtures import (assert_checkout_credentials, assert_permissions,
-                               action_references, workflow_jobs)
+from workflow_fixtures import workflow_jobs, workflow_steps, trigger_paths
 
 publisher = load_module("publish_dhcpha", "ha_dhcp/publish-dhcp-interface-ha.py")
 COMMIT = "a" * 40
@@ -72,6 +71,49 @@ def test_release_cli_consumes_push_payload_and_emits_job_outputs(release_history
         "release": "true", "series": "26.7", "source_commit": source}
 
 
+@pytest.mark.parametrize('fault', [None, 'member', 'control'])
+def test_shared_bind_inputs_bind_exact_git_recipe_tools_and_external_seal(tmp_path, monkeypatch, fault):
+    from git_fixtures import init_repository, commit, git, upstream_profile
+    from package_fixtures import PLUGIN_PACKAGE, make_ports_recipe, make_tools_repository, write_json
+    profile = upstream_profile('26.7')
+    ports, approval, expected_recipe = make_ports_recipe(tmp_path / 'ports')
+    tools = make_tools_repository(tmp_path / 'tools', profile)
+    repository = init_repository(tmp_path / 'control')
+    original = PLUGIN_PACKAGE + approval
+    control = commit(repository, {'dns/bind/Makefile': original}, 'reviewed BIND approval')
+    upstream = write_json(tmp_path / 'upstream.json', profile)
+    trusted = tmp_path / 'trusted'
+    resolve = selection.bind920_profile.resolve_profile
+    with monkeypatch.context() as boundary:
+        boundary.chdir(repository)
+        boundary.setattr(selection.bind920_profile, 'resolve_profile', lambda record: resolve(record, repository=ports))
+        digest = selection.freeze_bind_inputs(trusted, profile, tools, control)
+    assert (trusted / 'runtime-approval.mk').read_bytes() == original.encode()
+    assert json.loads((trusted / 'bind920-profile.json').read_text()) == expected_recipe
+    tools_blob = subprocess.check_output(['git', '-C', str(tools), 'show',
+        profile['tools_tag'] + ':config/26.7/build.conf'])
+    assert json.loads((trusted / 'tools-profile.json').read_text()) == dict(schema=1,
+        series='26.7', tools_tag='26.7.1', tools_commit=git(tools, 'rev-parse', profile['tools_tag']),
+        path='config/26.7/build.conf', build_conf_sha256=hashlib.sha256(tools_blob).hexdigest(),
+        freebsd_release='15.1')
+    assert json.loads((trusted / 'bind-inputs.json').read_text()) == {
+        name: hashlib.sha256((trusted / name).read_bytes()).hexdigest()
+        for name in ('runtime-approval.mk', 'bind920-profile.json', 'tools-profile.json')}
+    if fault == 'member':
+        record = json.loads((trusted / 'tools-profile.json').read_text())
+        write_json(trusted / 'tools-profile.json', dict(record, tools_commit='f' * 40))
+    elif fault == 'control':
+        control = commit(repository, {'dns/bind/Makefile': original + '# later approval context\n'}, 'different control')
+    sentinel = tmp_path / 'privileged-output'
+    command = [sys.executable, '-I', str(CI / 'ha_dhcp/dhcp_interface_ha_release.py'),
+        'validate-bind-inputs', '--series', '26.7', '--directory', str(trusted),
+        '--upstream', str(upstream), '--control-commit', control, '--sha256', digest]
+    result = subprocess.run(['sh', '-c', shlex.join(command) + ' && : > ' + shlex.quote(str(sentinel))],
+        cwd=repository, capture_output=True, text=True)
+    assert (result.returncode == 0) is (fault is None), result.stderr
+    assert sentinel.exists() is (fault is None)
+
+
 @pytest.fixture
 def release(tmp_path, monkeypatch):
     (tmp_path / "build-metadata.txt").write_text(
@@ -127,57 +169,98 @@ def test_failed_uploaded_verification_keeps_release_draft(release):
     assert "--draft" in calls.run_gh.call_args.args[0]
 
 
-def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification():
-    test_workflow = (ROOT / ".github/workflows/ha-dhcp-interface-tests.yml").read_text()
-    for event, next_event in (("push", "pull_request"), ("pull_request", "workflow_dispatch")):
-        trigger = test_workflow.split(f"  {event}:\n")[1].split(f"  {next_event}:\n")[0]
-        ci_paths = set(re.findall(r"^      - '(\.github/ci/[^']+)'$", trigger, re.MULTILINE))
-        assert ci_paths == {'.github/ci/ha_dhcp/**', '.github/ci/shared/**', '.github/ci/ci-tests/**'}
-    workflow = (ROOT / ".github/workflows/ha-dhcp-interface-release.yml").read_text()
+def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification(tmp_path, monkeypatch):
+    test_workflow = (ROOT / '.github/workflows/ha-dhcp-interface-tests.yml').read_text()
+    watched = ['.github/ci/ha_dhcp/build.sh', '.github/ci/shared/package_catalogue.py',
+               '.github/ci/bind/shared/components.py', '.github/ci/bind/runtime/bind920_profile.py',
+               '.github/ci/ci-tests/test_dhcp_interface_ha_release.py',
+               '.github/workflows/bind-runtime-release.yml', '.github/workflows/bind-plugin-release.yml']
+    for event in ('push', 'pull_request'):
+        patterns = trigger_paths(test_workflow, event)
+        for path in watched:
+            assert any(fnmatchcase(path, pattern) for pattern in patterns), (event, path)
+    workflow = (ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text()
+    header = workflow.split('jobs:\n', 1)[0]
     jobs = workflow_jobs(workflow)
-    build, publish = (jobs[name] for name in ("build", "publish"))
-    assert "  workflow_dispatch:" in workflow
-    assert "  push:\n    branches: [master]\n    paths: ['net/dhcp-interface-ha/Makefile']" in workflow
-    assert "  pull_request:" not in workflow
-    assert "if: needs.profile.outputs.release == 'true'" in workflow.split("  profile:")[0]
-    assert "release: ${{ needs.profile.outputs.freebsd_release }}" in build
-    assert 'git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json"' in build
-    assert_permissions(workflow, {"contents": "read"})
-    assert "secrets." not in workflow.split("jobs:\n", 1)[0]
-    dependencies = {"build": "[profile, test]", "publish": "[profile, sign, verify]",
-                    "source-release": "[profile, verify-published]"}
-    secrets = {"sign": {"RP_PKG_SIGNING_KEY"}, "publish": {"RP_DISTRIBUTION_APP_PRIVATE_KEY"}}
+    assert re.search(r'^  workflow_dispatch:', header, re.MULTILINE)
+    assert re.search(r'^  push:\n    branches: \[master\]', header, re.MULTILINE)
+    assert "paths: ['net/dhcp-interface-ha/Makefile']" in header
+    assert not re.search(r'^  pull_request:', header, re.MULTILINE)
+    assert "if: needs.profile.outputs.release == 'true'" in workflow.split('  profile:')[0]
+    assert 'release: ' + '$' + '{{ needs.profile.outputs.freebsd_release }}' in jobs['build']
+    assert 'git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json"' in jobs['build']
+    for name, required in {'build': {'profile', 'test'}, 'publish': {'profile', 'sign', 'verify'},
+                           'verify-published': {'profile', 'sign', 'publish'},
+                           'source-release': {'profile', 'sign', 'verify-published'}}.items():
+        declared = re.search(r'^    needs: \[([^\n]+)\]$', jobs[name], re.MULTILINE)[1]
+        assert required <= {value.strip() for value in declared.split(',')}, name
     for name, job in jobs.items():
-        assert_permissions(job, {"contents": "write"} if name == "source-release" else None, indent=4)
-        assert set(re.findall(r"secrets\.([A-Z_]+)", job)) == secrets.get(name, set()), name
-        if name in dependencies:
-            assert f"    needs: {dependencies[name]}\n" in job
-        if name != "test":
-            assert_checkout_credentials(job)
-        if name not in {"profile", "test"}:
-            assert "ref: ${{ needs.profile.outputs.source_commit }}" in job
-    for token_input in ("app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}",
-                        "private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}",
-                        "owner: resolver-plugins", "repositories: repository", "permission-contents: write",
-                        "GH_TOKEN: ${{ steps.distribution-token.outputs.token }}"):
-        assert token_input in publish
-    actions = action_references(workflow)
-    assert all(a.startswith("./") or re.fullmatch(r"[^@]+@[0-9a-f]{40}", a) for a in actions)
+        if name in ('profile', 'test'):
+            continue
+        expected = '$' + '{{ github.workflow_sha }}' if name in ('sign', 'publish', 'source-release') else (
+            '$' + '{{ needs.profile.outputs.source_commit }}')
+        for step in workflow_steps(job):
+            if 'uses: actions/checkout@' in step:
+                assert re.search(r'^          ref: ([^\n]+)$', step, re.MULTILINE)[1] == expected, name
+
+    publish = jobs['publish']
+    assert publish.index('package_catalogue.py validate') < publish.index('check-peers') < publish.index('Mint distribution repository token')
+    assert publish.index('dhcp_interface_ha_channel.py promote') < publish.index('--owned-must-match') < publish.index('package_catalogue.py publish')
+    composition = dict(component='dhcp', series='26.7', components={
+        name: {'current_tag': name} for name in ('bind_runtime', 'bind_plugin', 'dhcp')})
+    monkeypatch.setattr(selection.components, 'load_composition', Mock(return_value=composition))
+    from shared import package_catalogue
+    fetch = Mock(side_effect=lambda repository, component, *args: composition['components'][component])
+    monkeypatch.setattr(package_catalogue, 'fetch', fetch)
+    command = ['check-peers', '--series', '26.7', '--repository-root', str(tmp_path),
+               '--composition-sha256', 'd' * 64, '--repository', 'example.invalid/distribution']
+    for owned, expected in [(False, ['bind_runtime', 'bind_plugin']),
+                            (True, ['bind_runtime', 'bind_plugin', 'dhcp'])]:
+        fetch.reset_mock()
+        selection.main(command + (['--owned-must-match'] if owned else []))
+        assert [call.args[1] for call in fetch.call_args_list] == expected
+    fetch.side_effect = lambda *args: {'current_tag': 'changed-peer'}
+    with pytest.raises(RuntimeError, match='registered component changed'):
+        selection.main(command)
 
 
-def test_builder_retains_target_parser_and_native_installation_gates():
-    builder = (CI / "ha_dhcp/build-dhcp-interface-ha.sh").read_text()
+def test_builder_retains_target_parser_and_native_installation_gates(tmp_path, monkeypatch):
+    builder = (CI / 'ha_dhcp/build-dhcp-interface-ha.sh').read_text()
     assert builder.index('package_checksums.py"') < builder.index('"$pkg_static" add "$package"')
     assert builder.index('"$pkg_static" check -s') < builder.index('cp "$package" "$output/"')
     assert builder.index('test_ui_routes.php') < builder.index('cp "$package" "$output/"')
-    verifier = (CI / "ha_dhcp/verify-dhcp-interface-ha.sh").read_text()
-    signer = (ROOT / ".github/workflows/ha-dhcp-interface-release.yml").read_text().split("  sign:")[1].split("  verify:")[0]
-    for script in (builder, verifier, signer):
+    verifier = (CI / 'ha_dhcp/verify-dhcp-interface-ha.sh').read_text()
+    signer = workflow_jobs((ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text())['sign']
+    for script in (builder, verifier):
         assert script.index('dhcp_interface_ha_release.py') < script.index('setup-opnsense-repository.sh')
         assert 'export RP_OPNSENSE_SNAPSHOT' in script
+    native = next(step for step in workflow_steps(signer) if 'uses: vmactions/freebsd-vm@' in step)
+    body = textwrap.dedent(re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', native, re.MULTILINE)[1])
+    assert body.index('snapshot --series') < body.index('authenticate-peers')
+    assert 'export RP_OPNSENSE_SNAPSHOT' in body
+    assert body.index('authenticate-peers') < body.index('base64 -d')
+    from shared import package_catalogue
+    calls = Mock()
+    monkeypatch.setattr(selection.components, 'select_role', calls.select_role)
+    monkeypatch.setattr(package_catalogue, 'authenticate_components', calls.authenticate)
+    command = ['authenticate-peers', '--series', '26.7',
+        '--runtime-channel', str(tmp_path / 'runtime'), '--plugin-channel', str(tmp_path / 'plugin'),
+        '--upstream', str(tmp_path / 'upstream.json'), '--reader-target', str(tmp_path / 'reader.json'),
+        '--creator-target', str(tmp_path / 'creator.json'), '--approved-profile', str(tmp_path / 'recipe.json'),
+        '--runtime-approval', str(tmp_path / 'approval.mk')]
+    selection.main(command)
+    assert [call[0] for call in calls.mock_calls] == ['select_role', 'authenticate', 'select_role']
+    assert [call.args[3] for call in calls.select_role.call_args_list] == ['reader', 'creator']
+    calls.reset_mock()
+    calls.authenticate.side_effect = ValueError('untrusted peer')
+    with pytest.raises(ValueError, match='untrusted peer'):
+        selection.main(command)
+    assert [call[0] for call in calls.mock_calls] == ['select_role', 'authenticate']
     for line in verifier.splitlines():
         if 'target_pkg.py" install' in line or 'target_pkg.py" verify' in line:
-            assert '"$RP_READER_PKG_METADATA"' in line and '--role reader' in line and '--upstream "$RP_UPSTREAM_METADATA"' in line
+            assert '"$RP_READER_PKG_METADATA"' in line
+            assert '--role reader' in line
+            assert '--upstream "$RP_UPSTREAM_METADATA"' in line
     assert 'RP_TARGET_PKG_METADATA=$RP_READER_PKG_METADATA "$ci/shared/setup-opnsense-repository.sh"' in verifier
     assert "printf 'repository_snapshot=%s\\n'" in builder
 
@@ -194,11 +277,17 @@ def signing_target(signed_channel, monkeypatch):
 
 
 def test_signed_channel_rejects_tampered_assets_and_foreign_key(signed_channel):
+    manifest = signed_channel / 'channel.json'
+    original = manifest.read_bytes()
     key = signed_channel / "resolver-plugins.pub"
     key.write_text("foreign key")
+    data = json.loads(original)
+    data['assets'][key.name] = hashlib.sha256(key.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="untrusted"):
         channel.validate(signed_channel)
     key.write_bytes(channel.PUBLIC_KEY.read_bytes())
+    manifest.write_bytes(original)
     (signed_channel / "os-dhcp-interface-ha-0.2_30.pkg").write_text("changed")
     with pytest.raises(ValueError, match="checksums"):
         channel.validate(signed_channel)

@@ -3,57 +3,24 @@
 
 import os
 import pathlib
-import re
 import subprocess
 
 import pytest
 
-
-BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
-MAKEFILE = BIND_ROOT / "Makefile"
-PROVIDER = BIND_ROOT / "src/opnsense/scripts/firmware/repos/ResolverPlugins.sh"
-PUBLIC_KEY = "/usr/local/etc/pkg/keys/resolver-plugins.pub"
-PENDING_MARKER = "repository-reconcile.pending"
-
-
-def plugin_source_is_series_versioned():
-    text = MAKEFILE.read_text(encoding="utf-8")
-    version = re.search(r"^PLUGIN_VERSION=\s*([^\s]+)", text, re.MULTILINE)
-    revision = re.search(r"^PLUGIN_REVISION=\s*([^\s]+)", text, re.MULTILINE)
-    if version is None or revision is None:
-        return False
-    return version.group(1) in {"26.1", "26.7"} and (
-        re.fullmatch(r"[1-9][0-9]*", revision.group(1)) is not None
-    )
-
-
-pytestmark = pytest.mark.skipif(
-    not plugin_source_is_series_versioned(),
-    reason="repository provider contract applies to series-versioned release sources",
+from .repository_contract import (
+    PRIORITY_REQUIRED, SERIES_VERSIONED, repository_config, series_url,
 )
 
 
-def repository_config(
-    url,
-    *,
-    mirror_type="none",
-    signature_type="pubkey",
-    key=PUBLIC_KEY,
-    enabled="yes",
-):
-    return (
-        "resolver-plugins: {\n"
-        f'  url: "{url}",\n'
-        f'  mirror_type: "{mirror_type}",\n'
-        f'  signature_type: "{signature_type}",\n'
-        f'  pubkey: "{key}",\n'
-        f"  enabled: {enabled}\n"
-        "}\n"
-    )
+BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROVIDER = BIND_ROOT / "src/opnsense/scripts/firmware/repos/ResolverPlugins.sh"
+PENDING_MARKER = "repository-reconcile.pending"
 
 
-def series_url(series):
-    return f"https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest"
+pytestmark = pytest.mark.skipif(
+    not SERIES_VERSIONED,
+    reason="repository provider contract applies to series-versioned release sources",
+)
 
 
 def write_opnsense_version(path, series):
@@ -91,17 +58,21 @@ def test_repository_provider_source_exists_and_is_executable():
 
 
 @pytest.mark.parametrize(
-    "old_url",
+    "old_url,priority",
     (
-        "https://github.com/resolver-plugins/repository/releases/download/pkg-26.1",
-        "https://github.com/resolver-plugins/repository/releases/download/pkg-26.7",
-        "https://resolver-plugins.github.io/repository/pkg/${ABI}/latest",
-        "https://resolver-plugins.github.io/repository/pkg/${ABI}/26.1/latest",
+        ("https://github.com/resolver-plugins/repository/releases/download/pkg-26.1", None),
+        ("https://github.com/resolver-plugins/repository/releases/download/pkg-26.7", None),
+        ("https://resolver-plugins.github.io/repository/pkg/${ABI}/latest", None),
+        (series_url("26.1"), None),
+        pytest.param(series_url("26.7"), None, marks=pytest.mark.skipif(
+            not PRIORITY_REQUIRED, reason="source predates repository priority migration")),
+        pytest.param(series_url("26.1"), 20, marks=pytest.mark.skipif(
+            not PRIORITY_REQUIRED, reason="source predates repository priority migration")),
     ),
 )
-def test_managed_repository_is_atomically_switched_to_current_series(tmp_path, old_url):
+def test_managed_repository_is_atomically_switched_to_current_series(tmp_path, old_url, priority):
     config = tmp_path / "resolver-plugins.conf"
-    config.write_text(repository_config(old_url), encoding="utf-8")
+    config.write_text(repository_config(old_url, priority=priority), encoding="utf-8")
     config.chmod(0o640)
     original = config.stat()
 
@@ -154,6 +125,7 @@ def test_malformed_product_abi_is_refused_without_mutation(tmp_path):
         repository_config(series_url("26.1"), enabled="no"),
         repository_config(series_url("26.1"), mirror_type="srv"),
         repository_config(series_url("26.1"), signature_type="none"),
+        repository_config(series_url("26.1"), priority=21),
     ),
 )
 def test_custom_repository_is_byte_and_inode_identical_without_marker(tmp_path, contents):

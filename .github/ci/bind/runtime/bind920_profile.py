@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read and validate pinned FreeBSD Ports input for bundled BIND."""
+"""Resolve package-owned BIND approval into exact FreeBSD Ports build input."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -31,13 +33,83 @@ PACKAGE_ORIGINS = {
     "bind-tools": "dns/bind-tools",
     "bind920": "dns/bind920",
 }
+PORTS_REPOSITORY = "https://github.com/freebsd/freebsd-ports.git"
+
+
+def approval_from_makefile(text: str, *, allow_absent: bool = False) -> dict[str, str] | None:
+    """Read only the two literal runtime approval assignments."""
+    values = {}
+    for field in ("RP_BIND_VERSION", "RP_BIND_PORTS_COMMIT"):
+        declarations = [line for line in text.splitlines()
+                        if re.match(rf"\s*{field}\s*(?:[?+:!]?=)", line)]
+        if len(declarations) > 1:
+            raise ValueError(f"ambiguous {field} approval")
+        if declarations:
+            match = re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", declarations[0])
+            if match is None:
+                raise ValueError(f"{field} must be a literal assignment")
+            values[field] = match[1].strip()
+    if not values and allow_absent:
+        return None
+    if (set(values) != {"RP_BIND_VERSION", "RP_BIND_PORTS_COMMIT"}
+            or re.fullmatch(r"9\.20\.[0-9]+(?:_[1-9][0-9]*)?", values["RP_BIND_VERSION"]) is None
+            or COMMIT_PATTERN.fullmatch(values["RP_BIND_PORTS_COMMIT"]) is None):
+        raise ValueError("missing or invalid runtime approval")
+    return {"version": values["RP_BIND_VERSION"], "ports_commit": values["RP_BIND_PORTS_COMMIT"]}
+
+
+def profile_from_recipe(approval: dict[str, str], resolved_commit: str,
+                        makefile_bytes: bytes, distinfo_bytes: bytes) -> dict[str, str | int]:
+    """Hash exact Git blobs and require the recipe's declared native version."""
+    if resolved_commit != approval["ports_commit"] or COMMIT_PATTERN.fullmatch(resolved_commit) is None:
+        raise ValueError("resolved Ports object differs from runtime approval")
+    text = makefile_bytes.decode("utf-8")
+    declarations = {}
+    for field in ("DISTVERSION", "PORTREVISION"):
+        lines = [line for line in text.splitlines() if re.match(rf"\s*{field}\s*[?+:!]?=", line)]
+        if field == "DISTVERSION" and len(lines) != 1:
+            raise ValueError(f"missing or ambiguous recipe {field}")
+        matches = [re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", line) for line in lines]
+        if any(match is None for match in matches):
+            raise ValueError(f"recipe {field} must be literal")
+        values = {match[1].strip() for match in matches}
+        if len(values) > 1:
+            raise ValueError(f"missing or ambiguous recipe {field}")
+        declarations[field] = next(iter(values), "0")
+    if re.fullmatch(r"[0-9]+", declarations["PORTREVISION"]) is None:
+        raise ValueError("invalid recipe PORTREVISION")
+    profile = validate_profile(dict(
+        ports_repository=PORTS_REPOSITORY, ports_commit=resolved_commit,
+        makefile_sha256=hashlib.sha256(makefile_bytes).hexdigest(),
+        distinfo_sha256=hashlib.sha256(distinfo_bytes).hexdigest(),
+        distversion=declarations["DISTVERSION"], portrevision=int(declarations["PORTREVISION"])))
+    if package_version(profile) != approval["version"]:
+        raise ValueError("Ports recipe version differs from runtime approval")
+    return profile
+
+
+def resolve_profile(approval: dict[str, str], *, repository: Path | None = None) -> dict[str, str | int]:
+    """Resolve the approved immutable recipe once at the controller boundary."""
+    def read(directory):
+        command = ["git", "-C", str(directory)]
+        commit = subprocess.check_output([*command, "rev-parse", f"{approval['ports_commit']}^{{commit}}"], text=True).strip()
+        return profile_from_recipe(approval, commit,
+            subprocess.check_output([*command, "show", f"{commit}:dns/bind920/Makefile"]),
+            subprocess.check_output([*command, "show", f"{commit}:dns/bind920/distinfo"]))
+    if repository is not None:
+        return read(repository)
+    with tempfile.TemporaryDirectory() as temporary:
+        subprocess.run(["git", "init", "--quiet", temporary], check=True)
+        subprocess.run(["git", "-C", temporary, "fetch", "--quiet", "--depth=1", PORTS_REPOSITORY,
+                        approval["ports_commit"]], check=True, stdout=sys.stderr)
+        return read(Path(temporary))
 
 
 def validate_profile(profile: object) -> dict[str, str | int]:
     """Validate one pinned BIND profile object."""
     if not isinstance(profile, dict) or set(profile) != set(FIELDS):
         raise ValueError("BIND profile does not match the required schema")
-    if profile["ports_repository"] != "https://github.com/freebsd/freebsd-ports.git":
+    if profile["ports_repository"] != PORTS_REPOSITORY:
         raise ValueError("BIND profile has an unexpected ports repository")
     for field in ("ports_commit", "makefile_sha256", "distinfo_sha256", "distversion"):
         if not isinstance(profile[field], str):
@@ -49,8 +121,6 @@ def validate_profile(profile: object) -> dict[str, str | int]:
             raise ValueError(f"BIND profile has an invalid {field}")
     if DISTVERSION_PATTERN.fullmatch(profile["distversion"]) is None:
         raise ValueError("BIND profile has an invalid distversion")
-    if tuple(map(int, profile["distversion"].split("."))) < (9, 20, 26):
-        raise ValueError("BIND profile is below the required 9.20.26 release")
     if (
         not isinstance(profile["portrevision"], int)
         or isinstance(profile["portrevision"], bool)
@@ -76,7 +146,7 @@ def package_version(profile: object) -> str:
     return f"{profile['distversion']}_{profile['portrevision']}"
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared import target_pkg
 
 
@@ -92,14 +162,16 @@ def build_recipe_sha256() -> str:
         raise ValueError(f"cannot read BIND build recipe: {error}") from error
 
 
-def compatibility_fingerprint(
+def producer_inputs(
     profile: object,
     series: str,
     freebsd_release: str,
     architecture: str,
     package_creator: object,
-) -> str:
-    """Hash all inputs that determine whether BIND packages are reusable."""
+    *,
+    recipe_sha256: str,
+) -> dict[str, object]:
+    """Return the canonical schema-4 runtime build inputs."""
     profile = validate_profile(profile)
     if SERIES_PATTERN.fullmatch(series) is None:
         raise ValueError("invalid OPNsense series")
@@ -108,15 +180,31 @@ def compatibility_fingerprint(
     if ARCHITECTURE_PATTERN.fullmatch(architecture) is None:
         raise ValueError("invalid target architecture")
     package_creator = validate_package_creator(package_creator)
-    inputs = {
+    if not isinstance(recipe_sha256, str) or SHA256_PATTERN.fullmatch(recipe_sha256) is None:
+        raise ValueError("invalid BIND build recipe SHA256")
+    return {
         "schema": PROVENANCE_SCHEMA,
         "series": series,
         "freebsd_release": freebsd_release,
         "architecture": architecture,
         "bind_profile": profile,
-        "build_recipe_sha256": build_recipe_sha256(),
+        "build_recipe_sha256": recipe_sha256,
         "package_creator": package_creator,
     }
+
+
+def compatibility_fingerprint(
+    profile: object,
+    series: str,
+    freebsd_release: str,
+    architecture: str,
+    package_creator: object,
+    *,
+    recipe_sha256: str,
+) -> str:
+    """Hash explicit inputs without consulting the validator's checkout."""
+    inputs = producer_inputs(profile, series, freebsd_release, architecture,
+                             package_creator, recipe_sha256=recipe_sha256)
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -128,12 +216,15 @@ def build_provenance(
     architecture: str,
     package_creator: object,
     packages: object,
+    *,
+    recipe_sha256: str,
 ) -> dict[str, object]:
     """Describe the exact BIND pair available for one compatibility identity."""
     profile = validate_profile(profile)
     package_creator = validate_package_creator(package_creator)
     fingerprint = compatibility_fingerprint(
-        profile, series, freebsd_release, architecture, package_creator
+        profile, series, freebsd_release, architecture, package_creator,
+        recipe_sha256=recipe_sha256,
     )
     if not isinstance(packages, dict) or set(packages) != set(PACKAGE_ORIGINS):
         raise ValueError("BIND provenance has an invalid package set")
@@ -158,7 +249,7 @@ def build_provenance(
         "series": series,
         "freebsd_release": freebsd_release,
         "architecture": architecture,
-        "build_recipe_sha256": build_recipe_sha256(),
+        "build_recipe_sha256": recipe_sha256,
         "package_creator": package_creator,
         "packages": validated_packages,
     }
@@ -173,6 +264,8 @@ def write_provenance(
     package_creator: object,
     bind_tools: Path,
     bind920: Path,
+    *,
+    recipe_sha256: str | None = None,
 ) -> None:
     """Write canonical provenance for two finished BIND package archives."""
     if not bind_tools.is_file() or not bind920.is_file():
@@ -192,24 +285,55 @@ def write_provenance(
         },
     }
     provenance = build_provenance(
-        profile, series, freebsd_release, architecture, package_creator, packages
+        profile, series, freebsd_release, architecture, package_creator, packages,
+        recipe_sha256=build_recipe_sha256() if recipe_sha256 is None else recipe_sha256,
     )
     output.write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> None:
+    if sys.argv[1:2] == ["approval-field"]:
+        parser = argparse.ArgumentParser(description="Read the package-owned runtime approval")
+        parser.add_argument("command", choices=("approval-field",))
+        parser.add_argument("--runtime-approval", type=Path, required=True)
+        parser.add_argument("--field", choices=("version", "ports_commit"), required=True)
+        arguments = parser.parse_args()
+        print(approval_from_makefile(arguments.runtime_approval.read_text())[arguments.field])
+        return
+    if sys.argv[1:2] == ["generate"]:
+        parser = argparse.ArgumentParser(description="Generate exact approved Ports recipe input")
+        parser.add_argument("command", choices=("generate",))
+        parser.add_argument("--runtime-approval", type=Path, required=True)
+        parser.add_argument("--output", type=Path, required=True)
+        arguments = parser.parse_args()
+        profile = resolve_profile(approval_from_makefile(arguments.runtime_approval.read_text()))
+        arguments.output.write_text(json.dumps(profile, sort_keys=True, indent=2) + "\n")
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("metadata_path", type=Path)
-    parser.add_argument("command", choices=(*FIELDS, "package_version", "fingerprint", "provenance"))
+    parser.add_argument("command", choices=(*FIELDS, "package_version", "fingerprint", "provenance", "verify-recipe"))
     parser.add_argument("series", nargs="?")
     parser.add_argument("freebsd_release", nargs="?")
     parser.add_argument("--architecture", default="x86_64")
     parser.add_argument("--package-creator")
+    parser.add_argument("--recipe-sha256", help="explicit original recipe hash; defaults to this wrapper")
     parser.add_argument("--bind-tools", type=Path)
     parser.add_argument("--bind920", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--ports-commit")
+    parser.add_argument("--makefile", type=Path)
+    parser.add_argument("--distinfo", type=Path)
     arguments = parser.parse_args()
     profile = load_profile(arguments.metadata_path)
+    if arguments.command == "verify-recipe":
+        if arguments.ports_commit is None or arguments.makefile is None or arguments.distinfo is None:
+            parser.error("verify-recipe requires --ports-commit, --makefile and --distinfo")
+        actual = profile_from_recipe(
+            {"version": package_version(profile), "ports_commit": profile["ports_commit"]},
+            arguments.ports_commit, arguments.makefile.read_bytes(), arguments.distinfo.read_bytes())
+        if actual != profile:
+            raise ValueError("native Ports recipe differs from the sealed approval")
+        return
     if arguments.command in FIELDS:
         print(profile[arguments.command])
         return
@@ -232,6 +356,8 @@ def main() -> None:
                 arguments.freebsd_release,
                 arguments.architecture,
                 package_creator,
+                recipe_sha256=(arguments.recipe_sha256 if arguments.recipe_sha256 is not None
+                               else build_recipe_sha256()),
             )
         )
         return
@@ -246,6 +372,7 @@ def main() -> None:
         package_creator,
         arguments.bind_tools,
         arguments.bind920,
+        recipe_sha256=arguments.recipe_sha256,
     )
 
 

@@ -72,6 +72,7 @@ resolver-plugins: {
   mirror_type: "none",
   signature_type: "pubkey",
   pubkey: "$key",
+  priority: 20,
   enabled: yes
 }
 EOF
@@ -84,6 +85,14 @@ pkg update -r resolver-plugins
 
 ```sh
 pkg install os-bind-rp
+```
+
+This installs missing BIND runtime dependencies from the configured repository.
+To replace official `os-bind`, or upgrade BIND below the plugin's required
+version, use the migration installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp.sh | sh
 ```
 
 ### HA DHCP Interface

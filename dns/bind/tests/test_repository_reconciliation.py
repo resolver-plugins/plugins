@@ -12,54 +12,22 @@ import time
 
 import pytest
 
+from .repository_contract import (
+    PRIORITY_REQUIRED, SERIES_VERSIONED, repository_config, series_url,
+)
+
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
-MAKEFILE = BIND_ROOT / "Makefile"
 WORKER = BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py"
 UPGRADE_HOOK = BIND_ROOT / "src/etc/rc.syshook.d/upgrade/50-bind-rp-repository"
 START_HOOK = BIND_ROOT / "src/etc/rc.syshook.d/start/50-bind-rp-repository"
 PROVIDER = BIND_ROOT / "src/opnsense/scripts/firmware/repos/ResolverPlugins.sh"
-PUBLIC_KEY = "/usr/local/etc/pkg/keys/resolver-plugins.pub"
-
-
-def plugin_source_is_series_versioned():
-    text = MAKEFILE.read_text(encoding="utf-8")
-    version = re.search(r"^PLUGIN_VERSION=\s*([^\s]+)", text, re.MULTILINE)
-    revision = re.search(r"^PLUGIN_REVISION=\s*([^\s]+)", text, re.MULTILINE)
-    if version is None or revision is None:
-        return False
-    return version.group(1) in {"26.1", "26.7"} and (
-        re.fullmatch(r"[1-9][0-9]*", revision.group(1)) is not None
-    )
 
 
 pytestmark = pytest.mark.skipif(
-    not plugin_source_is_series_versioned(),
+    not SERIES_VERSIONED,
     reason="repository reconciliation contract applies to series-versioned release sources",
 )
-
-
-def repository_config(
-    url,
-    *,
-    mirror_type="none",
-    signature_type="pubkey",
-    key=PUBLIC_KEY,
-    enabled="yes",
-):
-    return (
-        "resolver-plugins: {\n"
-        f'  url: "{url}",\n'
-        f'  mirror_type: "{mirror_type}",\n'
-        f'  signature_type: "{signature_type}",\n'
-        f'  pubkey: "{key}",\n'
-        f"  enabled: {enabled}\n"
-        "}\n"
-    )
-
-
-def series_url(series):
-    return f"https://resolver-plugins.github.io/repository/pkg/${{ABI}}/{series}/latest"
 
 
 def write_executable(path, contents):
@@ -192,6 +160,7 @@ def worker_environment(
     pkg_plan="upgrade",
     update_fails=False,
     installed_bind_version="9.20.26_2",
+    actual_provider=False,
 ):
     config = tmp_path / "resolver-plugins.conf"
     if repository_text is None:
@@ -223,7 +192,7 @@ def worker_environment(
         "OS_BIND_RP_LOG": str(tmp_path / "worker.log"),
         "OS_BIND_RP_LOCK_FILE": str(tmp_path / "reconcile.lock"),
         "OS_BIND_RP_OPNSENSE_VERSION_COMMAND": f"/bin/sh {opnsense_version}",
-        "OS_BIND_RP_PROVIDER_COMMAND": f"/bin/sh {provider}",
+        "OS_BIND_RP_PROVIDER_COMMAND": f"/bin/sh {PROVIDER if actual_provider else provider}",
         "OS_BIND_RP_CONFIGCTL_COMMAND": f"/bin/sh {configctl}",
         "OS_BIND_RP_PKG_COMMAND": f"{sys.executable} {pkg}",
         "OS_BIND_RP_PKG_STATIC_COMMAND": f"{sys.executable} {pkg}",
@@ -260,6 +229,7 @@ def test_worker_source_exists_and_is_executable():
         repository_config(series_url("26.7"), enabled="no"),
         repository_config(series_url("26.7"), mirror_type="srv"),
         repository_config(series_url("26.7"), signature_type="none"),
+        repository_config(series_url("26.7"), priority=21),
     ),
 )
 def test_worker_refuses_unmanaged_repository_before_package_calls(tmp_path, repository_text):
@@ -292,11 +262,15 @@ def test_worker_refuses_symlink_repository_before_package_calls(tmp_path):
     assert not log.exists()
 
 
-def test_worker_refreshes_only_resolver_repo_installs_plugin_and_removes_marker(tmp_path):
-    result, _, marker, log, worker_log = run_worker(tmp_path)
+@pytest.mark.parametrize("priority", (None, pytest.param(20, marks=pytest.mark.skipif(
+    not PRIORITY_REQUIRED, reason="source predates repository priority migration"))))
+def test_worker_refreshes_only_resolver_repo_installs_plugin_and_removes_marker(tmp_path, priority):
+    result, config, marker, log, worker_log = run_worker(tmp_path,
+        repository_text=repository_config(series_url("26.7"), priority=priority), actual_provider=True)
 
     assert result.returncode == 0, worker_log.read_text(encoding="utf-8")
     assert not marker.exists()
+    assert config.read_text(encoding="utf-8") == repository_config(series_url("26.7"))
     calls = log.read_text(encoding="utf-8").splitlines()
     assert any(
         call.startswith("pkg -o FETCH_TIMEOUT=15 -o FETCH_RETRY=1 update -f -r resolver-plugins")

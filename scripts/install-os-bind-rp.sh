@@ -2,9 +2,10 @@
 
 set -eu
 
-readonly minimum_bind920_version=9.20.26
 readonly public_key_sha256=bd89d6f91807c71f8a744532c9ce2f97e9590f8858ac779bfb2f23c10804e07e
 readonly repository_base_url=https://resolver-plugins.github.io/repository/pkg
+readonly prerequisite_helper_url=https://raw.githubusercontent.com/resolver-plugins/plugins/master/scripts/install-os-bind-rp-prerequisites.py
+readonly prerequisite_helper_sha256=8612f183e333a9de8ff09177511a8612cb9e5446f1a03928d727f468599a2764
 # pkg uses legacy/SHA256 hex and type-2 BLAKE2b z-base32 file digests.
 readonly file_checksum_pattern='^((1\$)?[[:xdigit:]]{64}|2\$[ybndrfg8ejkmcpqxot1uwisza345h769]{103})$'
 
@@ -164,7 +165,7 @@ exact_identity_is_installed() {
         os-bind-*) package_name=os-bind ;;
         *) return 1 ;;
     esac
-    installed=$(installed_record "$package_name")
+    installed=$(installed_record "$package_name") || fail "could not inspect installed identity: $package_name"
     installed_version=$(package_field "$installed" 2)
     [ "$package_name-$installed_version" = "$identity" ]
 }
@@ -353,10 +354,37 @@ remote_package() {
 }
 
 version_at_least() {
-    case "$("$pkg_command" version -t "$1" "$2")" in
+    comparison=$("$pkg_command" version -t "$1" "$2") || fail 'could not compare package versions'
+    case "$comparison" in
         '='|'>') return 0 ;;
-        *) return 1 ;;
+        '<') return 1 ;;
+        *) fail 'invalid package version comparison' ;;
     esac
+}
+
+read_plugin_requirements() {
+    plugin_archive=$(archive_path_for "os-bind-rp-$candidate_plugin_version")
+    "$pkg_static_command" info -F "$plugin_archive" --raw --raw-format json \
+        > "$temporary_directory/plugin-manifest.json" || fail 'could not inspect plugin prerequisites'
+    prerequisite_helper="$temporary_directory/install-os-bind-rp-prerequisites.py"
+    fetch -o "$prerequisite_helper" "$prerequisite_helper_url" || fail 'could not fetch plugin prerequisite reader'
+    [ "$(sha256 -q "$prerequisite_helper")" = "$prerequisite_helper_sha256" ] || \
+        fail 'plugin prerequisite reader fingerprint verification failed'
+    requirements=$(python3 "$prerequisite_helper" "$temporary_directory/plugin-manifest.json") || \
+        fail 'could not read authenticated plugin prerequisites'
+    minimum_bind920_version=${requirements%%|*}
+    minimum_opnsense_version=${requirements#*|}
+    installed_core=$(installed_record opnsense)
+    if [ "$(package_field "$installed_core" 3)" != opnsense/opnsense ] || \
+        ! version_at_least "$(package_field "$installed_core" 2)" "$minimum_opnsense_version"
+    then
+        fail "plugin requires installed OPNsense $minimum_opnsense_version or newer"
+    fi
+    if ! version_at_least "$candidate_bind920_version" "$minimum_bind920_version" || \
+        ! version_at_least "$candidate_bind_tools_version" "$minimum_bind920_version"
+    then
+        fail 'repository BIND packages do not meet the plugin prerequisite'
+    fi
 }
 
 installed_bind_is_eligible() {
@@ -370,8 +398,10 @@ installed_bind_is_eligible() {
     [ "$bind920_name" = bind920 ] && [ "$bind920_origin" = dns/bind920 ] || return 1
     [ "$bind_tools_name" = bind-tools ] && [ "$bind_tools_origin" = dns/bind-tools ] || return 1
     version_at_least "$bind920_version" "$minimum_bind920_version" || return 1
-    version_at_least "$bind920_version" "$candidate_bind920_version" || return 1
-    version_at_least "$bind_tools_version" "$candidate_bind_tools_version" || return 1
+    version_at_least "$bind_tools_version" "$minimum_bind920_version" || return 1
+    installed_edges=$("$pkg_command" query -e '%n = bind920' '%dn|%do|%dv') || \
+        fail 'could not inspect installed BIND prerequisites'
+    printf '%s\n' "$installed_edges" | grep -Fxq "bind-tools|dns/bind-tools|$bind_tools_version"
 }
 
 reject_downgrade() {
@@ -379,10 +409,15 @@ reject_downgrade() {
     candidate_version=$2
     package_name=$3
     installed_version=$(package_field "$installed_record" 2)
-    if [ -n "$installed_version" ] && \
-        [ "$("$pkg_command" version -t "$installed_version" "$candidate_version")" = '>' ]
+    if [ -n "$installed_version" ]
     then
-        fail "refusing to downgrade $package_name from $installed_version to $candidate_version"
+        comparison=$("$pkg_command" version -t "$installed_version" "$candidate_version") || \
+            fail "could not compare installed $package_name"
+        case "$comparison" in
+            '>') fail "refusing to downgrade $package_name from $installed_version to $candidate_version" ;;
+            '='|'<') ;;
+            *) fail "invalid $package_name version comparison" ;;
+        esac
     fi
 }
 
@@ -401,16 +436,12 @@ create_state_directory() {
     [ -f "$config_file" ] || fail "OPNsense configuration is missing: $config_file"
     cp -p "$config_file" "$state_directory/config.xml.bak"
     "$pkg_command" info -a > "$state_directory/packages.before.txt"
-    "$pkg_command" query '%n|%v|%o' | sort > "$state_directory/package-identities.before.txt"
+    "$pkg_command" query -a '%n|%v|%o' > "$state_directory/package-identities.before.raw" || \
+        fail 'could not preserve package inventory'
+    sort "$state_directory/package-identities.before.raw" > "$state_directory/package-identities.before.txt"
     cp "$state_directory/package-identities.before.txt" "$state_directory/installed-packages.txt"
-    set +e
-    "$pkg_command" lock -l > "$state_directory/package-locks.before.txt"
-    lock_status=$?
-    set -e
-    case "$lock_status" in
-        0|1) ;;
-        *) fail "could not inventory pkg locks (status $lock_status)" ;;
-    esac
+    "$pkg_command" query -a '%n|%k' > "$state_directory/package-locks.before.txt" || \
+        fail 'could not preserve package locks'
 }
 
 prepare_temporary_directory() {
@@ -502,9 +533,10 @@ verify_archive_hashes() {
 
 recovery_archive_path() {
     identity=$1
+    archive_directory=${2:-$recovery_repository}
     for candidate in \
-        "$recovery_repository/$identity.pkg" "$recovery_repository/$identity.txz" \
-        "$recovery_repository/All/$identity.pkg" "$recovery_repository/All/$identity.txz"
+        "$archive_directory/$identity.pkg" "$archive_directory/$identity.txz" \
+        "$archive_directory/All/$identity.pkg" "$archive_directory/All/$identity.txz"
     do
         if [ -f "$candidate" ]
         then
@@ -554,61 +586,26 @@ capture_recovery_packages() {
 
 installed_record() {
     package_name=$1
-    set +e
-    record=$("$pkg_command" query -e "%n = $package_name" '%n|%v|%o' 2>/dev/null)
-    status=$?
-    set -e
-    case "$status" in
-        0|1) ;;
-        *) fail "could not inspect installed package: $package_name" ;;
-    esac
-    record_count=$(printf '%s\n' "$record" | awk 'NF { count++ } END { print count + 0 }')
-    [ "$record_count" -le 1 ] || \
-        fail "ambiguous installed package record for $package_name"
-    if [ "$record_count" -eq 0 ]
-    then
-        return 0
-    fi
-    [ "$status" -eq 0 ] || fail "could not inspect installed package: $package_name"
-    record_name=$(package_field "$record" 1)
-    record_version=$(package_field "$record" 2)
-    record_origin=$(package_field "$record" 3)
-    if [ "$record_name" != "$package_name" ] || [ -z "$record_version" ] || \
-        [ -z "$record_origin" ]
-    then
-        fail "invalid installed package record for $package_name"
-    fi
-    printf '%s\n' "$record"
+    inventory=$("$pkg_command" query -a '%n|%v|%o') || fail 'could not inspect installed package inventory'
+    [ -n "$inventory" ] || fail 'installed package inventory is empty'
+    printf '%s\n' "$inventory" | awk -F '|' -v name="$package_name" '
+        NF != 3 || $1 == "" || $2 == "" || $3 == "" || seen[$1]++ { invalid = 1 }
+        $1 == name { record = $0 }
+        END { if (invalid) exit 1; if (record != "") print record }
+    ' || fail 'invalid installed package inventory'
 }
 
 verify_installed_record() {
     expected=$1
     package_name=$(package_field "$expected" 1)
-    actual=$(installed_record "$package_name")
+    actual=$(installed_record "$package_name") || fail "could not inspect installed identity: $package_name"
     [ "$actual" = "$expected" ] || fail "installed identity mismatch for $package_name: ${actual:-missing}"
-}
-
-verify_archive_ownership() {
-    while IFS='|' read -r identity file_path file_checksum archive
-    do
-        package_name=${identity%-*}
-        # Unused fallback archives do not describe retained upstream files.
-        if [ "$bind_update_required" = no ] && [ "$package_name" != os-bind-rp ]
-        then
-            continue
-        fi
-        installed_identity=$(installed_record "$package_name")
-        installed_version=$(package_field "$installed_identity" 2)
-        expected_owner="$package_name-$installed_version"
-        owner=$("$pkg_command" which -q "$file_path") || \
-            fail "installed file is not package-owned: $file_path ($identity)"
-        [ "$owner" = "$expected_owner" ] || \
-            fail "installed file has the wrong owner: $file_path ($owner, expected $expected_owner)"
-    done < "$temporary_directory/package-file-checksums.txt"
 }
 
 verify_installed_checksums() {
     package_name=$1
+    checksum_identity=$(installed_record "$package_name") || fail "could not inspect $package_name identity"
+    expected_owner="$package_name-$(package_field "$checksum_identity" 2)"
     checksum_output="$temporary_directory/$package_name.installed-checksums"
     "$pkg_command" query -e "%n = $package_name" '%Fp|%Fs' > "$checksum_output" || \
         fail "could not inspect installed checksums for $package_name"
@@ -620,7 +617,58 @@ verify_installed_checksums() {
         then
             fail "incompatible installed file checksum in $package_name for ${file_path:-unknown}: ${file_checksum:-(null)}"
         fi
+        owner=$("$pkg_command" which -q "$file_path") || fail "installed file is not package-owned: $file_path"
+        [ "$owner" = "$expected_owner" ] || fail "installed file has the wrong owner: $file_path"
     done < "$checksum_output"
+    sort "$checksum_output" > "$checksum_output.sorted"
+    sort "$temporary_directory/$package_name.file-checksums" > "$checksum_output.expected"
+    cmp -s "$checksum_output.expected" "$checksum_output.sorted" || \
+        fail "installed file map differs from authenticated archive: $package_name"
+}
+
+observe_retained_runtime() {
+    phase=$1
+    observation_directory="$temporary_directory/retained-runtime"
+    mkdir -p "$observation_directory"
+    for retained_record in "$bind_tools" "$bind920"
+    do
+        retained_name=$(package_field "$retained_record" 1)
+        retained_version=$(package_field "$retained_record" 2)
+        retained_origin=$(package_field "$retained_record" 3)
+        verify_installed_record "$retained_record"
+        native_map="$state_directory/$retained_name.native-$phase.txt"
+        "$pkg_command" query -e "%n = $retained_name" '%Fp|%Fs' > "$native_map.raw" || \
+            fail "could not inspect retained native files: $retained_name"
+        sort "$native_map.raw" > "$native_map"
+        [ -s "$native_map" ] || fail "retained package has no native file records: $retained_name"
+        measured_map="$state_directory/$retained_name.recovery-checksums.txt"
+        if [ "$phase" = after ]
+        then
+            "$pkg_command" create -o "$observation_directory" "$retained_name" || \
+                fail "could not observe retained package files: $retained_name"
+            measured_map="$state_directory/$retained_name.retained-checksums.txt"
+            retained_archive=$(recovery_archive_path "$retained_name-$retained_version" "$observation_directory")
+            [ "$(printf '%s\n' "$retained_archive" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || \
+                fail "expected one retained observation archive for $retained_name"
+            verify_archive_manifest "$retained_name" "$retained_version" "$retained_origin" \
+                "$retained_archive" "$measured_map"
+            sort "$state_directory/$retained_name.recovery-checksums.txt" > "$temporary_directory/retained-before.txt"
+            sort "$measured_map" > "$temporary_directory/retained-after.txt"
+            cmp -s "$temporary_directory/retained-before.txt" "$temporary_directory/retained-after.txt" || \
+                fail "retained package files changed: $retained_name"
+            cmp -s "$state_directory/$retained_name.native-before.txt" "$native_map" || \
+                fail "retained native file records changed: $retained_name"
+        fi
+        cut -d '|' -f 1 "$native_map" | sort > "$temporary_directory/retained-native-paths.txt"
+        cut -d '|' -f 1 "$measured_map" | sort > "$temporary_directory/retained-measured-paths.txt"
+        cmp -s "$temporary_directory/retained-native-paths.txt" "$temporary_directory/retained-measured-paths.txt" || \
+            fail "retained native file ownership map differs: $retained_name"
+        while IFS='|' read -r retained_path _retained_checksum
+        do
+            [ "$("$pkg_command" which -q "$retained_path")" = "$retained_name-$retained_version" ] || \
+                fail "retained file has the wrong owner: $retained_path"
+        done < "$measured_map"
+    done
 }
 
 pkg_command=${RP_PKG_COMMAND:-pkg}
@@ -671,6 +719,16 @@ candidate_bind_tools_version=$(package_field "$candidate_bind_tools" 2)
 candidate_plugin_version=$(package_field "$candidate_plugin" 2)
 validate_plugin_candidate_version "$candidate_plugin_version" "$series"
 
+prepare_temporary_directory
+fetch_and_verify_archive os-bind-rp "$candidate_plugin_version" opnsense/os-bind-rp
+read_plugin_requirements
+for incompatible_plugin in os-bind-devel os-bind-rp-devel
+do
+    incompatible_record=$(installed_record "$incompatible_plugin") || fail 'could not inspect incompatible plugins'
+    [ -z "$incompatible_record" ] || \
+        fail "remove incompatible $incompatible_plugin before migration"
+done
+
 bind920=$(installed_record bind920)
 bind_tools=$(installed_record bind-tools)
 bind_update_required=no
@@ -684,7 +742,7 @@ then
     printf '%s\n' \
         "Available fallback: bind920 $candidate_bind920_version and bind-tools $candidate_bind_tools_version" >&2
     printf '%s\n' 'An update to BIND is required to address a breaking issue with DoT.' >&2
-    printf '%s\n' 'Note: future OPNsense updates to BIND will still work as long as they are above the pinned version.' >&2
+    printf '%s\n' "Compatible OPNsense BIND packages at $minimum_bind920_version or newer can be retained." >&2
     printf '%s' 'Do you wish to update BIND? [y/N] ' >&2
     tty_path=${RP_TTY_PATH:-/dev/tty}
     [ -r "$tty_path" ] || fail 'a terminal is required to approve the BIND update'
@@ -708,10 +766,8 @@ then
     printf '%s\n' "Upgrading installed os-bind-rp ($(package_description "$installed_plugin"))." >&2
 fi
 
-prepare_temporary_directory
 fetch_and_verify_archive bind920 "$candidate_bind920_version" dns/bind920
 fetch_and_verify_archive bind-tools "$candidate_bind_tools_version" dns/bind-tools
-fetch_and_verify_archive os-bind-rp "$candidate_plugin_version" opnsense/os-bind-rp
 
 "$pkg_static_command" repo "$archive_root" || fail 'could not construct verified local package repository'
 write_repository resolver-verified "file://$archive_root" yes \
@@ -730,14 +786,16 @@ printf '%s\n' "$candidate_bind920" "$candidate_bind_tools" "$candidate_plugin" \
     > "$state_directory/candidates.txt"
 
 pkg_identity_before=$(installed_record pkg)
-if "$pkg_command" lock -l | grep -Eq '(^|[[:space:]])pkg-[^[:space:]]*($|[[:space:]])'
-then
-    pkg_was_locked=yes
-else
-    pkg_was_locked=no
-    "$pkg_command" lock -y pkg >/dev/null
-    pkg_lock_changed=yes
-fi
+pkg_lock_before=$("$pkg_command" query -e '%n = pkg' '%k') || fail 'could not inspect the original pkg lock'
+case "$pkg_lock_before" in
+    1) pkg_was_locked=yes ;;
+    0)
+        pkg_was_locked=no
+        "$pkg_command" lock -y pkg >/dev/null
+        pkg_lock_changed=yes
+        ;;
+    *) fail 'invalid pkg lock state' ;;
+esac
 [ "$(installed_record pkg)" = "$pkg_identity_before" ] || \
     fail 'pkg identity changed while establishing the transaction lock'
 printf 'pkg_was_locked=%s\npkg_identity=%s\n' "$pkg_was_locked" "$pkg_identity_before" \
@@ -752,6 +810,10 @@ package_dry_run "$state_directory/pkg-install.dry-run.txt" \
     "$isolated_repository_directory" resolver-verified no "$@"
 verify_archive_hashes
 capture_recovery_packages
+if [ "$bind_update_required" = no ]
+then
+    observe_retained_runtime before
+fi
 [ "$(installed_record pkg)" = "$pkg_identity_before" ] || \
     fail 'pkg identity changed before the verified package transaction'
 
@@ -760,10 +822,20 @@ if [ "$bind_update_required" = yes ]
 then
     verified_pkg install -y -r resolver-verified \
         "bind920-$candidate_bind920_version" "bind-tools-$candidate_bind_tools_version"
+    # pkg can report success without applying a refused operation. Check R before replacing P.
+    verify_installed_record "$candidate_bind920"
+    verify_installed_record "$candidate_bind_tools"
+    verify_installed_checksums bind920
+    verify_installed_checksums bind-tools
+    runtime_edges=$("$pkg_command" query -e '%n = bind920' '%dn|%do|%dv') || fail 'could not inspect installed BIND prerequisites'
+    printf '%s\n' "$runtime_edges" | grep -Fxq "bind-tools|dns/bind-tools|$candidate_bind_tools_version" || \
+        fail 'installed BIND does not depend on the verified tools package'
+    "$pkg_command" check -s bind920 bind-tools
 fi
 verified_pkg install -y -r resolver-verified "os-bind-rp-$candidate_plugin_version"
 
-[ -z "$(installed_record os-bind)" ] || fail 'official os-bind remains installed after replacement'
+remaining_official=$(installed_record os-bind) || fail 'could not inspect official plugin replacement'
+[ -z "$remaining_official" ] || fail 'official os-bind remains installed after replacement'
 verify_installed_record "$candidate_plugin"
 if [ "$bind_update_required" = yes ]
 then
@@ -772,12 +844,14 @@ then
 else
     verify_installed_record "$bind920"
     verify_installed_record "$bind_tools"
+    observe_retained_runtime after
 fi
-verify_archive_ownership
-for installed_package in bind-tools bind920 os-bind-rp
-do
-    verify_installed_checksums "$installed_package"
-done
+verify_installed_checksums os-bind-rp
+if [ "$bind_update_required" = yes ]
+then
+    verify_installed_checksums bind-tools
+    verify_installed_checksums bind920
+fi
 "$pkg_command" check -s bind-tools bind920 os-bind-rp
 "$pkg_command" info -a > "$state_directory/packages.after.txt"
 "$pkg_command" query '%n|%v|%o' > "$state_directory/package-identities.after.txt"

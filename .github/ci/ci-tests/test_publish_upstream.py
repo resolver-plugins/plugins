@@ -9,11 +9,8 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PUBLISHER = pathlib.Path(
     os.environ.get('PUBLISH_UPSTREAM', REPOSITORY_ROOT / '.github/ci/publish_upstream.py')
 )
-CORE_COMMIT = '2' * 40
-
-
-def metadata(series, upstream_commit, core_commit=CORE_COMMIT):
-    return json.dumps(upstream_profile(series, upstream_commit, core_commit=core_commit))
+PLANNER = REPOSITORY_ROOT / '.github/ci/sync_upstream.py'
+sys.path.insert(0, str(REPOSITORY_ROOT / '.github/ci'))
 
 
 def publisher_module():
@@ -22,62 +19,15 @@ def publisher_module():
 
 @pytest.fixture
 def publication_repository(tmp_path):
-    repository = tmp_path / 'repository'
-    init_repository(repository)
-    initial = commit(repository, {'dns/bind/bind.conf': 'bind-v1\n'}, 'upstream 26.1')
-    git(repository, 'checkout', '-b', 'release/bind-rp/26.1')
-    source_release = commit(
-        repository,
-        {'.resolver-plugins/upstream.json': metadata('26.1', initial)},
-        'release 26.1',
-    )
-    git(repository, 'checkout', '-b', 'upstream-26.7', initial)
-    upstream_commit = commit(
-        repository,
-        {'dns/bind/bind.conf': 'bind-v2\n'},
-        'upstream 26.7',
-    )
-    git(
-        repository,
-        'update-ref',
-        'refs/remotes/upstream/stable/26.7',
-        upstream_commit,
-    )
-    target_branch = 'release/bind-rp/26.7'
-    git(repository, 'checkout', '-b', target_branch)
-    target_commit = commit(
-        repository,
-        {'.resolver-plugins/upstream.json': metadata('26.7', upstream_commit)},
-        'bootstrap resolver plugin release',
-    )
-    sync_branch = f'sync/bootstrap/26.7/{upstream_commit[:12]}'
-    git(repository, 'checkout', '-b', sync_branch)
-    sync_commit = commit(
-        repository,
-        {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-        'bootstrap resolver plugin overlay',
-    )
-    git(repository, 'checkout', 'master')
-    plan = {
-        'action': 'bootstrap-review',
-        'series': '26.7',
-        'upstream_ref': 'upstream/stable/26.7',
-        'upstream_commit': upstream_commit,
-        'source_release': 'release/bind-rp/26.1',
-        'target_release': target_branch,
-        'sync_branch': sync_branch,
-        'tools_tag': '26.7.1',
-        'freebsd_release': '15.1',
-        'bind_changed': True,
-        'reason': 'new series has an upstream BIND change',
-    }
-    return {
-        'repository': repository,
-        'plan': plan,
-        'source_release': source_release,
-        'target_commit': target_commit,
-        'sync_commit': sync_commit,
-    }
+    fixture = bind_sync_repositories(tmp_path)
+    plan = seal_sync(discover_sync(fixture, PLANNER), tmp_path, PLANNER)
+    result = apply_sync(fixture, plan, tmp_path, PLANNER)
+    assert result.returncode == 0, result.stderr
+    fixture.update(plan=plan, source_release=plan['source_commit'],
+                   target_commit=git(fixture['repository'], 'rev-parse', plan['target_release']),
+                   sync_commit=git(fixture['repository'], 'rev-parse', plan['sync_branch']),
+                   tmp_path=tmp_path)
+    return fixture
 
 
 class FakeGitHub:
@@ -134,154 +84,140 @@ def remote_github(repository, refs):
     return FakeGitHub(refs=refs)
 
 
-def test_review_publication_preserves_targets_and_recovers_assigned_prs(
-    publication_repository,
-):
-    module = publisher_module()
-    github = FakeGitHub()
-    plan = publication_repository['plan']
+def publication_github(fixture, refs=None):
+    return FakeGitHub(refs={fixture['plan']['source_release']: fixture['source_release'],
+                            **(refs or {})})
 
-    module.publish_plan(
-        publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github
-    )
+
+def publish(module, fixture, github, plan=None):
+    module.publish_plan(fixture['repository'], plan or fixture['plan'], 'owner/plugins',
+                        'reviewer', github, fixture['tools'])
+
+
+def test_review_publication_preserves_targets_and_recovers_assigned_prs(publication_repository):
+    fixture = publication_repository
+    module, github, plan = publisher_module(), publication_github(fixture), fixture['plan']
+    publish(module, fixture, github)
 
     assert github.created_refs == [plan['sync_branch'], plan['target_release']]
-    assert github.refs[plan['sync_branch']] == publication_repository['sync_commit']
-    assert github.refs[plan['target_release']] == publication_repository['target_commit']
-    assert len(github.pulls) == 1
-    assert github.pulls[0]['assignees'] == ['reviewer']
-    source = json.loads(git(publication_repository['repository'], 'show',
-                            f"{plan['source_release']}:.resolver-plugins/upstream.json"))['upstream_commit']
-    assert f"https://github.com/opnsense/plugins/compare/{source}...{plan['upstream_commit']}" in github.pulls[0]['body']
-
+    assert github.refs[plan['sync_branch']] == fixture['sync_commit']
+    assert github.refs[plan['target_release']] == fixture['target_commit']
+    assert len(github.pulls) == 1 and github.pulls[0]['assignees'] == ['reviewer']
+    source = upstream_profile(upstream_commit=fixture['initial'])
+    assert f"https://github.com/opnsense/plugins/compare/{source['upstream_commit']}...{plan['upstream_commit']}" in github.pulls[0]['body']
+    assert f"Pinned core: `{plan['core_commit']}`" in github.pulls[0]['body']
     expected_refs = dict(github.refs)
     github.pulls.clear()
     github.created_refs.clear()
-    module.publish_plan(publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github)
-    assert github.created_refs == []
-    assert github.refs == expected_refs
+    publish(module, fixture, github)
+    assert github.created_refs == [] and github.refs == expected_refs
+    assert len(github.pulls) == 1 and github.pulls[0]['assignees'] == ['reviewer']
+    github.pulls[0]['assignees'] = []
+    publish(module, fixture, github)
+    assert len(github.pulls) == 1 and github.pulls[0]['assignees'] == ['reviewer']
+    assert github.created_refs == [] and github.refs == expected_refs
 
-    assert len(github.pulls) == 1
-    assert github.pulls[0]['assignees'] == ['reviewer']
-
-    existing_pull = github.pulls[0]
-    existing_pull['assignees'] = []
-    module.publish_plan(publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github)
-    assert github.pulls == [existing_pull]
-    assert existing_pull['assignees'] == ['reviewer']
-    assert github.created_refs == []
-    assert github.refs == expected_refs
-
-    repository = publication_repository['repository']
-    git(repository, 'checkout', 'upstream-26.7')
-    upstream = commit(repository, {'dns/bind/bind.conf': 'bind-v3\n'}, 'upstream update')
+    # The maintainer merges the reviewed source, then upstream changes again.
+    repository = fixture['repository']
+    git(repository, 'update-ref', f"refs/heads/{plan['target_release']}", fixture['sync_commit'])
+    github.refs[plan['target_release']] = fixture['sync_commit']
+    git(repository, 'checkout', '-B', 'upstream-update', plan['upstream_commit'])
+    upstream = commit(repository, {'dns/bind/bind.conf': 'bind-v3\n'}, 'upstream source update')
     git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', upstream)
-    sync = f'sync/bind/26.7/{upstream[:12]}'
-    git(repository, 'checkout', '-b', sync, publication_repository['sync_commit'])
-    updated_sync = commit(repository, {
-        '.resolver-plugins/upstream.json': metadata('26.7', upstream),
-        'dns/bind/bind.conf': 'bind-v3\n',
-    }, 'review updated upstream')
-    update = dict(plan, action='update-review', source_release=plan['target_release'],
-                  upstream_commit=upstream, sync_branch=sync)
+    git(repository, 'checkout', 'master')
+    update = seal_sync(discover_sync(fixture, PLANNER), fixture['tmp_path'], PLANNER)
+    result = apply_sync(fixture, update, fixture['tmp_path'], PLANNER)
+    assert result.returncode == 0, result.stderr
+    github.created_refs.clear()
     github.published_commits.clear()
-    module.publish_plan(repository, update, 'owner/plugins', 'reviewer', github)
-    assert github.created_refs == [sync]
+    publish(module, fixture, github, update)
+    updated_sync = git(repository, 'rev-parse', update['sync_branch'])
+    assert github.created_refs == [update['sync_branch']]
     assert github.published_commits == [updated_sync]
-    assert github.refs == dict(expected_refs, **{sync: updated_sync})
+    assert github.refs[plan['target_release']] == fixture['sync_commit']
     assert len(github.pulls) == 2
     assert (github.pulls[-1]['head'], github.pulls[-1]['base'], github.pulls[-1]['assignees']) == (
-        sync, plan['target_release'], ['reviewer'])
+        update['sync_branch'], plan['target_release'], ['reviewer'])
 
 
 def test_retry_refuses_to_replace_a_different_existing_ref(publication_repository):
-    module = publisher_module()
-    plan = publication_repository['plan']
-    github = FakeGitHub(refs={plan['sync_branch']: 'f' * 40})
+    fixture = publication_repository
+    module, plan = publisher_module(), fixture['plan']
+    github = publication_github(fixture, {plan['sync_branch']: 'f' * 40})
 
     with pytest.raises(ValueError, match='different commit'):
-        module.publish_plan(
-            publication_repository['repository'], plan, 'owner/plugins', 'reviewer', github
-        )
+        publish(module, fixture, github)
 
     assert github.refs[plan['sync_branch']] == 'f' * 40
-    assert github.pulls == []
+    assert github.pulls == github.published_commits == []
 
 
 @pytest.mark.parametrize('target_present', [False, True])
-def test_recovery_uses_original_refs_and_assigns_missing_pr_after_core_changes(
-    publication_repository, target_present,
-):
-    module = publisher_module()
-    repository = publication_repository['repository']
-    plan = publication_repository['plan']
-    original_target = publication_repository['target_commit']
-    original_sync = publication_repository['sync_commit']
-    git(repository, 'branch', '-D', plan['sync_branch'])
-    git(repository, 'branch', '-D', plan['target_release'])
-
+def test_recovery_uses_exact_audit_and_original_refs_after_core_changes(publication_repository, target_present):
+    fixture = publication_repository
+    module, repository, plan = publisher_module(), fixture['repository'], fixture['plan']
+    git(repository, 'branch', '-D', plan['sync_branch'], plan['target_release'])
+    # A later control/source construction cannot replace the already published proposal.
     git(repository, 'checkout', '-B', 'retry-target', plan['upstream_commit'])
-    commit(repository, {
-        '.resolver-plugins/upstream.json': metadata(plan['series'], plan['upstream_commit'], 'f' * 40)
-    }, 'bootstrap resolver plugin release')
-    git(repository, 'checkout', '-B', 'retry-sync')
-    commit(repository, {'tools/resolver-overlay.txt': 'resolver overlay\n'},
-           'bootstrap resolver plugin overlay')
+    commit(repository, {'.resolver-plugins/upstream.json': json.dumps(upstream_profile(
+        plan['series'], plan['upstream_commit'], core_commit='f' * 40))}, 'later core input')
     git(repository, 'checkout', 'master')
-
-    refs = {plan['sync_branch']: original_sync}
+    refs = {plan['source_release']: plan['source_commit'], plan['sync_branch']: fixture['sync_commit']}
     if target_present:
-        refs[plan['target_release']] = original_target
+        refs[plan['target_release']] = fixture['target_commit']
     github = remote_github(repository, refs)
 
-    handled = module.recover_pending_reviews(
-        repository, 'owner/plugins', 'reviewer', github
-    )
+    handled = module.recover_pending_reviews(repository, 'owner/plugins', 'reviewer', github, fixture['tools'])
 
     assert handled is True
-    assert github.refs[plan['sync_branch']] == original_sync
-    assert github.refs[plan['target_release']] == original_target
+    assert github.refs[plan['sync_branch']] == fixture['sync_commit']
+    assert github.refs[plan['target_release']] == fixture['target_commit']
     assert github.created_refs == ([] if target_present else [plan['target_release']])
     assert github.published_commits == []
     assert len(github.pulls) == 1
-    assert github.pulls[0]['head'] == plan['sync_branch']
-    assert github.pulls[0]['base'] == plan['target_release']
-    assert github.pulls[0]['assignees'] == ['reviewer']
+    assert (github.pulls[0]['head'], github.pulls[0]['base'], github.pulls[0]['assignees']) == (
+        plan['sync_branch'], plan['target_release'], ['reviewer'])
+    assert f"Pinned core: `{plan['core_commit']}`" in github.pulls[0]['body']
 
 
-def test_recovery_rejects_sync_only_bootstrap_outside_current_upstream_ref(
-    publication_repository,
-):
-    module = publisher_module()
-    repository = publication_repository['repository']
-    plan = publication_repository['plan']
-    sync_commit = publication_repository['sync_commit']
-    git(repository, 'checkout', 'upstream-26.7')
-    advanced_upstream = commit(repository, {'dns/bind/bind.conf': 'bind-v3\n'}, 'advance upstream')
+def test_recovery_rejects_sync_only_bootstrap_after_upstream_drift(publication_repository):
+    fixture = publication_repository
+    module, repository, plan = publisher_module(), fixture['repository'], fixture['plan']
+    git(repository, 'checkout', '-B', 'upstream-update', plan['upstream_commit'])
+    advanced = commit(repository, {'dns/bind/bind.conf': 'bind-v3\n'}, 'advance upstream')
     git(repository, 'checkout', 'master')
-    git(
-        repository,
-        'update-ref',
-        'refs/remotes/upstream/stable/26.7',
-        advanced_upstream,
-    )
-    git(
-        repository,
-        'update-ref',
-        f"refs/remotes/origin/{plan['sync_branch']}",
-        sync_commit,
-    )
-    git(repository, 'branch', '-D', plan['sync_branch'])
-    git(repository, 'branch', '-D', plan['target_release'])
-    github = FakeGitHub(refs={plan['sync_branch']: sync_commit})
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', advanced)
+    git(repository, 'branch', '-D', plan['sync_branch'], plan['target_release'])
+    github = remote_github(repository, {plan['source_release']: plan['source_commit'],
+                                       plan['sync_branch']: fixture['sync_commit']})
 
-    handled = module.recover_pending_reviews(
-        repository, 'owner/plugins', 'reviewer', github
-    )
+    handled = module.recover_pending_reviews(repository, 'owner/plugins', 'reviewer', github, fixture['tools'])
 
     assert handled is False
-    assert github.created_refs == []
-    assert github.pulls == []
+    assert github.created_refs == github.pulls == []
+
+
+def test_environment_review_publication_describes_retained_source_and_new_tools(tmp_path):
+    fixture = bind_sync_repositories(tmp_path)
+    repository, tools = fixture['repository'], fixture['tools']
+    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/26.7')
+    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/27.1')
+    commit(tools, {'config/26.1/build.conf': 'OS?=14.4\n'}, 'tools environment update')
+    git(tools, 'tag', '26.1.12')
+    plan = seal_sync(discover_sync(fixture, PLANNER), tmp_path, PLANNER)
+    result = apply_sync(fixture, plan, tmp_path, PLANNER)
+    assert result.returncode == 0, result.stderr
+    fixture.update(plan=plan, source_release=plan['source_commit'])
+    github = publication_github(fixture)
+
+    publish(publisher_module(), fixture, github)
+
+    assert github.created_refs == [plan['sync_branch']]
+    assert github.refs[plan['target_release']] == plan['source_commit']
+    body = github.pulls[0]['body']
+    assert 'BIND source unchanged; build environment changed' in body
+    assert 'Tools: `26.1.11` -> `26.1.12`' in body
+    assert 'FreeBSD: `14.3` -> `14.4`' in body
 
 
 def test_github_reproduces_exact_local_objects_before_accepting_commit(tmp_path, monkeypatch):

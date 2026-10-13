@@ -1,6 +1,6 @@
 from common_imports import *
 
-from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text
+from workflow_fixtures import assert_permissions, assert_action_release_tags, assert_checkout_credentials, job_text
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -22,7 +22,7 @@ def test_pull_request_release_cleanup_runs_on_every_close():
 
 def test_pull_request_release_cleanup_uses_only_trusted_code():
     workflow = workflow_text()
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     assert "ref: ${{ github.workflow_sha }}" in workflow
     assert_checkout_credentials(job_text(workflow, "cleanup"))
     for untrusted_ref in (

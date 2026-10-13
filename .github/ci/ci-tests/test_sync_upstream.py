@@ -4,430 +4,232 @@ import pytest
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
-PLANNER = pathlib.Path(
-    os.environ.get('SYNC_UPSTREAM', REPOSITORY_ROOT / '.github/ci/sync_upstream.py')
-)
+PLANNER = pathlib.Path(os.environ.get('SYNC_UPSTREAM', REPOSITORY_ROOT / '.github/ci/sync_upstream.py'))
 METADATA_PATH = '.resolver-plugins/upstream.json'
-OVERLAY_MANIFEST = '.resolver-plugins/overlay-paths.txt'
-CORE_COMMIT = '2' * 40
-CORE_ARCHIVE_SHA256 = 'a' * 64
-
-
-def metadata(series, upstream_commit, freebsd_release='14.3', tools_tag=None):
-    return json.dumps(upstream_profile(series, upstream_commit, core_commit=CORE_COMMIT,
-                                      freebsd_release=freebsd_release, tools_tag=tools_tag))
+AUDIT_PATH = '.resolver-plugins/sync-plan.json'
+CALLER_PATH = '.github/workflows/bind-tests.yml'
 
 
 @pytest.fixture
 def repositories(tmp_path):
-    upstream = tmp_path / 'upstream.git'
-    origin = tmp_path / 'origin.git'
-    source = tmp_path / 'source'
-    repository = tmp_path / 'repository'
-    tools = tmp_path / 'tools'
-    init_repository(tools)
-    commit(tools, {'config/26.1/build.conf': 'OS?=14.2\n'}, 'tools 26.1')
-    git(tools, 'tag', '26.1')
-    commit(tools, {'config/26.1/build.conf': 'OS?=14.3\n'}, 'tools 26.1.11')
-    git(tools, 'tag', '26.1.11')
-    commit(tools, {'config/26.1/build.conf': 'OS?=99.1\n'}, 'prerelease 26.1')
-    git(tools, 'tag', '26.1.b')
-    git(tools, 'tag', '26.1.r1')
-    commit(tools, {'config/26.7/build.conf': 'OS?=15.0\n'}, 'tools 26.7')
-    git(tools, 'tag', '26.7')
-    commit(tools, {'config/26.7/build.conf': 'OS?=15.1\n'}, 'tools 26.7.1')
-    git(tools, 'tag', '26.7.1')
-    commit(tools, {'config/26.7/build.conf': 'OS?=99.7\n'}, 'prerelease 26.7')
-    git(tools, 'tag', '26.7.b')
-    git(tools, 'tag', '26.7.r1')
-    git(tmp_path, 'init', '--bare', '--initial-branch=master', upstream)
-    git(tmp_path, 'init', '--bare', '--initial-branch=master', origin)
-    git(tmp_path, 'clone', upstream, source)
-    git(source, 'remote', 'rename', 'origin', 'upstream')
-    git(source, 'config', 'user.email', 'tests@example.invalid')
-    git(source, 'config', 'user.name', 'Planner tests')
-    initial = commit(
-        source,
-        {'dns/bind/bind.conf': 'bind-v1\n', 'README': 'initial\n'},
-        'initial',
-    )
-    git(source, 'branch', 'stable/26.1', initial)
-    stable_26_7 = commit(source, {'README': 'unrelated 26.7\n'}, 'stable 26.7')
-    git(source, 'branch', 'stable/26.7', stable_26_7)
-    stable_27_1 = commit(source, {'dns/bind/bind.conf': 'bind-v2\n'}, 'stable 27.1')
-    git(source, 'branch', 'stable/27.1', stable_27_1)
-    git(source, 'push', 'upstream', 'stable/26.1', 'stable/26.7', 'stable/27.1')
-
-    git(source, 'remote', 'add', 'origin', origin)
-    git(source, 'push', 'origin', 'master')
-    git(source, 'checkout', '-B', 'release/bind-rp/26.1', initial)
-    commit(
-        source,
-        {
-            METADATA_PATH: metadata('26.1', initial),
-            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\n',
-            'tools/resolver-overlay.txt': 'resolver overlay\n',
-            'tools/not-an-overlay.txt': 'must not copy\n',
-        },
-        'release 26.1 metadata',
-    )
-    git(source, 'push', 'origin', 'release/bind-rp/26.1')
-
-    git(tmp_path, 'clone', origin, repository)
-    git(repository, 'config', 'user.email', 'tests@example.invalid')
-    git(repository, 'config', 'user.name', 'Planner tests')
-    git(repository, 'remote', 'add', 'upstream', upstream)
-    git(repository, 'fetch', 'upstream')
-    git(repository, 'branch', 'release/bind-rp/26.1', 'origin/release/bind-rp/26.1')
-    return {
-        'repository': repository,
-        'upstream': upstream,
-        'initial': initial,
-        'stable_26_7': stable_26_7,
-        'stable_27_1': stable_27_1,
-        'tools': tools,
-    }
+    return bind_sync_repositories(tmp_path)
 
 
-def add_release(
-    repositories, series: str, upstream_commit: str, freebsd_release: str = '14.3'
-) -> None:
+def add_release(repositories, series, upstream_commit):
     repository = repositories['repository']
-    release = f'release/bind-rp/{series}'
-    git(repository, 'checkout', '-B', release, upstream_commit)
-    commit(
-        repository,
-        {
-            METADATA_PATH: metadata(series, upstream_commit, freebsd_release),
-            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\n',
-            'tools/resolver-overlay.txt': 'resolver overlay\n',
-            'tools/not-an-overlay.txt': 'must not copy\n',
-        },
-        f'release {series} metadata',
-    )
+    git(repository, 'checkout', '-B', f'release/bind-rp/{series}', upstream_commit)
+    commit(repository, {
+        METADATA_PATH: json.dumps(upstream_profile(series, upstream_commit)),
+        'dns/bind/fork.conf': 'resolver overlay\n',
+        'Mk/plugins.mk': 'native framework\nfork dependency formula\n',
+        'tools/not-an-overlay.txt': 'must not copy\n',
+    }, f'release {series}')
     git(repository, 'checkout', 'master')
 
 
-def configure_overlay_merge(
-    repositories,
-    path: str,
-    base_contents: str,
-    overlay_contents: str,
-    target_contents: str,
-    *,
-    bind_changed: bool = False,
-) -> None:
+def plan(repositories, tmp_path):
+    return seal_sync(discover_sync(repositories, PLANNER), tmp_path, PLANNER)
+
+
+def configure_overlay_merge(repositories, base, overlay, target):
     repository = repositories['repository']
+    path = 'dns/bind/merge.conf'
     git(repository, 'checkout', '-B', 'overlay-base', repositories['initial'])
-    overlay_base = commit(repository, {path: base_contents}, 'add upstream overlay base')
-    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', overlay_base)
-
-    git(repository, 'checkout', '-B', 'release/bind-rp/26.1', overlay_base)
-    commit(
-        repository,
-        {
-            METADATA_PATH: metadata('26.1', overlay_base),
-            OVERLAY_MANIFEST: f'{OVERLAY_MANIFEST}\ntools/resolver-overlay.txt\n{path}\n',
-            'tools/resolver-overlay.txt': 'resolver overlay\n',
-            path: overlay_contents,
-        },
-        'release overlay fixture',
-    )
-
-    git(repository, 'checkout', '-B', 'overlay-target', overlay_base)
-    target_files = {path: target_contents}
-    if bind_changed:
-        target_files['dns/bind/bind.conf'] = 'bind-v2\n'
-    overlay_target = commit(repository, target_files, 'update overlay target upstream')
-    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', overlay_target)
+    baseline = commit(repository, {path: base}, 'upstream overlay base')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', baseline)
+    git(repository, 'checkout', '-B', 'release/bind-rp/26.1', baseline)
+    commit(repository, {METADATA_PATH: json.dumps(upstream_profile(upstream_commit=baseline)),
+                        path: overlay}, 'reviewed fork overlay')
+    git(repository, 'checkout', '-B', 'overlay-target', baseline)
+    target_commit = commit(repository, {path: target}, 'changed upstream overlay target')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', target_commit)
     git(repository, 'checkout', 'master')
-
-
-def plan(repositories) -> dict:
-    command = [
-        'python3',
-        str(PLANNER),
-        'plan',
-        '--repository',
-        str(repositories['repository']),
-        '--upstream',
-        'upstream',
-        '--release-prefix',
-        'release/bind-rp/',
-        '--metadata-path',
-        METADATA_PATH,
-        '--tools-repository',
-        str(repositories['tools']),
-    ]
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
-    return json.loads(result.stdout)
-
-
-def apply(
-    repositories,
-    decision: dict,
-    tmp_path: pathlib.Path,
-    environment: dict[str, str] | None = None,
-    *,
-    core_commit: str = CORE_COMMIT,
-    core_archive_url: str | None = None,
-    core_archive_sha256: str = CORE_ARCHIVE_SHA256,
-) -> subprocess.CompletedProcess:
-    plan_path = tmp_path / 'plan.json'
-    plan_path.write_text(json.dumps(decision))
-    if core_archive_url is None:
-        core_archive_url = f'https://github.com/opnsense/core/archive/{core_commit}.tar.gz'
-    return subprocess.run(
-        [
-            'python3', str(PLANNER), 'apply',
-            '--repository', str(repositories['repository']),
-            '--plan', str(plan_path),
-            '--core-commit', core_commit,
-            '--core-archive-url', core_archive_url,
-            '--core-archive-sha256', core_archive_sha256,
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-        env={**os.environ, **(environment or {})},
-    )
-
-
-def assert_plan_shape(decision: dict) -> None:
-    assert set(decision) == {
-        'action',
-        'series',
-        'upstream_ref',
-        'upstream_commit',
-        'source_release',
-        'target_release',
-        'sync_branch',
-        'tools_tag',
-        'freebsd_release',
-        'bind_changed',
-        'reason',
-    }
+    return path
 
 
 def test_unrelated_existing_upstream_change_is_noop(repositories):
     add_release(repositories, '26.7', repositories['initial'])
     git(repositories['repository'], 'update-ref', '-d', 'refs/remotes/upstream/stable/27.1')
 
-    decision = plan(repositories)
+    discovery = discover_sync(repositories, PLANNER)
 
-    assert_plan_shape(decision)
-    assert decision['action'] == 'noop'
-    assert decision['series'] == '26.7'
-    assert decision['upstream_commit'] == repositories['stable_26_7']
-    assert decision['tools_tag'] == '26.7.1'
-    assert decision['freebsd_release'] == '15.1'
-    assert decision['bind_changed'] is False
+    assert discovery['action'] == 'noop'
+    assert discovery['upstream_head'] == repositories['stable_26_7']
+    assert discovery['upstream_commit'] == repositories['initial']
+    assert (discovery['tools_tag'], discovery['freebsd_release']) == ('26.7.1', '15.1')
+    assert discovery['bind_changed'] is discovery['environment_changed'] is False
+    assert 'sync_branch' not in discovery and 'core_commit' not in discovery
 
 
 def test_source_metadata_blocks_planning_when_lineage_is_wrong(repositories):
     repository = repositories['repository']
     git(repository, 'checkout', 'release/bind-rp/26.1')
-    invalid = json.loads(metadata('26.1', repositories['initial']))
-    invalid['upstream_commit'] = repositories['stable_26_7']
-    commit(repository, {METADATA_PATH: json.dumps(invalid)}, 'record wrong source lineage')
+    commit(repository, {METADATA_PATH: json.dumps(upstream_profile(
+        upstream_commit=repositories['stable_26_7']))}, 'wrong source lineage')
     git(repository, 'checkout', 'master')
 
-    decision = plan(repositories)
-
-    assert decision['action'] == 'blocked'
+    assert discover_sync(repositories, PLANNER)['action'] == 'blocked'
 
 
 @pytest.mark.parametrize('bind_changed', [False, True], ids=['unchanged-bind', 'changed-bind'])
-def test_apply_bootstrap_review_creates_pristine_release_and_overlay_branch(repositories, tmp_path, bind_changed):
-    upstream_commit = repositories['stable_27_1' if bind_changed else 'stable_26_7']
+def test_apply_bootstrap_review_creates_pristine_release_and_bounded_overlay(repositories, tmp_path, bind_changed):
     repository = repositories['repository']
-    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', upstream_commit)
-    decision = plan(repositories)
-    assert decision['action'] == 'bootstrap-review'
-    assert decision['series'] == '26.7'
-    assert decision['source_release'] == 'release/bind-rp/26.1'
-    assert decision['target_release'] == 'release/bind-rp/26.7'
-    assert decision['tools_tag'] == '26.7.1'
-    assert decision['freebsd_release'] == '15.1'
-    assert decision['bind_changed'] is bind_changed
-    assert decision['sync_branch'] == f'sync/bootstrap/26.7/{upstream_commit[:12]}'
+    upstream = repositories['stable_27_1' if bind_changed else 'stable_26_7']
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', upstream)
+    if bind_changed:
+        git(repository, 'checkout', 'release/bind-rp/26.1')
+        commit(repository, {'.resolver-plugins/overlay-paths.txt': 'tools/ci\n.github\n',
+                            '.resolver-plugins/bind920.json': 'historical approval\n',
+                            '.resolver-plugins/bind-compatibility.json': 'historical policy\n'},
+               'historical source policy copies')
+        git(repository, 'checkout', 'master')
+    sealed = plan(repositories, tmp_path)
+    checkout_before = git(repository, 'rev-parse', 'HEAD')
+    (repository / 'local-notes').write_text('preserve dirty user work\n')
 
-    result = apply(repositories, decision, tmp_path)
+    result = apply_sync(repositories, sealed, tmp_path, PLANNER)
 
     assert result.returncode == 0, result.stderr
-    target = decision['target_release']
-    assert git(repository, 'ls-tree', target, '--', 'tools/resolver-overlay.txt') == ''
-    assert git(repository, 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
-    for branch in (target, decision['sync_branch']):
+    assert (sealed['action'], sealed['series'], sealed['bind_changed']) == ('bootstrap-review', '26.7', bind_changed)
+    assert sealed['tools_commit'] == git(repositories['tools'], 'rev-parse', '26.7.1^{commit}')
+    assert git(repository, 'rev-parse', 'HEAD') == checkout_before
+    assert (repository / 'local-notes').read_text() == 'preserve dirty user work\n'
+    target, review = sealed['target_release'], sealed['sync_branch']
+    assert re.fullmatch(rf'sync/bootstrap/26.7/{upstream[:12]}-[0-9a-f]{{12}}', review)
+    assert git(repository, 'rev-parse', f'{target}^') == upstream
+    assert git(repository, 'rev-parse', f'{review}^') == git(repository, 'rev-parse', target)
+    assert git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r', upstream, target) == METADATA_PATH
+    assert git(repository, 'show', f'{review}:dns/bind/fork.conf') == 'resolver overlay'
+    assert git(repository, 'show', f'{review}:Mk/plugins.mk') == 'native framework\nfork dependency formula'
+    for branch in (target, review):
+        assert git(repository, 'ls-tree', branch, '--', 'tools/not-an-overlay.txt', 'dns/bind/tests') == ''
         assert git(repository, 'show', f'{branch}:dns/bind/bind.conf') == ('bind-v2' if bind_changed else 'bind-v1')
-        assert git(repository, 'ls-tree', branch, '--', 'tools/not-an-overlay.txt') == ''
-    target_metadata = json.loads(git(repository, 'show', f'{target}:{METADATA_PATH}'))
-    assert target_metadata == {
-        'series': '26.7',
-        'upstream_branch': 'stable/26.7',
-        'upstream_commit': upstream_commit,
-        'tools_tag': '26.7.1',
-        'freebsd_release': '15.1',
-        'core_commit': CORE_COMMIT,
-        'core_archive_url': f'https://github.com/opnsense/core/archive/{CORE_COMMIT}.tar.gz',
-        'core_archive_sha256': CORE_ARCHIVE_SHA256,
-    }
+        assert git(repository, 'show', f'{branch}:README') == 'unrelated 26.7'
+        assert git(repository, 'ls-tree', branch, '--', '.resolver-plugins/overlay-paths.txt',
+                   '.resolver-plugins/bind920.json', '.resolver-plugins/bind-compatibility.json') == ''
+    profile = json.loads(git(repository, 'show', f'{review}:{METADATA_PATH}'))
+    assert profile == upstream_profile('26.7', upstream)
+    assert json.loads(git(repository, 'show', f'{review}:{AUDIT_PATH}')) == sealed
+    caller = git(repository, 'show', f'{review}:{CALLER_PATH}')
+    assert 'contents: read' in caller and 'secrets:' not in caller
+    assert 'pull_request_base:' in caller and 'pull_request_sha:' in caller
+    assert '.resolver-plugins/upstream.json' in caller and 'Mk/plugins.mk' in caller
+    assert git(repository, 'ls-tree', target, '--', AUDIT_PATH, CALLER_PATH) == ''
+    original = git(repository, 'rev-parse', target, review)
+    retry = apply_sync(repositories, sealed, tmp_path, PLANNER,
+                       {'GIT_AUTHOR_DATE': '2030-01-01T00:00:00+00:00',
+                        'GIT_COMMITTER_DATE': '2030-01-01T00:00:00+00:00'})
+    assert retry.returncode == 0, retry.stderr
+    assert git(repository, 'rev-parse', target, review) == original
 
 
-def test_apply_bootstrap_review_accepts_source_metadata_from_divergent_source_stable_branch(
-    repositories, tmp_path
-):
+def test_bootstrap_accepts_a_source_baseline_on_its_own_stable_lineage(repositories, tmp_path):
     repository = repositories['repository']
-    git(repository, 'checkout', '-B', 'source-stable-26.1', repositories['initial'])
-    source_upstream_commit = commit(
-        repository, {'README': 'source stable 26.1\n'}, 'source stable 26.1'
-    )
-    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', source_upstream_commit)
+    git(repository, 'checkout', '-B', 'source-upstream', repositories['initial'])
+    baseline = commit(repository, {'README': 'source stable branch\n'}, 'divergent source lineage')
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.1', baseline)
     git(repository, 'checkout', 'release/bind-rp/26.1')
-    commit(
-        repository,
-        {METADATA_PATH: metadata('26.1', source_upstream_commit)},
-        'record divergent source upstream commit',
-    )
+    commit(repository, {METADATA_PATH: json.dumps(upstream_profile(upstream_commit=baseline))},
+           'record source stable baseline')
     git(repository, 'checkout', 'master')
-    decision = plan(repositories)
+    sealed = plan(repositories, tmp_path)
 
-    result = apply(repositories, decision, tmp_path)
+    result = apply_sync(repositories, sealed, tmp_path, PLANNER)
 
     assert result.returncode == 0, result.stderr
-    target_metadata = json.loads(git(repository, 'show', f'{decision["target_release"]}:{METADATA_PATH}'))
-    assert target_metadata['upstream_commit'] == repositories['stable_26_7']
+    assert git(repository, 'show', f"{sealed['sync_branch']}:dns/bind/fork.conf") == 'resolver overlay'
+    assert json.loads(git(repository, 'show', f"{sealed['sync_branch']}:{METADATA_PATH}"))['upstream_commit'] == repositories['stable_26_7']
 
 
-def test_apply_creates_the_same_commit_when_a_publish_retry_rebuilds_a_branch(
-    repositories, tmp_path
-):
-    decision = plan(repositories)
-    first = apply(
-        repositories,
-        decision,
-        tmp_path,
-        {
-            'GIT_AUTHOR_DATE': '2001-01-01T00:00:00+00:00',
-            'GIT_COMMITTER_DATE': '2001-01-01T00:00:00+00:00',
-        },
-    )
-    assert first.returncode == 0, first.stderr
-    first_commit = git(repositories['repository'], 'rev-parse', decision['target_release'])
-    first_sync_commit = git(repositories['repository'], 'rev-parse', decision['sync_branch'])
-    git(repositories['repository'], 'branch', '-D', decision['target_release'])
-    git(repositories['repository'], 'branch', '-D', decision['sync_branch'])
+def test_environment_only_reviews_preserve_source_and_have_distinct_recoverable_identity(repositories, tmp_path):
+    repository, tools = repositories['repository'], repositories['tools']
+    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/26.7')
+    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/27.1')
+    source = git(repository, 'rev-parse', 'release/bind-rp/26.1')
+    reviews = []
+    for tag, release in [('26.1.12', '14.4'), ('26.1.13', '14.5')]:
+        tools_commit = commit(tools, {'config/26.1/build.conf': f'OS?= {release}\n'}, tag)
+        git(tools, 'tag', tag)
+        sealed = plan(repositories, tmp_path)
+        result = apply_sync(repositories, sealed, tmp_path, PLANNER)
+        assert result.returncode == 0, result.stderr
+        review = sealed['sync_branch']
+        reviews.append((sealed, git(repository, 'rev-parse', review)))
+        assert sealed['bind_changed'] is False and sealed['environment_changed'] is True
+        assert (sealed['upstream_commit'], sealed['upstream_head']) == (repositories['initial'], repositories['initial'])
+        assert sealed['tools_commit'] == tools_commit
+        assert git(repository, 'rev-parse', f'{review}^') == source
+        for tree in ('dns/bind', 'Mk/plugins.mk'):
+            assert git(repository, 'rev-parse', f'{review}:{tree}') == git(repository, 'rev-parse', f'{source}:{tree}')
+        assert set(git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r', source, review).splitlines()) == {
+            METADATA_PATH, AUDIT_PATH, CALLER_PATH}
+        profile = json.loads(git(repository, 'show', f'{review}:{METADATA_PATH}'))
+        assert (profile['tools_tag'], profile['freebsd_release']) == (tag, release)
+        assert json.loads(git(repository, 'show', f'{review}:{AUDIT_PATH}')) == sealed
+    assert reviews[0][0]['sync_branch'] != reviews[1][0]['sync_branch']
+    assert git(repository, 'rev-parse', 'release/bind-rp/26.1') == source
+    first_plan, first_commit = reviews[0]
+    result = apply_sync(repositories, first_plan, tmp_path, PLANNER,
+                        {'GIT_AUTHOR_DATE': '2030-01-01T00:00:00+00:00',
+                         'GIT_COMMITTER_DATE': '2030-01-01T00:00:00+00:00'})
+    assert result.returncode == 0, result.stderr
+    assert git(repository, 'rev-parse', first_plan['sync_branch']) == first_commit
 
-    second = apply(
-        repositories,
-        decision,
-        tmp_path,
-        {
-            'GIT_AUTHOR_DATE': '2030-01-01T00:00:00+00:00',
-            'GIT_COMMITTER_DATE': '2030-01-01T00:00:00+00:00',
-        },
-    )
 
-    assert second.returncode == 0, second.stderr
-    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == first_commit
-    assert git(repositories['repository'], 'rev-parse', decision['sync_branch']) == first_sync_commit
-
-
-def test_apply_update_review_creates_only_overlay_sync_branch(repositories, tmp_path):
+def test_apply_update_review_keeps_release_head_and_uses_new_upstream_baseline(repositories, tmp_path):
+    repository = repositories['repository']
     add_release(repositories, '26.7', repositories['initial'])
-    git(repositories['repository'], 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
-    decision = plan(repositories)
-    source_sha = git(repositories['repository'], 'rev-parse', decision['target_release'])
+    git(repository, 'update-ref', 'refs/remotes/upstream/stable/26.7', repositories['stable_27_1'])
+    sealed = plan(repositories, tmp_path)
+    source = git(repository, 'rev-parse', sealed['target_release'])
 
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    assert git(repositories['repository'], 'rev-parse', decision['target_release']) == source_sha
-    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:tools/resolver-overlay.txt') == 'resolver overlay'
-    assert decision['action'] == 'update-review'
-    assert decision['series'] == '26.7'
-    assert decision['bind_changed'] is True
-    assert decision['sync_branch'] == f'sync/bind/26.7/{repositories["stable_27_1"][:12]}'
-
-
-def test_apply_three_way_merges_same_result_and_retains_target_and_overlay_changes(
-    repositories, tmp_path
-):
-    path = 'tools/mergeable-overlay.txt'
-    configure_overlay_merge(
-        repositories,
-        path,
-        (
-            'header\nshared=old\nline-03\nline-04\nline-05\nline-06\nline-07\n'
-            'line-08\nline-09\ncontext=base\nline-11\nline-12\nline-13\nline-14\n'
-            'line-15\nline-16\nline-17\nline-18\nline-19\noverlay=old\ntail\n'
-        ),
-        (
-            'header\nshared=new\nline-03\nline-04\nline-05\nline-06\nline-07\n'
-            'line-08\nline-09\ncontext=base\nline-11\nline-12\nline-13\nline-14\n'
-            'line-15\nline-16\nline-17\nline-18\nline-19\noverlay=new\ntail\n'
-        ),
-        (
-            'header\nshared=new\nline-03\nline-04\nline-05\nline-06\nline-07\n'
-            'line-08\nline-09\ncontext=target\nline-11\nline-12\nline-13\nline-14\n'
-            'line-15\nline-16\nline-17\nline-18\nline-19\noverlay=old\ntail\n'
-        ),
-    )
-    decision = plan(repositories)
-
-    result = apply(repositories, decision, tmp_path)
+    result = apply_sync(repositories, sealed, tmp_path, PLANNER)
 
     assert result.returncode == 0, result.stderr
-    assert git(repositories['repository'], 'show', f'{decision["sync_branch"]}:{path}') == (
-        'header\nshared=new\nline-03\nline-04\nline-05\nline-06\nline-07\n'
-        'line-08\nline-09\ncontext=target\nline-11\nline-12\nline-13\nline-14\n'
-        'line-15\nline-16\nline-17\nline-18\nline-19\noverlay=new\ntail'
-    )
+    assert sealed['action'] == 'update-review' and sealed['bind_changed'] is True
+    assert git(repository, 'rev-parse', sealed['target_release']) == source
+    assert git(repository, 'rev-parse', f"{sealed['sync_branch']}^") == repositories['stable_27_1']
+    assert git(repository, 'show', f"{sealed['sync_branch']}:dns/bind/bind.conf") == 'bind-v2'
+    assert git(repository, 'show', f"{sealed['sync_branch']}:dns/bind/fork.conf") == 'resolver overlay'
+    assert git(repository, 'ls-tree', sealed['sync_branch'], '--', 'tools/not-an-overlay.txt') == ''
 
 
-def test_apply_three_way_conflict_preserves_all_refs(
-    repositories, tmp_path
-):
-    path = 'tools/conflicting-overlay.txt'
+def test_apply_three_way_merges_shared_result_and_retains_both_changes(repositories, tmp_path):
+    base = [f'context-{number}\n' for number in range(24)]
+    base[1], base[10], base[20] = 'shared=old\n', 'upstream=old\n', 'fork=old\n'
+    overlay, target, expected = base.copy(), base.copy(), base.copy()
+    overlay[1] = target[1] = expected[1] = 'shared=new\n'
+    target[10] = expected[10] = 'upstream=new\n'
+    overlay[20] = expected[20] = 'fork=new\n'
+    path = configure_overlay_merge(repositories, ''.join(base), ''.join(overlay), ''.join(target))
+    sealed = plan(repositories, tmp_path)
+
+    result = apply_sync(repositories, sealed, tmp_path, PLANNER)
+
+    assert result.returncode == 0, result.stderr
+    assert git(repositories['repository'], 'show', f"{sealed['sync_branch']}:{path}") == ''.join(expected).strip()
+
+
+@pytest.mark.parametrize('failure', ['conflict', 'source-drift', 'tools-drift', 'existing-target', 'existing-review'])
+def test_apply_failure_preserves_existing_refs(repositories, tmp_path, failure):
     repository = repositories['repository']
-    configure_overlay_merge(
-        repositories,
-        path,
-        'header\nvalue=base\ntail\n',
-        'header\nvalue=overlay\ntail\n',
-        'header\nvalue=target\ntail\n',
-        bind_changed=True,
-    )
-    decision = plan(repositories)
-    refs_before = git(repository, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads')
+    if failure == 'conflict':
+        configure_overlay_merge(repositories, 'value=base\n', 'value=fork\n', 'value=upstream\n')
+    sealed = plan(repositories, tmp_path)
+    if failure == 'source-drift':
+        git(repository, 'checkout', sealed['source_release'])
+        commit(repository, {'dns/bind/late-change': 'reviewed after discovery\n'}, 'source advanced')
+        git(repository, 'checkout', 'master')
+    elif failure == 'tools-drift':
+        replacement = commit(repositories['tools'], {'config/26.7/other.conf': 'upstream retag\n'},
+                             'tools tag moved after discovery')
+        git(repositories['tools'], 'tag', '--force', sealed['tools_tag'], replacement)
+    elif failure.startswith('existing-'):
+        branch = sealed['target_release' if failure == 'existing-target' else 'sync_branch']
+        git(repository, 'branch', branch, repositories['initial'])
+    refs_before = git(repository, 'show-ref')
 
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert git(repository, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads') == refs_before
-
-
-@pytest.mark.parametrize('existing', ['target_release', 'sync_branch'])
-def test_apply_preserves_all_refs_when_an_output_branch_already_exists(repositories, tmp_path, existing):
-    decision = plan(repositories)
-    git(repositories['repository'], 'branch', decision[existing], repositories['initial'])
-
-    refs_before = git(repositories['repository'], 'show-ref')
-    result = apply(repositories, decision, tmp_path)
+    result = apply_sync(repositories, sealed, tmp_path, PLANNER)
 
     assert result.returncode != 0
-    assert git(repositories['repository'], 'show-ref') == refs_before
-
-
-def test_apply_rejects_pathspec_magic_in_the_overlay_manifest(repositories, tmp_path):
-    repository = repositories['repository']
-    decision = plan(repositories)
-    git(repository, 'checkout', 'release/bind-rp/26.1')
-    commit(repository, {OVERLAY_MANIFEST: ':(glob)tools/**\n'}, 'add glob overlay manifest entry')
-    git(repository, 'checkout', 'master')
-
-    refs_before = git(repositories['repository'], 'show-ref')
-    result = apply(repositories, decision, tmp_path)
-
-    assert result.returncode != 0
-    assert git(repositories['repository'], 'show-ref') == refs_before
+    assert git(repository, 'show-ref') == refs_before

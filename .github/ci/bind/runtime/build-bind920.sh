@@ -11,18 +11,27 @@ fail() {
 
 series=$1
 artifact_directory=$2
-[ -n "${RP_UPSTREAM_METADATA:-}" ] || fail 'RP_UPSTREAM_METADATA is required'
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_directory/../../.." && pwd)
-profile_path=${RP_BIND920_METADATA:-$repository_root/.resolver-plugins/bind920.json}
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 pkg_command=${PKG_COMMAND:-pkg}
 make_command=${MAKE_COMMAND:-make}
 git_command=${GIT_COMMAND:-git}
 python_command=${PYTHON_COMMAND:-python3}
-: "${RP_TARGET_PKG_METADATA:?RP_TARGET_PKG_METADATA is required}"
-target_pkg_metadata=$RP_TARGET_PKG_METADATA
 pkg_static=${RP_PKG_STATIC_COMMAND:-/usr/local/sbin/pkg-static}
+: "${RP_TRUSTED_DIRECTORY:?RP_TRUSTED_DIRECTORY is required}"
+: "${RP_SELECTION_SHA256:?RP_SELECTION_SHA256 is required}"
+trusted_directory=$(CDPATH='' cd -- "$RP_TRUSTED_DIRECTORY" && pwd)
+RP_UPSTREAM_METADATA=$trusted_directory/upstream.json
+RP_TARGET_PKG_METADATA=$trusted_directory/creator-target.json
+RP_READER_PKG_METADATA=$trusted_directory/reader-target.json
+export RP_UPSTREAM_METADATA RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
+target_pkg_metadata=$RP_TARGET_PKG_METADATA
+profile_path=$trusted_directory/bind920-profile.json
+
+build_recipe_sha256=$("$python_command" -I "$script_directory/../shared/components.py" validate \
+    --component bind_runtime --series "$series" --trusted-directory "$trusted_directory" \
+    --selection-sha256 "$RP_SELECTION_SHA256" --build-recipe "$script_directory/build-bind920.sh") ||
+    fail 'invalid sealed runtime build inputs'
 
 metadata_field() {
     "$python_command" "$script_directory/bind920_profile.py" "$profile_path" "$1"
@@ -35,16 +44,16 @@ distinfo_sha256=$(metadata_field distinfo_sha256) || fail 'invalid BIND profile'
 distversion=$(metadata_field distversion) || fail 'invalid BIND profile'
 portrevision=$(metadata_field portrevision) || fail 'invalid BIND profile'
 package_version=$(metadata_field package_version) || fail 'invalid BIND profile'
-freebsd_release=$("$python_command" "$script_directory/../shared/metadata_profile.py" \
+freebsd_release=$("$python_command" "$script_directory/../../shared/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
 
-"$python_command" "$script_directory/../shared/target_pkg.py" field \
+"$python_command" "$script_directory/../../shared/target_pkg.py" field \
     "$target_pkg_metadata" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 
 "$pkg_command" update -f
 "$pkg_command" install -y git
-"$script_directory/../shared/setup-opnsense-repository.sh" "$series" >/dev/null
-pkg_creator_record=$("$python_command" "$script_directory/../shared/target_pkg.py" install \
+"$script_directory/../../shared/setup-opnsense-repository.sh" "$series" >/dev/null
+pkg_creator_record=$("$python_command" "$script_directory/../../shared/target_pkg.py" install \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static") || fail 'cannot select target package creator'
 [ -n "$pkg_creator_record" ] || fail 'target package creator record is empty'
@@ -52,29 +61,9 @@ lmdb_package=lmdb0
 if [ "$series" = 26.1 ]; then lmdb_package=lmdb; fi
 "$pkg_command" install -y -r OPNsense autoconf automake fstrm gmake json-c libedit libidn2 \
     libnghttp2 libtool liburcu libuv libxml2 "$lmdb_package" pkgconf protobuf-c
-"$python_command" "$script_directory/../shared/target_pkg.py" verify \
+"$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
-
-if [ -n "${RP_BIND920_CHANNEL_URL:-}" ]
-then
-    if "$python_command" "$script_directory/reuse_bind920.py" \
-        "$profile_path" "$series" "$freebsd_release" "$artifact_directory" \
-        --channel-url "$RP_BIND920_CHANNEL_URL" \
-        --public-key "$repository_root/docs/package-repository/resolver-plugins.pub" \
-        --pkg-command "$pkg_command" \
-        --pkg-static-command "$pkg_static" \
-        --target-pkg-metadata "$target_pkg_metadata"
-    then
-        exit 0
-    else
-        reuse_status=$?
-    fi
-    case "$reuse_status" in
-        3) printf '%s\n' 'BIND reuse cache miss; building pinned BIND packages' >&2 ;;
-        *) exit "$reuse_status" ;;
-    esac
-fi
 
 temporary_directory=$(mktemp -d)
 ports_directory="$temporary_directory/ports"
@@ -91,49 +80,34 @@ makefile="$ports_directory/dns/bind920/Makefile"
 distinfo="$ports_directory/dns/bind920/distinfo"
 [ "$(sha256 -q "$makefile")" = "$makefile_sha256" ] || fail 'BIND Makefile hash does not match pinned metadata'
 [ "$(sha256 -q "$distinfo")" = "$distinfo_sha256" ] || fail 'BIND distinfo hash does not match pinned metadata'
-grep -Fqx "DISTVERSION=	$distversion" "$makefile" || fail 'BIND Makefile does not declare the pinned version'
-if [ "$portrevision" -gt 0 ]
-then
-    "$python_command" - "$makefile" "$portrevision" <<'PY'
-import pathlib
-import re
-import sys
+"$python_command" -I "$script_directory/bind920_profile.py" "$profile_path" verify-recipe \
+    --ports-commit "$resolved_commit" --makefile "$makefile" --distinfo "$distinfo"
 
-path = pathlib.Path(sys.argv[1])
-revision = sys.argv[2]
-text = path.read_text(encoding="utf-8")
-updated, count = re.subn(r"^PORTREVISION=\s*[0-9]+\s*$", f"PORTREVISION=\t{revision}", text, flags=re.MULTILINE)
-if count == 0:
-    raise SystemExit("BIND Makefile does not declare PORTREVISION")
-path.write_text(updated, encoding="utf-8")
-PY
-fi
-
-"$python_command" "$script_directory/../shared/target_pkg.py" verify \
+"$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind-tools" PORTSDIR="$ports_directory" package
-"$python_command" "$script_directory/../shared/target_pkg.py" verify \
+"$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind-tools package was not produced as expected'
 bind_tools_package=$1
-"$python_command" "$script_directory/../shared/package_checksums.py" \
+"$python_command" "$script_directory/../../shared/package_checksums.py" \
     --pkg-command "$pkg_static" "$bind_tools_package"
 "$pkg_command" add "$bind_tools_package"
 
-"$python_command" "$script_directory/../shared/target_pkg.py" verify \
+"$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OPTIONS_UNSET='DOCS GSSAPI_BASE' "$make_command" -C "$ports_directory/dns/bind920" PORTSDIR="$ports_directory" package
-"$python_command" "$script_directory/../shared/target_pkg.py" verify \
+"$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
 set -- "$ports_directory"/dns/bind920/work/pkg/bind920-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind920 package was not produced as expected'
 bind_package=$1
-"$python_command" "$script_directory/../shared/package_checksums.py" \
+"$python_command" "$script_directory/../../shared/package_checksums.py" \
     --pkg-command "$pkg_static" "$bind_package"
 "$pkg_command" add "$bind_package"
 
@@ -149,5 +123,10 @@ provenance="$temporary_directory/bind920-provenance.json"
 "$python_command" "$script_directory/bind920_profile.py" "$profile_path" \
     provenance "$series" "$freebsd_release" \
     --package-creator "$pkg_creator_record" \
+    --recipe-sha256 "$build_recipe_sha256" \
     --bind-tools "$bind_tools_package" --bind920 "$bind_package" --output "$provenance"
 cp "$bind_tools_package" "$bind_package" "$provenance" "$artifact_directory/"
+"$python_command" "$script_directory/../shared/components.py" validate \
+    --component bind_runtime --series "$series" --trusted-directory "$trusted_directory" \
+    --selection-sha256 "$RP_SELECTION_SHA256" --directory "$artifact_directory" \
+    --pkg-command "$pkg_static" >/dev/null

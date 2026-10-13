@@ -14,18 +14,42 @@ def job_text(workflow, name):
     return workflow_jobs(workflow)[name]
 
 
+def workflow_steps(job):
+    return re.split(r'^      - ', job, flags=re.MULTILINE)[1:]
+
+
+def step_run(step):
+    match = re.search(r'^(?: {8})?run: ([^\n]+)(?:\n|$)', step, re.MULTILINE)
+    if match is None:
+        return ''
+    if match[1] != '|':
+        return match[1] + '\n'
+    body = re.match(r'(?: {10}[^\n]*\n|\n)*', step[match.end():])[0]
+    return textwrap.dedent(body)
+
+
+def trigger_paths(workflow, event):
+    header = workflow.split('\njobs:', 1)[0]
+    block = re.search(r'^  ' + re.escape(event) + r':\n(.*?)(?=^  [\w-]+:|\Z)',
+                      header, re.MULTILINE | re.DOTALL)
+    if block is None:
+        return []
+    paths = re.search(r'^    paths:\n((?:      [^\n]*\n)*)', block[1], re.MULTILINE)
+    return re.findall(r"^      - '([^']+)'$", paths[1], re.MULTILINE) if paths else []
+
+
 def action_references(workflow):
     return re.findall(r'^\s+(?:-\s+)?uses:\s+([^\s#]+)', workflow, re.MULTILINE)
 
 
-def assert_pinned_actions(workflow):
-    references = action_references(workflow)
+def assert_action_release_tags(workflow):
+    references = [ref for ref in action_references(workflow) if not ref.startswith('./')]
     assert references
-    assert all(re.fullmatch(r'[^@\s]+@[0-9a-f]{40}', ref) for ref in references)
+    assert all(re.fullmatch(r'[^@\s]+@v[1-9][0-9]*', ref) for ref in references)
 
 
 def assert_checkout_credentials(job, *, persistent=False):
-    steps = re.split(r'^      - ', job, flags=re.MULTILINE)
+    steps = workflow_steps(job)
     checkouts = [step for step in steps if 'uses: actions/checkout@' in step]
     assert checkouts
     for step in checkouts:

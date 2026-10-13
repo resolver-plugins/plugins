@@ -5,18 +5,15 @@ from __future__ import annotations
 
 from module_fixtures import *
 
-from package_fixtures import bind_channel_inputs, bind_records, creator_identity, write_json, write_resolved_target, complete_bind_channel
+import pytest
+
+from package_fixtures import creator_identity, write_json, write_resolved_target, make_bind_component, runtime_approval, plugin_manifest
+from test_package_catalogue import publication_environment, directory_bytes, byte_hashes, assert_original_component
+from bind.shared import components
+from bind.plugin import plugin_release
 
 
 release_channel = load_module("release_channel", "shared/release_channel.py")
-
-
-def bind_provenance_record(fingerprint: str = "f" * 64) -> dict[str, object]:
-    return {
-        "architecture": "x86_64",
-        "fingerprint": fingerprint,
-        "freebsd_release": "15.1",
-    }
 
 
 def make_assets(directory, assets):
@@ -26,30 +23,177 @@ def make_assets(directory, assets):
     return directory
 
 
-def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, immutable=False):
+def make_snapshot(directory, tag, assets=None, *, existed=True, draft=False, immutable=False, metadata=None):
     if assets is not None:
         make_assets(directory, assets)
     manifest = directory.with_name(directory.name + '-checksums.json')
     if existed:
         write_json(manifest, {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                               for p in directory.iterdir() if p.is_file()})
+        if metadata is not None:
+            write_json(directory.parent / f"{tag}-release.json", metadata)
     return release_channel.ReleaseSnapshot(tag, existed, directory, manifest,
-                                           draft=draft, immutable=immutable)
+                                           draft=draft, immutable=immutable, metadata=metadata)
+
+
+@contextmanager
+def release_api_store(remote, pages, failure, native_run):
+    """Persist GitHub wire outcomes while running all Release/Pages decisions."""
+    objects={};sequence=[0];asset_sequence=[0]
+    def upload_asset(state,name,contents):
+        asset_sequence[0]+=1
+        state['assets'][name]=contents
+        state.setdefault('asset_ids',{})[name]=asset_sequence[0]
+    for state in remote.values():
+        for name,contents in list(state['assets'].items()):
+            upload_asset(state,name,contents)
+    def object_sha(kind,value):
+        sequence[0]+=1
+        digest=hashlib.sha1((kind+str(sequence[0])+repr(value)).encode()).hexdigest()
+        objects[digest]=(kind,value)
+        return digest
+    initial_tree={name:object_sha('blob',data) for name,data in pages['files'].items()}
+    tree=object_sha('tree',initial_tree)
+    pages['head']=object_sha('commit',dict(tree=tree,parents=[]))
+    def listed(tag,state):
+        return dict(tag_name=tag,created_at=state['created_at'],draft=state['draft'],
+                    prerelease=state['isPrerelease'])
+    def result(command,kwargs,status=0,stdout='',stderr=''):
+        if kwargs.get('check') and status:
+            raise subprocess.CalledProcessError(status,command,output=stdout,stderr=stderr)
+        if not kwargs.get('text'):
+            stdout,stderr=stdout.encode(),stderr.encode()
+        return subprocess.CompletedProcess(command,status,stdout,stderr)
+    def run(command,**kwargs):
+        if command[0]!='gh':
+            return native_run(command,**kwargs)
+        arguments=command[1:]
+        if arguments[0]=='api':
+            endpoint=arguments[-1]
+            method=arguments[arguments.index('--method')+1] if '--method' in arguments else 'GET'
+            payload=json.loads(kwargs['input']) if kwargs.get('input') else None
+            if endpoint.endswith('/releases?per_page=100'):
+                values=[listed(tag,state) for tag,state in remote.items()]
+                response=[values[:len(values)//2],values[len(values)//2:]]
+            elif '/contents/' in endpoint:
+                name=endpoint.split('/contents/',1)[1].split('?',1)[0]
+                if name not in pages['files']:
+                    return result(command,kwargs,1,stderr='HTTP 404: no such content')
+                response=dict(type='file')
+            elif endpoint.endswith('/git/ref/heads/gh-pages'):
+                response=dict(object=dict(sha=pages['head']))
+            elif endpoint.endswith('/git/refs/heads/gh-pages') and method=='PATCH':
+                if failure[0]==('pages',None):
+                    failure[0]=None
+                    return result(command,kwargs,1,stderr='Pages compare-and-swap rejected')
+                commit=objects[payload['sha']][1]
+                if payload['force'] is not False or commit['parents']!=[pages['head']]:
+                    return result(command,kwargs,1,stderr='Pages head changed')
+                pages['head']=payload['sha']
+                pages['files']={name:objects[sha][1] for name,sha in objects[commit['tree']][1].items()}
+                response=dict(object=dict(sha=pages['head']))
+            elif '/git/commits/' in endpoint:
+                response=objects[endpoint.rsplit('/',1)[-1]][1]
+                response=dict(response,tree=dict(sha=response['tree']))
+            elif '/git/trees/' in endpoint:
+                value=objects[endpoint.rsplit('/',1)[-1].split('?',1)[0]][1]
+                response=dict(truncated=False,tree=[dict(path=name,mode='100644',type='blob',sha=sha) for name,sha in value.items()])
+            elif '/git/blobs/' in endpoint:
+                response=dict(content=base64.b64encode(objects[endpoint.rsplit('/',1)[-1]][1]).decode())
+            elif endpoint.endswith('/git/blobs') and method=='POST':
+                response=dict(sha=object_sha('blob',base64.b64decode(payload['content'])))
+            elif endpoint.endswith('/git/trees') and method=='POST':
+                value=dict(objects[payload['base_tree']][1])
+                for entry in payload['tree']:
+                    if entry['sha'] is None: value.pop(entry['path'],None)
+                    else: value[entry['path']]=entry['sha']
+                response=dict(sha=object_sha('tree',value))
+            elif endpoint.endswith('/git/commits') and method=='POST':
+                response=dict(sha=object_sha('commit',payload))
+            else:
+                raise AssertionError(command)
+            return result(command,kwargs,stdout=json.dumps(response))
+        if arguments[:2]==['release','list']:
+            return result(command,kwargs,stdout=json.dumps([dict(tagName=tag,isDraft=state['draft']) for tag,state in remote.items()]))
+        operation,tag=arguments[1:3]
+        if operation=='create':
+            if tag in remote:
+                return result(command,kwargs,1,stderr='release already exists')
+            number=len(remote)+1
+            remote[tag]=dict(assets={},asset_ids={},draft='--draft' in arguments,isImmutable=tag.startswith('pkg-dhcp-interface-ha-26.7-'),
+                name=arguments[arguments.index('--title')+1],body='',isPrerelease='--prerelease' in arguments,
+                created_at=f'2026-01-01T00:{number//60:02}:{number%60:02}Z')
+            for value in arguments[3:arguments.index('--repo')]:
+                if Path(value).is_file(): upload_asset(remote[tag],Path(value).name,Path(value).read_bytes())
+        elif tag not in remote:
+            return result(command,kwargs,1,stderr='release not found')
+        elif operation=='view':
+            state=remote[tag]
+            assets=[dict(name=name,id=state['asset_ids'][name]) for name in state['assets']]
+            if '--jq' in arguments:
+                response='\n'.join(state['assets'])
+            else:
+                response=json.dumps(dict(assets=assets,isDraft=state['draft'],isImmutable=state['isImmutable'],
+                    name=state['name'],body=state['body'],isPrerelease=state['isPrerelease']))
+            return result(command,kwargs,stdout=response)
+        elif operation=='download':
+            name=arguments[arguments.index('--pattern')+1]
+            if name not in remote[tag]['assets']:
+                return result(command,kwargs,1,stderr='asset not found')
+            directory=Path(arguments[arguments.index('--dir')+1]);directory.mkdir(parents=True,exist_ok=True)
+            (directory / name).write_bytes(remote[tag]['assets'][name])
+        elif operation=='upload':
+            asset=Path(arguments[3]);upload_asset(remote[tag],asset.name,asset.read_bytes())
+            if failure[0]==('upload',tag):
+                failure[0]=None
+                return result(command,kwargs,1,stderr='partial asset upload failed')
+        elif operation=='delete-asset':
+            remote[tag]['assets'].pop(arguments[3],None)
+            remote[tag]['asset_ids'].pop(arguments[3],None)
+        elif operation=='edit':
+            for field,flag in (('name','--title'),('body','--notes-file')):
+                if flag in arguments:
+                    value=arguments[arguments.index(flag)+1]
+                    remote[tag][field]=Path(value).read_text() if field=='body' else value
+            for field,flag in (('draft','--draft='),('isPrerelease','--prerelease=')):
+                for value in arguments:
+                    if value.startswith(flag): remote[tag][field]=value.removeprefix(flag)=='true'
+        elif operation=='delete':
+            remote.pop(tag)
+        else:
+            raise AssertionError(command)
+        return result(command,kwargs)
+    with patch.object(subprocess,'run',side_effect=run):
+        yield
 
 
 class ChannelTagTest(unittest.TestCase):
     def test_channel_tags_are_series_scoped(self) -> None:
-        """Current and immutable snapshot channels must never share a tag."""
-        fingerprint = "f" * 64
-        self.assertEqual("pkg-26.7", release_channel.channel_tag("26.7"))
+        """Independent component and paired tags carry their own fingerprints."""
+        runtime_fingerprint,plugin_fingerprint='f'*64,'d'*64
         self.assertEqual(
-            f"pkg-26.7-os-bind-rp-1.36_2-bind-{fingerprint}",
-            release_channel.snapshot_channel_tag("26.7", "1.36_2", fingerprint),
+            ('pkg-26.7-bind-runtime',f'pkg-26.7-bind-runtime-9.20.26_2-{runtime_fingerprint}'),
+            components.component_tags('bind_runtime','26.7','9.20.26_2',runtime_fingerprint),
         )
         self.assertEqual(
-            f'os-bind-rp-26.7-1.36_7-bind-{fingerprint}',
-            release_channel.source_release_tag('26.7', '1.36_7', fingerprint),
+            ('pkg-26.7-bind-plugin',f'pkg-26.7-bind-plugin-26.7_1-{plugin_fingerprint}'),
+            components.component_tags('bind_plugin','26.7','26.7_1',plugin_fingerprint),
         )
+        self.assertEqual(('pkg-26.7',f'pkg-26.7-os-bind-rp-26.7_1-bind-{runtime_fingerprint}-plugin-{plugin_fingerprint}'),
+            components.stack_tags('26.7','26.7_1',runtime_fingerprint,plugin_fingerprint))
+        from git_fixtures import upstream_profile
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            original=make_bind_component('bind_plugin',root / 'plugin',series='26.7',creator=creator_identity(),
+                source_commit='a'*40,control_commit='c'*40,profile=upstream_profile('26.7'),version='26.7_1')
+            inputs=json.loads((original / 'plugin-build-inputs.json').read_text())
+            fingerprint=hashlib.sha256(json.dumps(inputs,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            selected=dict(mode='production',expected_fingerprint=fingerprint)
+            tag=plugin_release.prepare_source_assets(original,root / 'source','26.7',selected)
+            self.assertEqual(f'os-bind-rp-26.7-26.7_1-plugin-{fingerprint}',tag)
+            names={'os-bind-rp-26.7_1.pkg','build-metadata.txt','plugin-build-inputs.json','upstream.json',
+                   'creator-target.json','plugin-package.mk','channel.json'}
+            self.assertEqual({name:(original / name).read_bytes() for name in names},directory_bytes(root / 'source'))
 
 
 class GitHubCliTest(unittest.TestCase):
@@ -101,23 +245,28 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
 
     def test_pull_request_release_cleanup_lists_and_deletes_exact_matches(self) -> None:
         commands: list[list[str]] = []
+        retained={'pr-510-26.7-bind-runtime','pr-52-26.7-bind-plugin','pr-51-26.7-bind-runtime-extra',
+            'pr-51-26.7-bind','pr-51-26.7-unknown','pkg-26.7','pkg-26.7-bind-runtime',
+            'pkg-26.7-bind-plugin-26.7_1-'+'a'*64,'pkg-26.7-os-bind-rp-26.7_1-bind-'+'b'*64+'-plugin-'+'c'*64,
+            'os-bind-rp-26.7-26.7_1-plugin-'+'d'*64,'pkg-dhcp-interface-ha-26.7-0.2_43',
+            'pkg-26.1-bind-runtime-9.20.26_2-'+'e'*64}
+        release_tags={'pr-51-26.7','pr-51-26.1','pr-51-26.7-bind-runtime','pr-51-26.7-bind-plugin'} | retained
+        tag_refs=set(release_tags) | {'pr-51-27.1'}
 
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
             if command[:3] == ['gh', 'api', '--paginate']:
                 if '/releases?' in command[-1]:
-                    payload = [[{'tag_name': tag} for tag in (
-                        'pr-51-26.7', 'pr-51-26.1', 'pr-510-26.7', 'pr-51-26.7-extra',
-                        'pkg-26.7', 'os-bind-rp-26.7-1.36_2',
-                    )]]
+                    payload = [[{'tag_name': tag} for tag in sorted(release_tags)]]
                 else:
-                    payload = [[{'ref': ref} for ref in (
-                        'refs/tags/pr-51-27.1', 'refs/tags/pr-51-26.7',
-                        'refs/tags/pr-510-26.7', 'refs/tags/pkg-26.7',
-                    )]]
+                    payload = [[{'ref': 'refs/tags/'+tag} for tag in sorted(tag_refs)]]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), '')
             commands.append(command)
             if command[:2] == ['gh', 'release'] and command[3] == 'pr-51-27.1':
                 return subprocess.CompletedProcess(command, 1, '', 'release not found')
+            if command[:2] == ['gh','release']:
+                release_tags.discard(command[3])
+            if command[:3] == ['gh','api','--method']:
+                tag_refs.discard(command[-1].rsplit('/',1)[-1])
             if command[:3] == ['gh', 'api', '--method'] and not command[-1].endswith('pr-51-27.1'):
                 return subprocess.CompletedProcess(command, 1, '', 'gh: Not Found (HTTP 404)')
             return subprocess.CompletedProcess(command, 0, '', '')
@@ -126,123 +275,84 @@ class PullRequestReleaseCleanupTest(unittest.TestCase):
             release_channel.cleanup_pull_request_releases('resolver-plugins/plugins', '51')
 
         expected = []
-        for tag in ('pr-51-26.1', 'pr-51-26.7', 'pr-51-27.1'):
+        for tag in ('pr-51-26.1', 'pr-51-26.7', 'pr-51-26.7-bind-plugin', 'pr-51-26.7-bind-runtime', 'pr-51-27.1'):
             expected.extend([
                 ['gh', 'release', 'delete', tag, '--yes', '--repo', 'resolver-plugins/plugins'],
                 ['gh', 'api', '--method', 'DELETE', f'repos/resolver-plugins/plugins/git/refs/tags/{tag}'],
             ])
         self.assertEqual(expected, commands)
+        self.assertEqual(retained,release_tags)
+        self.assertEqual(retained,tag_refs)
 
-class SelfContainedRepositoryStageTest(unittest.TestCase):
-    def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            creator = creator_identity()
-            packages = bind_channel_inputs(root / 'packages')
-            from git_fixtures import upstream_profile
-            target_metadata = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7', '2' * 40))
-            key = root / 'private.pem'
-            key.touch()
+class TestSelfContainedRepositoryStage:
+    def test_stage_channel_contains_the_plugin_bind_pair_and_audit_manifest(self,publication_environment):
+        environment=publication_environment
+        creator=creator_identity()
+        runtime=environment.stage(environment.select('bind_runtime','9.20.26_2',creator=creator))
+        runtime_original=directory_bytes(runtime.root / 'repository/component/current')
+        environment.publish(runtime)
+        source=environment.control('9.20.26_2','reviewed plugin staging source')
+        plugin=environment.select('bind_plugin','26.7_1',source=source,creator=creator)
+        producer=environment.producer(plugin)
+        original=directory_bytes(producer)
+        inputs=json.loads(original['plugin-build-inputs.json'])
+        fingerprint=hashlib.sha256(json.dumps(inputs,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        repository=plugin.root / 'repository'
+        components.stage_repository(producer,plugin.selection,plugin.root / 'trusted',repository,
+            environment.root / 'key',pkg_command=environment.pkg)
+        own=directory_bytes(repository / 'component/current')
+        assert set(own)=={'os-bind-rp-26.7_1.pkg','build-metadata.txt','plugin-build-inputs.json',
+            'upstream.json','creator-target.json','plugin-package.mk','resolver-plugins.pub',
+            'channel.json','meta','meta.conf','data.pkg','data.tzst','packagesite.pkg','packagesite.tzst'}
+        for name,data in original.items(): assert own[name]==data
+        manifest=json.loads(own['channel.json'])
+        assert (manifest['schema'],manifest['kind'],manifest['series'],manifest['package_abi'],
+                manifest['plugin_version'],manifest['source_commit'],manifest['control_commit'])==(
+                1,'bind-plugin','26.7','FreeBSD:15:amd64','26.7_1',source,plugin.control)
+        assert manifest['build_fingerprint']==fingerprint
+        assert manifest['package_creator']==creator
+        assert manifest['creator_source']==dict(release='26.7.1',repository='https://github.com/opnsense/ports.git',
+            commit='4'*40,path='ports-mgmt/pkg')
+        metadata=dict(line.split('=',1) for line in own['build-metadata.txt'].decode().splitlines())
+        assert (metadata['freebsd_release'],metadata['tools_tag'])==('15.1','26.7.1')
+        assert manifest['packages']=={'os-bind-rp-26.7_1.pkg':hashlib.sha256(original['os-bind-rp-26.7_1.pkg']).hexdigest()}
+        assert own['resolver-plugins.pub']==components.PUBLIC_KEY.read_bytes()
+        assert directory_bytes(repository / 'component/snapshot')==own
+        stack=directory_bytes(repository / 'stack/current')
+        assert set(json.loads(stack['channel.json'])['packages'])=={
+            'bind-tools-9.20.26_2.pkg','bind920-9.20.26_2.pkg','os-bind-rp-26.7_1.pkg'}
+        assert_original_component(stack,'bind_runtime',runtime_original)
+        assert_original_component(stack,'bind_plugin',own)
+        assert directory_bytes(repository / 'stack/snapshot')==stack
+        for directory in ('component/current','component/snapshot','stack/current','stack/snapshot','combined'):
+            for name in ('data','packagesite'):
+                alias=repository / directory / (name+'.tzst')
+                assert alias.is_file() and not alias.is_symlink()
+                assert alias.read_bytes()==alias.with_suffix('.pkg').read_bytes()
 
-            def fake_repo(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-                Path(command[2]).joinpath("meta.conf").touch()
-                return subprocess.CompletedProcess(command, 0)
+    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self,publication_environment):
+        environment=publication_environment
+        runtime=environment.select('bind_runtime','9.20.26_2')
+        producer=environment.producer(runtime)
+        archive=producer / 'bind920-9.20.26_2.pkg'
+        identity=json.loads(archive.read_text());identity['abi']='FreeBSD:14:amd64'
+        write_json(archive,identity)
+        with pytest.raises(ValueError,match='archive ABI differs from component'):
+            components.stage_repository(producer,runtime.selection,runtime.root / 'trusted',runtime.root / 'repository',
+                environment.root / 'key',pkg_command=environment.pkg)
+        assert not (runtime.root / 'repository').exists()
+        assert not any(call.args[0][0]=='openssl' for call in subprocess.run.call_args_list)
 
-            with (
-                patch.object(
-                    release_channel,
-                    "validate_channel_package_manifests",
-                    return_value="FreeBSD:15:amd64",
-                ),
-                patch.object(release_channel.subprocess, "run", side_effect=fake_repo),
-            ):
-                assets = release_channel.stage_channel_repository(
-                    packages,
-                    root / "channel",
-                    key,
-                    "pkg",
-                    target_metadata,
-                    "c" * 40,
-                )
-
-            names = {asset.name for asset in assets}
-            self.assertEqual(
-                {
-                    "bind-tools-9.20.26_1.pkg",
-                    "bind920-9.20.26_1.pkg",
-                    "os-bind-rp-26.7_1.pkg",
-                    "bind920-provenance.json",
-                    "build-metadata.txt",
-                    "channel.json",
-                    "meta.conf",
-                },
-                names,
-            )
-            manifest = json.loads((root / "channel/channel.json").read_text(encoding="utf-8"))
-            self.assertEqual(5, manifest["schema"])
-            self.assertEqual("c" * 40, manifest["control_commit"])
-            self.assertEqual("26.7", manifest["series"])
-            self.assertEqual("FreeBSD:15:amd64", manifest["package_abi"])
-            self.assertEqual("26.7_1", manifest["plugin_version"])
-            self.assertEqual("a" * 40, manifest["source_commit"])
-            self.assertEqual("f" * 64, manifest["bind"]["fingerprint"])
-            self.assertEqual("15.1", manifest["build"]["freebsd_release"])
-            self.assertEqual("26.7.1", manifest["build"]["tools_tag"])
-            self.assertEqual(creator, manifest["package_creator"])
-            self.assertEqual(dict(release='26.7.1', repository='https://github.com/opnsense/ports.git',
-                                  commit='4' * 40, path='ports-mgmt/pkg'), manifest['creator_source'])
-            self.assertEqual(
-                hashlib.sha256((packages / "os-bind-rp-26.7_1.pkg").read_bytes()).hexdigest(),
-                manifest["packages"]["os-bind-rp-26.7_1.pkg"],
-            )
-            (root / "channel/resolver-plugins.pub").write_text("public key", encoding="utf-8")
-            (root / "channel/packagesite.pkg").touch()
-            release_channel.validate_channel_directory(root / "channel")
-
-    def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            packages = bind_channel_inputs(root / 'packages')
-            from git_fixtures import upstream_profile
-            target_metadata = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7', '2' * 40))
-            key = root / 'private.pem'
-            key.touch()
-            with patch.object(
-                release_channel,
-                "validate_channel_package_manifests",
-                return_value="FreeBSD:14:amd64",
-            ), patch.object(release_channel, "stage_selected_repository") as sign:
-                with self.assertRaisesRegex(ValueError, "trusted target package profile"):
-                    release_channel.stage_channel_repository(
-                        packages,
-                        root / "channel",
-                        key,
-                        "pkg",
-                        target_metadata,
-                        "c" * 40,
-                    )
-                sign.assert_not_called()
-
-    def test_asset_order_puts_repository_metadata_after_packages(self) -> None:
-        """Publishing a self-contained channel uploads packages before catalog metadata."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            for name in (
-                "bind-tools-9.20.26_1.pkg",
-                "bind920-9.20.26_1.pkg",
-                "os-bind-rp-1.36_2.pkg",
-                "build-metadata.txt",
-                "data.pkg",
-                "meta.conf",
-                "resolver-plugins.pub",
-            ):
-                (directory / name).touch()
-            ordered = [path.name for path in release_channel.asset_order(directory)]
-            self.assertEqual({p.name for p in directory.iterdir()}, set(ordered))
-            self.assertLess(max(ordered.index(name) for name in (
-                "bind-tools-9.20.26_1.pkg", "bind920-9.20.26_1.pkg", "os-bind-rp-1.36_2.pkg")),
-                min(ordered.index(name) for name in ("build-metadata.txt", "data.pkg", "resolver-plugins.pub")))
-            self.assertEqual("meta.conf", ordered[-1])
+    def test_asset_order_puts_repository_metadata_after_packages(self,tmp_path):
+        """Paired-stack uploads expose their payloads before catalogue metadata."""
+        packages=('bind-tools-9.20.26_2.pkg','bind920-9.20.26_2.pkg','os-bind-rp-26.7_1.pkg')
+        metadata=('bind_runtime-bind920-provenance.json','bind_plugin-build-metadata.txt',
+                  'data.pkg','meta.conf','resolver-plugins.pub','channel.json')
+        for name in (*packages,*metadata): (tmp_path / name).touch()
+        ordered=[path.name for path in release_channel.asset_order(tmp_path)]
+        assert set(ordered)==set(packages) | set(metadata)
+        assert max(ordered.index(name) for name in packages)<min(ordered.index(name) for name in metadata)
+        assert ordered[-1]=='meta.conf'
 
 
 class AbiStaticPublicationTest(unittest.TestCase):
@@ -301,7 +411,7 @@ class AbiStaticPublicationTest(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
             with (
-                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel, "validate_static_channel"),
                 patch.object(release_channel.subprocess, "run", side_effect=fake_run),
             ):
                 release_channel.publish_abi_channel(
@@ -369,7 +479,7 @@ class AbiStaticPublicationTest(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
             with (
-                patch.object(release_channel, "validate_channel_directory"),
+                patch.object(release_channel, "validate_static_channel"),
                 patch.object(release_channel.subprocess, "run", side_effect=fake_run),
                 self.assertRaisesRegex(RuntimeError, "gh-pages head changed"),
             ):
@@ -382,13 +492,13 @@ class AbiStaticPublicationTest(unittest.TestCase):
 class PublicationRecoveryTest(unittest.TestCase):
 
     def test_immutable_release_retry_states(self):
-        assets = {'os-bind-rp-1.36_2.pkg': b'plugin', 'build-metadata.txt': b'metadata'}
-        repository, tag, title = 'resolver-plugins/plugins', 'os-bind-rp-26.7-1.36_2', 'os-bind-rp 26.7 1.36_2'
+        assets = {'os-bind-rp-26.7_1.pkg': b'plugin', 'build-metadata.txt': b'metadata'}
+        repository, tag, title = 'resolver-plugins/plugins', 'os-bind-rp-26.7-26.7_1-plugin-'+'d'*64, 'os-bind-rp 26.7 26.7_1'
         for state in ('identical', 'different', 'mutable', 'absent', 'complete-draft', 'partial-draft'):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 staged = make_assets(root / 'staged', assets)
-                remote_assets = assets if state not in ('different', 'partial-draft') else {'os-bind-rp-1.36_2.pkg': b'old'}
+                remote_assets = assets if state not in ('different', 'partial-draft') else {'os-bind-rp-26.7_1.pkg': b'old'}
                 existing = make_snapshot(root / 'remote', tag, remote_assets if state != 'absent' else None,
                                          existed=state != 'absent', draft=state.endswith('-draft'),
                                          immutable=state == 'identical')
@@ -400,7 +510,7 @@ class PublicationRecoveryTest(unittest.TestCase):
                             release_channel.publish_immutable_release(repository, tag, staged, title)
                     else:
                         release_channel.publish_immutable_release(repository, tag, staged, title)
-                create = ['release', 'create', tag, str(staged / 'os-bind-rp-1.36_2.pkg'),
+                create = ['release', 'create', tag, str(staged / 'os-bind-rp-26.7_1.pkg'),
                           str(staged / 'build-metadata.txt'), '--repo', repository,
                           '--title', title, '--latest=false']
                 expected = {
@@ -425,234 +535,21 @@ class PublicationRecoveryTest(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, error):
                         release_channel.publish_immutable_release('example/plugins', absent.tag, staged, 'Fixture')
 
-    def test_existing_snapshot_is_materialized_for_an_exact_release_retry(self) -> None:
-        """A published version is reused instead of rebuilt under a new control commit."""
-        for existed in (False, True):
-            with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary_directory:
-                root = Path(temporary_directory)
-                remote = root / "remote"
-                complete_bind_channel(remote)
-                public_key = root / "resolver-plugins.pub"
-                public_key.write_bytes(b"trusted key")
-                (remote / public_key.name).write_bytes(public_key.read_bytes())
-                fingerprint = bind_provenance_record()["fingerprint"]
-                snapshot = release_channel.ReleaseSnapshot(
-                    f"pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint}",
-                    existed,
-                    remote,
-                    root / "manifest.json",
-                )
-
-                with (
-                    patch.object(
-                        release_channel, "snapshot_release", return_value=snapshot
-                    ) as snapshot_release,
-                ):
-                    reused = release_channel.materialize_existing_snapshot(
-                        "resolver-plugins/repository",
-                        "26.7",
-                        "26.7_1",
-                        "a" * 40,
-                        root / "repository",
-                        public_key,
-                        creator_identity(),
-                        bind_provenance_record(),
-                    )
-
-                self.assertEqual(existed, reused)
-                self.assertEqual(
-                    (
-                        "resolver-plugins/repository",
-                        f"pkg-26.7-os-bind-rp-26.7_1-bind-{fingerprint}",
-                    ),
-                    snapshot_release.call_args.args[:2],
-                )
-                if not existed:
-                    self.assertFalse((root / "repository").exists())
-                    continue
-                from git_fixtures import upstream_profile
-                upstream = write_json(root / 'upstream.json', upstream_profile('26.7'))
-                target = write_resolved_target(root / 'creator-target.json', upstream_profile('26.7'))
-                release_channel.validate_channel_directory(root / 'repository/current', target_metadata=target, upstream=upstream)
-                expected = {p.name: p.read_bytes() for p in remote.iterdir()}
-                for channel in ('current', 'snapshot'):
-                    self.assertEqual(expected, {p.name: p.read_bytes() for p in (root / 'repository' / channel).iterdir()})
-
-    def test_snapshot_reuse_rejects_different_release_inputs(self):
-        for field, changed, keyword in [
-            ('source_commit', 'b' * 40, 'source'),
-            ('bind', bind_provenance_record('b' * 64), 'bind'),
-            ('package_creator', creator_identity(version='2.4.0'), 'creator'),
-        ]:
-            with self.subTest(input=keyword), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                manifest = dict(bind=bind_provenance_record(), package_creator=creator_identity(),
-                                series='26.7', plugin_version='1.36_2', source_commit='a' * 40)
-                manifest[field] = changed
-                snapshot = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2', {
-                    'channel.json': json.dumps(manifest).encode(), 'resolver-plugins.pub': b'trusted key'})
-                public_key = root / 'resolver-plugins.pub'
-                public_key.write_bytes(b'trusted key')
-                with patch.object(release_channel, 'snapshot_release', return_value=snapshot), \
-                     patch.object(release_channel, 'validate_channel_directory'):
-                    with self.assertRaisesRegex(ValueError, 'does not match requested release'):
-                        release_channel.materialize_existing_snapshot(
-                            'resolver-plugins/repository', '26.7', '1.36_2', 'a' * 40,
-                            root / 'repository', public_key, creator_identity(), bind_provenance_record())
-                self.assertFalse((root / 'repository').exists())
-
-
-    def test_recovery_channel_rejects_an_audit_checksum_mismatch(self):
+    def test_published_component_snapshot_refuses_different_bytes(self):
+        from copy import deepcopy
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            directory = complete_bind_channel(root / 'channel')
-            (directory / 'os-bind-rp-26.7_1.pkg').write_bytes(b'changed archive')
-            with self.assertRaisesRegex(ValueError, 'checksum'):
-                release_channel.validate_channel_directory(directory)
-
-    def test_failed_promotion_restores_all_channels_from_preserved_bytes(self) -> None:
-        """A failed later upload restores already changed releases without remote downloads."""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            snapshot = make_assets(root / 'snapshot', {'os-bind-rp-1.36_1.pkg': b'snapshot-new'})
-            latest = make_assets(root / 'latest', {'os-bind-rp-1.36_2.pkg': b'latest-new'})
-            remote = {'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}
-            operations = []
-
-            def fake_snapshot(repository: str, tag: str, recovery: Path):
-                if '-os-bind-rp-' in tag:
-                    return make_snapshot(recovery / tag, tag, existed=False)
-                return make_snapshot(recovery / tag, tag, {'old.pkg': f'{tag}-old'.encode()})
-
-            def fake_publish(repository: str, tag: str, directory: Path, prerelease: bool) -> None:
-                operations.append(tag)
-                remote[tag] = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
-                if directory == latest:
-                    raise RuntimeError("latest upload failed")
-
-            def fake_delete(arguments, **kwargs):
-                self.assertEqual(['gh', 'release', 'delete', 'pkg-26.7-os-bind-rp-1.36_2',
-                                  '--yes', '--repo', 'resolver-plugins/plugins'], arguments)
-                operations.append(arguments[3])
-                remote.pop(arguments[3])
-                return subprocess.CompletedProcess(arguments, 0)
-
-            with (
-                patch.object(release_channel, "snapshot_release", side_effect=fake_snapshot),
-                patch.object(release_channel, "validate_channel_directory"),
-                patch.object(
-                    release_channel, "staged_source_descends_from_current", return_value=True
-                ),
-                patch.object(release_channel, "publish", side_effect=fake_publish),
-                patch.object(release_channel.subprocess, "run", side_effect=fake_delete),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "latest upload failed"):
-                    release_channel.publish_channels(
-                        "resolver-plugins/plugins",
-                        [("pkg-26.7-os-bind-rp-1.36_2", snapshot), ("pkg-26.7", latest)],
-                        root / "recovery",
-                    )
-
-            self.assertEqual({'pkg-26.7': {'old.pkg': b'pkg-26.7-old'}}, remote)
-            self.assertEqual(['pkg-26.7', 'pkg-26.7-os-bind-rp-1.36_2'], operations[-2:])
-
-    def test_immutable_retry_reuses_identical_bytes_and_rejects_changed_bytes(self):
-        for changed in (False, True):
-            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                staged = make_assets(root / 'staged', {'asset.pkg': b'new' if changed else b'immutable'})
-                current = make_assets(root / 'current', {'asset.pkg': b'current'})
-                immutable = make_snapshot(root / 'remote', 'pkg-26.7-os-bind-rp-1.36_2',
-                                          {'asset.pkg': b'immutable'})
-                absent = make_snapshot(root / 'missing', 'pkg-26.7', existed=False)
-                published = []
-                with (
-                    patch.object(release_channel, 'snapshot_release',
-                                 side_effect=lambda repository, tag, recovery: immutable if tag == immutable.tag else absent),
-                    patch.object(release_channel, 'publish',
-                                 side_effect=lambda repository, tag, directory, prerelease: published.append(tag)),
-                    patch.object(release_channel, 'run_gh') as mutate,
-                ):
-                    with (self.assertRaisesRegex(RuntimeError, 'different bytes') if changed else nullcontext()):
-                        release_channel.publish_channels('resolver-plugins/repository',
-                                                         [(immutable.tag, staged), (absent.tag, current)],
-                                                         root / 'recovery')
-                self.assertEqual([] if changed else [absent.tag], published)
-                if changed:
-                    mutate.assert_not_called()
-
-    def test_retry_only_updates_titles_when_snapshot_and_current_are_identical(self) -> None:
-        """Retry updates titles only after unchanged real snapshot bytes pass preflight."""
-        for changed in (False, True):
-            with self.subTest(changed_preflight=changed), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                channels = []
-                snapshots = []
-                for tag in ('pkg-26.7-os-bind-rp-1.36_2', 'pkg-26.7'):
-                    staged = make_assets(root / f'staged-{tag}', {'asset.pkg': tag.encode()})
-                    channels.append((tag, staged))
-                    snapshots.append(make_snapshot(root / f'remote-{tag}', tag, {'asset.pkg': tag.encode()}))
-                preflight_current = (make_snapshot(root / 'changed-current', 'pkg-26.7', {'asset.pkg': b'changed'})
-                                     if changed else snapshots[1])
-                mutations: list[list[str]] = []
-                with (
-                    patch.object(release_channel, 'snapshot_release', side_effect=[*snapshots, snapshots[0], preflight_current]),
-                    patch.object(release_channel, 'validate_channel_directory'),
-                    patch.object(release_channel, 'publish') as publish,
-                    patch.object(release_channel, 'run_gh', side_effect=mutations.append),
-                ):
-                    with (self.assertRaisesRegex(RuntimeError, 'changed during publication preflight')
-                          if changed else nullcontext()):
-                        release_channel.publish_channels('resolver-plugins/repository', channels, root / 'recovery')
-
-                publish.assert_not_called()
-                if changed:
-                    self.assertEqual([], mutations)
-                else:
-                    self.assertEqual([['release', 'edit', tag] for tag, _ in channels],
-                                     [command[:3] for command in mutations])
-
-    def test_source_and_control_ancestry(self):
-        def manifest(source, control):
-            return dict(schema=5, source_commit=source * 40, control_commit=control * 40)
-
-        for name, current, staged, statuses, expected in [
-            ('current-control-advance', manifest('a', 'b'), manifest('a', 'c'), [0], True),
-            ('source-advance', manifest('a', 'c'), manifest('b', 'c'), [0], True),
-            ('identical-inputs', manifest('a', 'b'), manifest('a', 'b'), [], False),
-            ('control-rollback', manifest('a', 'd'), manifest('b', 'c'), [0, 1], False),
-        ]:
-            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                for directory, data in [('current', current), ('staged', staged)]:
-                    make_assets(root / directory, {'channel.json': json.dumps(data).encode()})
-                results = [subprocess.CompletedProcess(['git'], status) for status in statuses]
-                with patch.object(release_channel.subprocess, 'run', side_effect=results):
-                    self.assertEqual(expected, release_channel.staged_source_descends_from_current(root / 'current', root / 'staged'))
-
-
-
-    def test_stale_retry_cannot_replace_current_with_or_without_a_snapshot(self):
-        for existed, error in [(False, 'stale package promotion'), (True, 'current channel has different bytes')]:
-            with self.subTest(snapshot_exists=existed), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                staged_snapshot = make_assets(root / 'staged-snapshot', {'asset.pkg': b'snapshot-a'})
-                staged_current = make_assets(root / 'staged-current', {'asset.pkg': b'current-a'})
-                snapshot = make_snapshot(root / 'remote-snapshot', 'pkg-26.7-os-bind-rp-1.36_2',
-                                         {'asset.pkg': b'snapshot-a'} if existed else None, existed=existed)
-                current = make_snapshot(root / 'remote-current', 'pkg-26.7', {'asset.pkg': b'current-b'})
-                def fetch(repository, tag, recovery):
-                    return snapshot if tag == snapshot.tag else current
-                with patch.object(release_channel, 'snapshot_release', side_effect=fetch), \
-                     patch.object(release_channel, 'validate_channel_directory'), \
-                     patch.object(release_channel, 'staged_source_descends_from_current', return_value=False), \
-                     patch.object(release_channel, 'publish') as publish, \
-                     patch.object(release_channel, 'run_gh') as mutate:
-                    with self.assertRaisesRegex(RuntimeError, error):
-                        release_channel.publish_channels('resolver-plugins/repository',
-                            [(snapshot.tag, staged_snapshot), (current.tag, staged_current)], root / 'recovery')
-                publish.assert_not_called()
-                mutate.assert_not_called()
+            root=Path(temporary)
+            staged=make_assets(root / 'staged',{'asset.pkg':b'changed rebuild'})
+            tag='pkg-26.7-bind-runtime-9.20.26_2-'+'f'*64
+            remote={tag:dict(assets={'asset.pkg':b'original'},draft=False,isImmutable=False,
+                name='Original runtime snapshot',body='Original notes',isPrerelease=False,created_at='2026-01-01T00:00:00Z')}
+            groups=[dict(current_tag='pkg-26.7-bind-runtime',snapshot_tag=tag,directory=staged,
+                validate=lambda directory:None,can_advance=lambda current,candidate:True)]
+            with release_api_store(remote,dict(files={}),[None],lambda command,**kwargs:self.fail(str(command))):
+                before=deepcopy(remote)
+                with self.assertRaisesRegex(RuntimeError,'different bytes'):
+                    release_channel.publish_channels('example.invalid/distribution',groups,root / 'recovery')
+            self.assertEqual(before,remote)
 
 
     def test_restore_absent_release_accepts_a_not_found_delete(self) -> None:
@@ -672,69 +569,124 @@ class PublicationRecoveryTest(unittest.TestCase):
 
 
     def test_snapshot_pruning_keeps_the_newest_five_immutable_tags(self) -> None:
-        """Only a successful promotion may remove the sixth-oldest snapshot."""
-        fingerprint = "f" * 64
-        releases = [
-            {
-                "tag_name": (
-                    f"pkg-26.7-os-bind-rp-1.36_{number}-bind-{fingerprint}"
-                    if number % 2 == 0
-                    else f"pkg-26.7-os-bind-rp-1.36_{number}"
-                ),
-                "created_at": f"2026-01-0{number}T00:00:00Z",
-            }
-            for number in range(1, 7)
-        ]
-        # `gh api --paginate --slurp` returns one JSON array per fetched page.
-        # Retention must therefore flatten all pages before selecting the oldest tag.
-        result = subprocess.CompletedProcess(
-            ["gh"], 0, stdout=json.dumps([releases[:3], releases[3:]])
-        )
-        deleted: list[list[str]] = []
-        with (
-            patch.object(release_channel.subprocess, "run", return_value=result),
-            patch.object(release_channel, "run_gh", side_effect=deleted.append),
-        ):
-            release_channel.prune_snapshots("resolver-plugins/plugins", "26.7")
-
-        self.assertEqual(
-            [["release", "delete", "pkg-26.7-os-bind-rp-1.36_1", "--yes", "--repo", "resolver-plugins/plugins"]],
-            deleted,
-        )
+        """Pagination preserves original runtime edges before bounded deletions."""
+        from bind.shared import components, retention
+        from shared import package_catalogue
+        from git_fixtures import upstream_profile
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            profile=upstream_profile('26.7')
+            runtime_dirs=[];plugin_dirs=[];remote={};listed=[]
+            def register(directory,kind,number):
+                receipt=components.component_receipt(directory,kind,'26.7')
+                remote[receipt['snapshot_tag']]=directory
+                listed.append(dict(tag_name=receipt['snapshot_tag'],draft=False,created_at=f'2026-01-{number+1:02}T00:00:00Z'))
+                return receipt
+            runtimes=[]
+            for number in range(16):
+                directory=make_bind_component('bind_runtime',root / f'runtime-{number}',series='26.7',creator=creator_identity(),
+                    source_commit='a'*40,control_commit='a'*40,profile=profile,version=f'9.20.{26+number}_2')
+                runtime_dirs.append(directory);runtimes.append(register(directory,'bind_runtime',number))
+            plugins=[]
+            for number in range(7):
+                directory=make_bind_component('bind_plugin',root / f'plugin-{number}',series='26.7',creator=creator_identity(),
+                    source_commit=f'{number+1:040x}',control_commit='a'*40,profile=profile,version=f'26.7_{number+1}')
+                original=runtimes[0 if number==6 else number]
+                version=f'9.20.{26+(0 if number==6 else number)}_2'
+                manifest=json.loads((directory / 'channel.json').read_text())
+                manifest['built_against_runtime']=dict(snapshot_tag=original['snapshot_tag'],fingerprint=original['fingerprint'],
+                    version=version,packages=original['packages'])
+                metadata=directory / 'build-metadata.txt'
+                metadata.write_text(metadata.read_text().replace('bind920=9.20.26_2','bind920='+version))
+                manifest['assets']['build-metadata.txt']=hashlib.sha256(metadata.read_bytes()).hexdigest()
+                write_json(directory / 'channel.json',manifest)
+                plugin_dirs.append(directory);plugins.append(register(directory,'bind_plugin',number))
+            upstream=write_json(root / 'upstream.json',profile)
+            creator=write_resolved_target(root / 'creator-target.json',profile)
+            write_resolved_target(root / 'reader-target.json',profile,role='reader')
+            stack=root / 'stack'
+            approved=root / 'runtime-approval.mk'
+            recipe=json.loads((runtime_dirs[-1] / 'bind920-profile.json').read_text())
+            approved.write_text(runtime_approval('9.20.41_2',recipe['ports_commit']))
+            pair=dict(bind_runtime=runtimes[-1],bind_plugin=plugins[-1])
+            packages=[runtime_dirs[-1] / name for name in runtimes[-1]['packages']]+[plugin_dirs[-1] / name for name in plugins[-1]['packages']]
+            def sign(paths,output,*args):
+                output.mkdir()
+                for path in paths: shutil.copyfile(path,output / path.name)
+                for name in components.CATALOGUE_ASSETS: (output / name).write_bytes(b'signed fixture catalogue')
+            with patch.object(package_catalogue,'authenticate_components',return_value=(packages,{kind:package_catalogue.component_record(receipt) for kind,receipt in pair.items()})), \
+                 patch.object(package_catalogue.bind,'select_role'),patch.object(package_catalogue.target_pkg,'verify_target_pkg'), \
+                 patch.object(package_catalogue.subprocess,'check_output',return_value=components.PUBLIC_KEY.read_bytes()), \
+                 patch.object(package_catalogue.releases,'stage_selected_repository',side_effect=sign):
+                current_stack=package_catalogue.stage_bind_stack(runtime_dirs[-1],plugin_dirs[-1],stack,series='26.7',key=root / 'key',creator_target=creator,upstream=upstream,
+                    approved_profile=runtime_dirs[-1] / 'bind920-profile.json',runtime_approval=approved)
+            current_pair=retention.paired_tag(current_stack,'26.7')
+            remote[current_pair]=stack;listed.append(dict(tag_name=current_pair,draft=False,created_at='2026-01-01T00:00:00Z'))
+            opaque=[]
+            for number in range(1,7):
+                tag=f'pkg-26.7-os-bind-rp-1.36_{number}'+('-bind-'+'f'*64 if number%2==0 else '')
+                opaque.append(tag);remote[tag]=None;listed.append(dict(tag_name=tag,draft=False,created_at=f'2026-02-{number:02}T00:00:00Z'))
+            sentinels={'pkg-26.7','pkg-26.7-bind-runtime','pkg-26.7-bind-plugin','pr-12-26.7',
+                'os-bind-rp-26.7-26.7_7-plugin-'+'1'*64,'pkg-dhcp-interface-ha-26.7-0.2_43',
+                'pkg-26.1-bind-runtime-9.20.26_2-'+'2'*64,'pkg-26.7-bind-runtime-invalid'}
+            for tag in sentinels:
+                remote[tag]=None;listed.append(dict(tag_name=tag,draft=False,created_at='2026-03-01T00:00:00Z'))
+            def download(repository,tag,name,directory): shutil.copyfile(remote[tag] / name,directory / name)
+            result=subprocess.CompletedProcess(['gh'],0,stdout=json.dumps([listed[:10],listed[10:]]))
+            with patch.object(retention.subprocess,'run',return_value=result),patch.object(retention.releases,'download_release_asset',side_effect=download):
+                records=retention.collect('example/distribution','26.7')
+            before=set(remote)
+            with self.assertRaisesRegex(ValueError,'original runtime'):
+                components.retention_plan([record for record in records if record['tag']!=runtimes[0]['snapshot_tag']],pair,current_stack)
+            self.assertEqual(before,set(remote))
+            plan=components.retention_plan(records,pair,current_stack)
+            expected={runtimes[number]['snapshot_tag'] for number in range(6,10)} | {plugins[0]['snapshot_tag'],opaque[0]}
+            self.assertEqual(expected,set(plan))
+            recovery=root / 'retention';recovery.mkdir()
+            with patch.object(retention.releases,'run_gh',side_effect=lambda args:remote.pop(args[2])):
+                retention.apply_plan('example/distribution',plan,recovery)
+            self.assertEqual(before-expected,set(remote))
+            self.assertTrue(sentinels <= set(remote))
+            self.assertIn(runtimes[0]['snapshot_tag'],remote)
+            self.assertIn(current_pair,remote)
+            self.assertEqual(plan,json.loads((recovery / 'deleted.json').read_text()))
 
 
 class ChannelManifestValidationTest(unittest.TestCase):
     def test_manifest_contract(self):
-        for fault, error in [
-            ('valid', None), ('formula', 'dependency formula'), ('missing-edge', 'BIND dependency differs'),
-            ('version', 'plugin version does not match OPNsense series'),
-            ('filename', 'filename does not match package identity'),
-        ]:
-            with self.subTest(fault=fault):
-                identities = [
-                    (('bind-tools', '9.20.26_1', 'dns/bind-tools', 'FreeBSD:15:amd64'), set()),
-                    (('bind920', '9.20.26_1', 'dns/bind920', 'FreeBSD:15:amd64'),
-                     {('bind-tools', 'dns/bind-tools', '9.20.26_1')}),
-                    (('os-bind-rp', '26.7_1', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'),
-                     {('bind920', 'dns/bind920', '9.20.26_1')}),
-                ]
-                if fault == 'missing-edge':
-                    identities[2][1].clear()
-                if fault == 'version':
-                    identities[2] = (('os-bind-rp', '1.36_2', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'), set())
-                packages = [Path(f'/tmp/{name}-{version}.pkg') for (name, version, _, _), _ in identities]
-                if fault == 'filename':
-                    packages[2] = Path('/tmp/os-bind-rp-1.36_2.pkg')
-                formula = 'bind920 = 9.20.26' if fault == 'formula' else 'bind920 >= 9.20.26'
-                with patch.object(release_channel, 'read_bind_package_records', return_value=bind_records('9.20.26_1')), \
-                     patch.object(release_channel, 'query_package', side_effect=identities), \
-                     patch.object(release_channel, 'read_package_manifest', return_value={'dep_formula': formula}):
+        from git_fixtures import upstream_profile
+        for fault,error in [('valid',None),('formula','differs from source'),('historical-edge','differs from source'),
+                            ('guard','pre-install program'),('collision','shared BIND payload checksum'),('legacy-conflicts','source'),
+                            ('version','plugin version differs from series'),('filename','original build inputs')]:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
+                directory=make_bind_component('bind_plugin',Path(temporary) / 'plugin',series='26.7',creator=creator_identity(),
+                    source_commit='a'*40,control_commit='c'*40,profile=upstream_profile('26.7'),
+                    version='1.36_2' if fault=='version' else '26.7_1')
+                manifest=json.loads((directory / 'channel.json').read_text())
+                if fault=='filename':
+                    archive=directory / 'os-bind-rp-26.7_1.pkg';renamed=directory / 'os-bind-rp-1.36_2.pkg'
+                    archive.rename(renamed)
+                    manifest['packages']={renamed.name:hashlib.sha256(renamed.read_bytes()).hexdigest()}
+                    manifest['assets']=byte_hashes({name:data for name,data in directory_bytes(directory).items() if name!='channel.json'})
+                    write_json(directory / 'channel.json',manifest)
+                identity=('os-bind-rp',manifest['plugin_version'],'opnsense/os-bind-rp','FreeBSD:15:amd64')
+                edges={('opnsense','opnsense/opnsense','26.1.11_10'),
+                       ('bind920','dns/bind920','9.20.29' if fault=='historical-edge' else '9.20.26_2')}
+                formula='bind920 = 9.20.26' if fault=='formula' else 'bind920 >= 9.20.26'
+                record = plugin_manifest()
+                if fault=='historical-edge': record['deps']['bind920']['version']='9.20.29'
+                record['dep_formula'] = formula
+                if fault=='guard': record['scripts']['pre-install']=record['scripts']['pre-install'].replace('exit 3','exit 1')
+                if fault=='collision': record['files'].clear()
+                if fault=='legacy-conflicts': record['conflicts']=['os-bind']
+                with patch.object(components.releases,'query_package',return_value=(identity,edges)), \
+                     patch.object(components.package_checksums,'verify_archive',side_effect=lambda command,archive:list(json.loads(archive.read_text())['files'].items())), \
+                     patch.object(components.releases,'read_package_manifest',return_value=record):
                     if error:
-                        with self.assertRaisesRegex(ValueError, error):
-                            release_channel.validate_channel_package_manifests(packages, Path('/tmp/provenance'), 'pkg', '26.7')
+                        with self.assertRaisesRegex(ValueError,error):
+                            components.validate_component(directory,'bind_plugin','26.7',pkg_command='pkg')
                     else:
-                        self.assertEqual('FreeBSD:15:amd64', release_channel.validate_channel_package_manifests(
-                            packages, Path('/tmp/provenance'), 'pkg', '26.7'))
+                        self.assertEqual(manifest,components.validate_component(directory,'bind_plugin','26.7',pkg_command='pkg'))
 
 
 class BootstrapRepositoryConfigTest(unittest.TestCase):

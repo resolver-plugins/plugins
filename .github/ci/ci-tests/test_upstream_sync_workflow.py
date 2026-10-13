@@ -1,7 +1,7 @@
 from common_imports import *
 
 from workflow_fixtures import (assert_checkout_credentials,
-                               assert_permissions, assert_pinned_actions,
+                               assert_permissions, assert_action_release_tags,
                                job_text, workflow_jobs)
 
 
@@ -37,11 +37,7 @@ def test_workflow_uses_approved_upstream_sources_and_complete_stable_discovery()
     assert 'https://github.com/opnsense/plugins.git' in workflow
     assert 'refs/heads/stable/*:refs/remotes/upstream/stable/*' in workflow
     assert 'https://github.com/opnsense/tools.git' in workflow
-
-
-def test_workflow_fetches_core_for_the_reviewed_series_with_checked_transport():
-    workflow = workflow_text()
-
+    assert 'https://github.com/opnsense/core.git' in workflow
     assert 'refs/heads/stable/$series' in workflow
     assert 'curl --fail --location' in workflow
 
@@ -64,22 +60,36 @@ def test_workflow_uses_api_only_credentials_for_recovery_and_publication():
     assert sorted(operations) == ['publish', 'recover']
 
 
-def test_workflow_recovers_partial_review_state_before_planning_and_uses_api_publisher():
+def test_workflow_uses_one_frozen_discovery_and_sealed_plan_for_review_mutation():
     workflow = workflow_text()
-    recover_index = workflow.index('.github/ci/publish_upstream.py recover')
-    plan_index = workflow.index('.github/ci/sync_upstream.py plan')
-    apply_index = workflow.index('.github/ci/sync_upstream.py apply')
-    publish_index = workflow.index('.github/ci/publish_upstream.py publish')
+    operations = [
+        '.github/ci/publish_upstream.py recover',
+        '.github/ci/sync_upstream.py discover',
+        '.github/ci/sync_upstream.py seal-plan',
+        '.github/ci/sync_upstream.py apply',
+        '.github/ci/publish_upstream.py publish',
+    ]
+    assert [workflow.index(operation) for operation in operations] == sorted(
+        workflow.index(operation) for operation in operations)
+    assert workflow.count('.github/ci/sync_upstream.py discover') == 1
+    assert '--control-commit "$(git rev-parse HEAD)"' in workflow
+    assert '> "$RUNNER_TEMP/discovery.json"' in workflow
+    assert '--discovery "$RUNNER_TEMP/discovery.json"' in workflow
+    assert '--output "$RUNNER_TEMP/plan.json"' in workflow
+    assert workflow.count('--plan "$RUNNER_TEMP/plan.json"') == 2
+    for step in re.split(r'^      - ', workflow, flags=re.MULTILINE):
+        if any(operation in step for operation in operations[2:]):
+            assert "steps.recovery.outputs.handled != 'true'" in step
+            assert "steps.plan.outputs.action != 'noop'" in step
+        if any(operation in step for operation in (operations[0], operations[3], operations[4])):
+            assert '--tools-repository "$RUNNER_TEMP/opnsense-tools"' in step
 
-    assert recover_index < plan_index < apply_index < publish_index
-    assert "steps.recovery.outputs.handled != 'true'" in workflow
 
-
-def test_workflow_pins_actions_and_has_no_publication_authority_or_commands():
+def test_workflow_uses_release_tags_and_has_no_publication_authority_or_commands():
     workflow = workflow_text()
     lowered = workflow.lower()
 
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     assert 'secrets.' not in workflow
     assert not re.search(r'^\s*environment:', workflow, re.MULTILINE)
     for forbidden in (

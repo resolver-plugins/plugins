@@ -30,6 +30,10 @@ all: check
 
 .include "defaults.mk"
 
+.if defined(PLUGIN_DEPEND_FORMULA)
+SED_REPLACE+=	-e 's|%%PLUGIN_DEPEND_FORMULA%%|${PLUGIN_DEPEND_FORMULA}|g'
+.endif
+
 .if exists(${GIT}) && exists(${GITVERSION})
 PLUGIN_COMMIT!=		${GITVERSION}
 .else

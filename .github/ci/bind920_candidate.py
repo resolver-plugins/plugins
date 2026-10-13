@@ -6,9 +6,12 @@ from __future__ import annotations
 import dataclasses
 import argparse
 import hashlib
-import json
 import re
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bind.runtime import bind920_profile
 
 
 BIND_SERIES = (9, 20)
@@ -62,18 +65,6 @@ def _version_tuple(version: str) -> tuple[int, int, int]:
     if len(parsed) != 3 or parsed[:2] != BIND_SERIES:
         raise ValueError("candidate must be in the BIND 9.20 series")
     return parsed
-
-
-def load_current_profile(path: Path) -> Bind920Profile:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return Bind920Profile(
-        ports_repository=str(data["ports_repository"]),
-        ports_commit=str(data["ports_commit"]),
-        makefile_sha256=str(data["makefile_sha256"]),
-        distinfo_sha256=str(data["distinfo_sha256"]),
-        distversion=str(data["distversion"]),
-        portrevision=int(data["portrevision"]),
-    )
 
 
 def sha256_file(path: Path) -> str:
@@ -130,18 +121,25 @@ def candidate_from_files(
     )
 
 
-def render_updated_profile(current: Bind920Profile, candidate: CandidateProfile) -> str:
-    if not candidate_is_newer(current, candidate):
-        raise ValueError("candidate is not newer than the current BIND profile")
-    data = {
-        "ports_repository": candidate.ports_repository,
-        "ports_commit": candidate.ports_commit,
-        "makefile_sha256": candidate.makefile_sha256,
-        "distinfo_sha256": candidate.distinfo_sha256,
-        "distversion": candidate.distversion,
-        "portrevision": candidate.portrevision,
-    }
-    return json.dumps(data, indent=2) + "\n"
+def current_from_approval(makefile: Path, ports_repository: Path) -> Bind920Profile:
+    approval = bind920_profile.approval_from_makefile(makefile.read_text(encoding="utf-8"))
+    return Bind920Profile(**bind920_profile.resolve_profile(approval, repository=ports_repository))
+
+
+def render_updated_approval(text: str, version: str, ports_commit: str) -> str:
+    current = bind920_profile.approval_from_makefile(text)
+    def native_version(value):
+        base, _, revision = value.partition("_")
+        return (*_version_tuple(base), int(revision or "0"))
+    if native_version(version) <= native_version(current["version"]):
+        raise ValueError("candidate is not newer than the current BIND approval")
+    for field, value in (("RP_BIND_VERSION", version), ("RP_BIND_PORTS_COMMIT", ports_commit)):
+        text, count = re.subn(rf"^(\s*{field}\s*=\s*)[^\s#]+", lambda match: match[1] + value,
+                             text, flags=re.MULTILINE)
+        if count != 1:
+            raise ValueError("approval fields must be unique literal assignments")
+    bind920_profile.approval_from_makefile(text)
+    return text
 
 
 def _contains_term(text: str, term: str) -> bool:
@@ -250,20 +248,6 @@ def assess_candidate(
     return Assessment(classification, all_signals, summary)
 
 
-def update_profile(
-    current_path: Path,
-    ports_repository: str,
-    ports_commit: str,
-    makefile: Path,
-    distinfo: Path,
-    output: Path,
-    source_ref: str,
-) -> None:
-    current = load_current_profile(current_path)
-    candidate = candidate_from_files(ports_repository, ports_commit, makefile, distinfo, source_ref)
-    output.write_text(render_updated_profile(current, candidate), encoding="utf-8")
-
-
 def render_assessment_markdown(assessment: Assessment) -> str:
     signal_lines = "\n".join(f"- {signal}" for signal in assessment.signals) if assessment.signals else "- none"
     return (
@@ -300,14 +284,16 @@ def render_commit_log_markdown(title: str, commit_log_text: str, empty_message: 
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    update_parser = subparsers.add_parser("update-profile")
-    update_parser.add_argument("--current", type=Path, required=True)
-    update_parser.add_argument("--ports-repository", required=True)
+    evaluate_parser = subparsers.add_parser("evaluate")
+    evaluate_parser.add_argument("--makefile", type=Path, required=True)
+    evaluate_parser.add_argument("--ports-directory", type=Path, required=True)
+    evaluate_parser.add_argument("--ports-repository", required=True)
+    evaluate_parser.add_argument("--ports-commit", required=True)
+    evaluate_parser.add_argument("--output", type=Path, required=True)
+    update_parser = subparsers.add_parser("update-approval")
     update_parser.add_argument("--ports-commit", required=True)
     update_parser.add_argument("--makefile", type=Path, required=True)
-    update_parser.add_argument("--distinfo", type=Path, required=True)
-    update_parser.add_argument("--output", type=Path, required=True)
-    update_parser.add_argument("--source-ref", default="")
+    update_parser.add_argument("--version", required=True)
     assess_parser = subparsers.add_parser("assess")
     assess_parser.add_argument("--old-version", required=True)
     assess_parser.add_argument("--new-version", required=True)
@@ -325,16 +311,25 @@ def main() -> None:
     render_parser.add_argument("--empty-message", required=True)
     render_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
-    if arguments.command == "update-profile":
-        update_profile(
-            arguments.current,
-            arguments.ports_repository,
-            arguments.ports_commit,
-            arguments.makefile,
-            arguments.distinfo,
-            arguments.output,
-            arguments.source_ref or arguments.ports_commit,
-        )
+    if arguments.command == "evaluate":
+        current = current_from_approval(arguments.makefile, arguments.ports_directory)
+        candidate = candidate_from_files(
+            arguments.ports_repository, arguments.ports_commit,
+            arguments.ports_directory / "dns/bind920/Makefile",
+            arguments.ports_directory / "dns/bind920/distinfo", arguments.ports_commit)
+        old_version = current.distversion + (f"_{current.portrevision}" if current.portrevision else "")
+        package_version = candidate.distversion + (f"_{candidate.portrevision}" if candidate.portrevision else "")
+        outputs = dict(newer=str(candidate_is_newer(current, candidate)).lower(),
+            old_version=old_version, old_distversion=current.distversion, new_version=package_version,
+            candidate_distversion=candidate.distversion, portrevision=candidate.portrevision,
+            package_version=package_version)
+        with arguments.output.open("a", encoding="utf-8") as output:
+            for field, value in outputs.items():
+                print(f"{field}={value}", file=output)
+    elif arguments.command == "update-approval":
+        arguments.makefile.write_text(render_updated_approval(
+            arguments.makefile.read_text(encoding="utf-8"), arguments.version,
+            arguments.ports_commit), encoding="utf-8")
     elif arguments.command == "assess":
         security_text = ""
         if arguments.security is not None:
