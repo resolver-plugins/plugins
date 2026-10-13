@@ -9,6 +9,7 @@ Plugin Changelog
 
 1.36
 
+* Prefer signed Resolver packages for fresh plugin dependency installation
 * Check minimum BIND and OPNsense versions and refuse incompatible plugin names
 * Bound BIND shutdown and log forced recovery steps in the General Log
 * Preserve dynamic BIND records while package upgrades regenerate zone files

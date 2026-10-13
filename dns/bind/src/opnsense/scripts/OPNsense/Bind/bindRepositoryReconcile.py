@@ -56,14 +56,15 @@ def opnsense_series() -> str:
     return series
 
 
-def expected_repository(series: str) -> str:
+def expected_repository(series: str, *, priority: bool = True) -> str:
     return (
         "resolver-plugins: {\n"
         f'  url: "{REPOSITORY_BASE}/${{ABI}}/{series}/latest",\n'
         '  mirror_type: "none",\n'
         '  signature_type: "pubkey",\n'
         f'  pubkey: "{PUBLIC_KEY}",\n'
-        "  enabled: yes\n"
+        + ("  priority: 20,\n" if priority else "")
+        + "  enabled: yes\n"
         "}\n"
     )
 
@@ -71,7 +72,7 @@ def expected_repository(series: str) -> str:
 def require_managed_repository(path: Path, series: str) -> None:
     if path.is_symlink() or not path.is_file():
         raise ReconcileError("repository configuration is not a managed regular file")
-    if path.read_text(encoding="utf-8") != expected_repository(series):
+    if path.read_text(encoding="utf-8") not in {expected_repository(series), expected_repository(series, priority=False)}:
         raise ReconcileError("repository configuration is not the exact managed Resolver Plugins shape")
 
 
@@ -226,7 +227,14 @@ def reconcile_once() -> None:
         ],
         allow_status={0, 1},
     )
-    validate_dry_run(dry_run.stdout + dry_run.stderr, requested_identities)
+    plan_requests = requested_identities
+    if (dry_run.returncode == 0 and
+            "The most recent versions of packages are already installed" in dry_run.stdout.splitlines()):
+        for candidate in (bind920, bind_tools, plugin):
+            if "-".join(candidate[:2]) in requested_identities:
+                require_installed(candidate[0], candidate)
+        plan_requests = []
+    validate_dry_run(dry_run.stdout, plan_requests)
     run([*package_command(static=True), "install", "-y", "-r", "resolver-plugins", *requested_identities])
     if bind_update_required:
         require_installed("bind920", bind920)
