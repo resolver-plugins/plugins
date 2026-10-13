@@ -40,7 +40,7 @@ jobs:
       reader_target_sha256: ${{ steps.profile.outputs.reader_target_sha256 }}
       bind_inputs_sha256: ${{ steps.profile.outputs.bind_inputs_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -73,7 +73,7 @@ jobs:
           printf 'bind_inputs_sha256=%s\n' "$bind_inputs_sha256" >> "$GITHUB_OUTPUT"
           printf 'creator_target_sha256=%s\nreader_target_sha256=%s\n' "$(sha256sum artifacts/trusted/creator-target.json | cut -d ' ' -f1)" "$(sha256sum artifacts/trusted/reader-target.json | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - id: pkg-targets
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         if: steps.select.outputs.release == 'true'
         with:
           name: pkg-targets-dhcp-${{ steps.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -91,7 +91,7 @@ jobs:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.source_commit }}
           persist-credentials: false
@@ -106,7 +106,7 @@ jobs:
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
           merge-multiple: true
@@ -124,7 +124,7 @@ jobs:
             --series "$SERIES" --directory artifacts/trusted --upstream artifacts/profile/upstream.json \
             --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Build and verify in FreeBSD
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         env:
           SERIES: ${{ needs.profile.outputs.series }}
           SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
@@ -144,7 +144,7 @@ jobs:
             git config --global --add safe.directory "$PWD"
             RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/ha_dhcp/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
       - id: producer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: dhcp-interface-ha-${{ needs.profile.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.profile.outputs.series }}
@@ -163,13 +163,13 @@ jobs:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Require producer artifact
         run: test -n '${{ needs.build.outputs.producer_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.build.outputs.producer_artifact_id }}
           merge-multiple: true
@@ -185,7 +185,7 @@ jobs:
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
           merge-multiple: true
@@ -233,7 +233,7 @@ jobs:
           python3 -I .github/ci/shared/package_catalogue.py fetch --component bind_runtime --series "$SERIES" --output "artifacts/$SERIES/bind-runtime"
           python3 -I .github/ci/shared/package_catalogue.py fetch --component bind_plugin --series "$SERIES" --output "artifacts/$SERIES/bind-plugin"
       - name: Sign isolated plugin and shared catalogues
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         env:
           RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -304,7 +304,7 @@ jobs:
             --component dhcp --series "$SERIES" --composition-sha256 "$composition_sha256"
           printf 'composition_sha256=%s\n' "$composition_sha256" >> "$GITHUB_OUTPUT"
       - id: repository
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: dhcp-interface-ha-signed-${{ needs.profile.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.profile.outputs.series }}/repository
@@ -320,13 +320,13 @@ jobs:
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.source_commit }}
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
@@ -342,7 +342,7 @@ jobs:
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
           merge-multiple: true
@@ -360,7 +360,7 @@ jobs:
             --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
             --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Verify signed installation
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         env:
           SERIES: ${{ needs.profile.outputs.series }}
         with:
@@ -386,14 +386,14 @@ jobs:
     env:
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
@@ -423,7 +423,7 @@ jobs:
           PY
       - name: Mint distribution repository token
         id: distribution-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
           private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
@@ -454,7 +454,7 @@ jobs:
             --composition-sha256 "$RP_COMPOSITION_SHA256" --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/catalogue-recovery"
       - name: Save publication recovery state
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: dhcp-interface-ha-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -472,13 +472,13 @@ jobs:
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.source_commit }}
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
@@ -494,7 +494,7 @@ jobs:
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
           merge-multiple: true
@@ -512,7 +512,7 @@ jobs:
             --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
             --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Verify installation from public signed channel
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         env:
           SERIES: ${{ needs.profile.outputs.series }}
         with:
@@ -540,13 +540,13 @@ jobs:
     env:
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true

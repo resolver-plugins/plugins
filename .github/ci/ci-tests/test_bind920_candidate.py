@@ -6,7 +6,7 @@ from __future__ import annotations
 from module_fixtures import *
 
 from package_fixtures import PLUGIN_PACKAGE, make_ports_recipe
-from workflow_fixtures import assert_pinned_actions
+from workflow_fixtures import assert_action_release_tags
 
 
 MODULE_PATH = CI / "bind920_candidate.py"
@@ -136,7 +136,7 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
         workflow = self.workflow_text()
         self.assertNotIn("release upload", workflow)
         self.assertNotIn("release_channel.py publish", workflow)
-        assert_pinned_actions(workflow)
+        assert_action_release_tags(workflow)
 
     def test_candidate_workflow_includes_ports_commit_subjects_in_pr_body(self) -> None:
         """Review PRs must show the FreeBSD Ports commits behind the candidate."""

@@ -1,7 +1,7 @@
 from common_imports import *
 
 from workflow_fixtures import (WORKFLOWS, assert_permissions, assert_checkout_credentials,
-                               assert_pinned_actions, job_text, workflow_jobs, workflow_steps,
+                               assert_action_release_tags, job_text, workflow_jobs, workflow_steps,
                                step_run, trigger_paths)
 
 
@@ -24,7 +24,7 @@ def test_pr_workflow_runs_the_full_suite_without_publication_authority():
     expressions = '\n'.join(re.findall(r'\$\{\{(.*?)\}\}', workflow, re.DOTALL))
     assert not re.search(r'\bsecrets\b', expressions)
     assert not re.search(r'^\s+secrets:', workflow, re.MULTILINE)
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     for job in workflow_jobs(workflow).values():
         assert_permissions(job, None, indent=4)
         if 'uses: actions/checkout@' in job:

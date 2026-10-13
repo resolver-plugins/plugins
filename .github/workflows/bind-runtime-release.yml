@@ -43,7 +43,7 @@ jobs:
       pull_number: ${{ steps.select.outputs.pull_number }}
       release: ${{ steps.select.outputs.release }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -73,7 +73,7 @@ jobs:
       expected_fingerprint: ${{ steps.profile.outputs.expected_fingerprint }}
       trusted_artifact_id: ${{ steps.trusted.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.select.outputs.control_ref }}
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
                   output.write(f'{key}={result[key]}\n')
           PY
       - id: trusted
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-trusted-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/trusted
@@ -123,11 +123,11 @@ jobs:
     needs: [select, profile]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
       - run: python -m pip install --disable-pip-version-check 'pytest==8.3.5'
@@ -148,13 +148,13 @@ jobs:
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
       - name: Require the immutable controller artifact
         run: test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
@@ -166,7 +166,7 @@ jobs:
           python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
       - name: Produce the selected BIND runtime pair
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
@@ -189,7 +189,7 @@ jobs:
             test '${{ needs.profile.outputs.producer_action }}' = build
             .github/ci/bind/runtime/build-bind920.sh "$series" "$output"
       - id: producer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-producer-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/producer
@@ -213,7 +213,7 @@ jobs:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -222,12 +222,12 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.producer.outputs.producer_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.producer.outputs.producer_artifact_id }}
           merge-multiple: true
@@ -244,7 +244,7 @@ jobs:
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
             --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT"
       - name: Independently stage and sign the runtime repository
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         env:
           RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
         with:
@@ -286,7 +286,7 @@ jobs:
           test -f "$composition"
           printf 'composition_sha256=%s\n' "$(sha256sum "$composition" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - id: repository
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-repository-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/repository
@@ -305,7 +305,7 @@ jobs:
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
       RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-local
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
@@ -313,18 +313,18 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.sign.outputs.repository_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.select.outputs.series }}/repository
       - name: Qualify the signed pair and every composed repository
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
@@ -345,7 +345,7 @@ jobs:
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
       - name: Save native qualification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-local-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
@@ -365,7 +365,7 @@ jobs:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -374,12 +374,12 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.sign.outputs.repository_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
@@ -405,7 +405,7 @@ jobs:
             attempt=$((attempt + 1))
           done
       - id: distribution-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
           private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
@@ -423,7 +423,7 @@ jobs:
             --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery"
       - name: Save publication recovery evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/recovery
@@ -442,7 +442,7 @@ jobs:
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
       RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-public
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
@@ -450,18 +450,18 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.sign.outputs.repository_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.select.outputs.series }}/repository
       - name: Compare public signed bytes and qualify the installer
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
@@ -482,7 +482,7 @@ jobs:
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
       - name: Save public qualification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-public-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
@@ -502,7 +502,7 @@ jobs:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -511,12 +511,12 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.sign.outputs.repository_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
@@ -533,7 +533,7 @@ jobs:
             --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT" \
             --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256"
       - id: distribution-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
           private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
@@ -562,7 +562,7 @@ jobs:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-development
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           fetch-depth: 0
@@ -571,12 +571,12 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.producer.outputs.producer_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.producer.outputs.producer_artifact_id }}
           merge-multiple: true
@@ -591,7 +591,7 @@ jobs:
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
           git fetch --no-tags origin "$PROFILE_COMMIT"
       - name: Qualify an unsigned temporary runtime catalogue
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
@@ -616,7 +616,7 @@ jobs:
               --repository-root "artifacts/$series/repository" --trusted-directory artifacts/trusted --series "$series"
       - name: Save preview qualification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@v4
         with:
           name: bind-runtime-preview-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
@@ -633,7 +633,7 @@ jobs:
     env:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
@@ -641,12 +641,12 @@ jobs:
         run: |
           test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
           test -n '${{ needs.producer.outputs.producer_artifact_id }}'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
           merge-multiple: true
           path: artifacts/trusted
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.producer.outputs.producer_artifact_id }}
           merge-multiple: true

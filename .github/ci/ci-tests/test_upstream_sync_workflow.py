@@ -1,7 +1,7 @@
 from common_imports import *
 
 from workflow_fixtures import (assert_checkout_credentials,
-                               assert_permissions, assert_pinned_actions,
+                               assert_permissions, assert_action_release_tags,
                                job_text, workflow_jobs)
 
 
@@ -85,11 +85,11 @@ def test_workflow_uses_one_frozen_discovery_and_sealed_plan_for_review_mutation(
             assert '--tools-repository "$RUNNER_TEMP/opnsense-tools"' in step
 
 
-def test_workflow_pins_actions_and_has_no_publication_authority_or_commands():
+def test_workflow_uses_release_tags_and_has_no_publication_authority_or_commands():
     workflow = workflow_text()
     lowered = workflow.lower()
 
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     assert 'secrets.' not in workflow
     assert not re.search(r'^\s*environment:', workflow, re.MULTILINE)
     for forbidden in (

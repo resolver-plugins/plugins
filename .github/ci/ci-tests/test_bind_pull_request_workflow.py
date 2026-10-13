@@ -1,6 +1,6 @@
 from common_imports import *
 
-from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs
+from workflow_fixtures import assert_permissions, assert_action_release_tags, assert_checkout_credentials, job_text, workflow_jobs
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -63,12 +63,12 @@ def test_workflow_requires_pkg_descr_for_publishable_bind_changes():
     assert 'check-bind-pkg-descr.sh' in changes_job
 
 
-def test_workflow_has_read_only_permissions_and_pinned_actions():
+def test_workflow_has_read_only_permissions_and_action_release_tags():
     workflow = workflow_text()
 
     assert_permissions(workflow, {'contents': 'read'})
     assert 'secrets.' not in workflow
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     for job in workflow_jobs(workflow).values():
         assert_permissions(job, None, indent=4)
         if 'uses: actions/checkout@' in job:

@@ -36,6 +36,11 @@ tag and records the resolved commit and build.conf hash in `tools-profile.json`.
 There is no maintained OPNsense/FreeBSD compatibility map. A tools environment
 change requires a reviewed source-profile update; builds never substitute latest.
 
+GitHub Actions implementations use floating major release tags, such as
+`actions/checkout@v6`, so compatible action updates can arrive automatically.
+Package source, build input, signing and archive provenance checks still use
+their recorded immutable identities.
+
 ## Local build
 
 The [runtime release workflow](../.github/workflows/bind-runtime-release.yml)

@@ -42,10 +42,10 @@ def action_references(workflow):
     return re.findall(r'^\s+(?:-\s+)?uses:\s+([^\s#]+)', workflow, re.MULTILINE)
 
 
-def assert_pinned_actions(workflow):
+def assert_action_release_tags(workflow):
     references = [ref for ref in action_references(workflow) if not ref.startswith('./')]
     assert references
-    assert all(re.fullmatch(r'[^@\s]+@[0-9a-f]{40}', ref) for ref in references)
+    assert all(re.fullmatch(r'[^@\s]+@v[1-9][0-9]*', ref) for ref in references)
 
 
 def assert_checkout_credentials(job, *, persistent=False):

@@ -1,7 +1,7 @@
 from git_fixtures import *
 from module_fixtures import load_module
 
-from workflow_fixtures import assert_permissions, assert_pinned_actions, assert_checkout_credentials, job_text, workflow_jobs, workflow_steps, step_run, trigger_paths
+from workflow_fixtures import assert_permissions, assert_action_release_tags, assert_checkout_credentials, job_text, workflow_jobs, workflow_steps, step_run, trigger_paths
 
 import pytest
 
@@ -361,7 +361,7 @@ def test_release_authority_is_limited_to_reviewed_jobs(filename):
     concurrency = re.search(r'^concurrency:\n((?:  [^\n]*\n)*)', header, re.MULTILINE)[1]
     assert dict(line.strip().split(': ', 1) for line in concurrency.splitlines()) == {
         'group': 'package-release', 'cancel-in-progress': 'false', 'queue': 'max'}
-    assert_pinned_actions(workflow)
+    assert_action_release_tags(workflow)
     for name, job in workflow_jobs(workflow).items():
         expected_secrets = {'RP_PKG_SIGNING_KEY'} if name == 'sign' else (
             {'RP_DISTRIBUTION_APP_PRIVATE_KEY'} if name in ('publish', 'retention') else set())
