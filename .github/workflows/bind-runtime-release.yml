@@ -54,7 +54,8 @@ jobs:
           GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -eu
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/release/bind-rp/" --jq '[.[][] | .ref]' > "$RUNNER_TEMP/refs.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/release/bind-rp/" > "$RUNNER_TEMP/refs-pages.json"
+          jq '[.[][] | .ref]' "$RUNNER_TEMP/refs-pages.json" > "$RUNNER_TEMP/refs.json"
           python3 -I .github/ci/bind/shared/selection.py select-event \
             --component bind_runtime --event-file "$GITHUB_EVENT_PATH" \
             --refs-file "$RUNNER_TEMP/refs.json" \
