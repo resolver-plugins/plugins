@@ -134,6 +134,14 @@ status to prevent registering an unsupported plugin; ordinary script failure
 is insufficient. Successful command exit alone does not prove installation.
 Official `os-bind` replacement uses the retained migration installer, which
 checks prerequisites and upgrades an older pair before replacing the plugin.
+Fresh installation runs the appliance's native `pkg install os-bind-rp` with both
+signed repositories enabled. It may select a newer compatible OPNsense runtime
+pair. Qualification records the selected repository, authenticates each selected
+archive and verifies its installed file checksums. Minimum-reader validation of
+our published feeds remains separate; native installation and upstream archive
+inspection use the appliance's package manager so current upstream file records
+are interpreted correctly. The verifier restores and rechecks the selected
+minimum reader after the native cases.
 Native shared-file resolution can remove official `os-bind` before running P's
 guard, so the guard cannot provide safe migration preflight.
 Archive checks require the exact declared formula, core floor and original

@@ -129,6 +129,8 @@ then
     fi
     if [ "$install_case" != fresh ]
     then
+        python3 "$ci/shared/target_pkg.py" install "$RP_TARGET_PKG_METADATA" "$series" \
+            --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
         python3 "$ci/shared/target_pkg.py" verify "$RP_TARGET_PKG_METADATA" "$series" \
             --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
         exit 0
@@ -179,6 +181,11 @@ else
         "$ci/bind/runtime/verify-bind-runtime.sh"
         metadata canary --label "canary-$index"
     done < "$temporary/indices.txt"
+fi
+if [ "$mode" = public ] && [ -d "$repository_root/combined" ]
+then
+    python3 "$ci/shared/target_pkg.py" install "$RP_TARGET_PKG_METADATA" "$series" \
+        --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
 fi
 python3 "$ci/shared/target_pkg.py" verify "$RP_TARGET_PKG_METADATA" "$series" \
     --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static

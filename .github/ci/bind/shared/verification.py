@@ -21,6 +21,7 @@ from bind.shared import components as bind
 from shared import package_catalogue as catalogue, package_checksums, release_channel as releases, target_pkg
 
 PKG = "/usr/local/sbin/pkg-static"
+NATIVE_PKG = "/usr/local/sbin/pkg"
 CHECKOUT = Path(__file__).resolve().parents[4]
 INSTALL_CASES = ("fresh", "upstream", "below-minimum", "below-core")
 
@@ -479,6 +480,10 @@ def native_install(plan, trusted, evidence, case):
     entry = next(entry for entry in plan["repositories"] if Path(entry["directory"]).name == "combined")
     directory = Path(entry["directory"])
     requirement = plugin_requirement(directory, trusted)
+    # Minimum-reader authentication is complete. Use the native package manager
+    # for current OPNsense archives rather than keeping its old test role locked.
+    subprocess.run([PKG, "unlock", "-y", "pkg"], check=True)
+    subprocess.run([PKG, "install", "-y", "-r", "OPNsense", "pkg"], check=True)
     inventory = native_inventory()
     if any(name in inventory for name in ("os-bind", "os-bind-devel")):
         raise ValueError("official BIND replacements require the existing migration installer")
@@ -504,7 +509,8 @@ def native_install(plan, trusted, evidence, case):
     package_set = lambda: native_inventory()
     before_setup = package_set()
     save_evidence(evidence, "native-" + case + "-before", dict(packages=before, official=official,
-        core=core, package_manager=native_identity("pkg", inventory=inventory), inventory=inventory, protected=protected))
+        core=core, package_manager=native_identity("pkg", inventory=inventory), inventory=inventory, protected=protected,
+        native_client=dict(command=NATIVE_PKG, version=subprocess.check_output([NATIVE_PKG, "--version"], text=True).strip())))
     subprocess.run(["sh", str(CHECKOUT / "scripts/install-repository.sh")], check=True)
     if package_set() != before_setup:
         raise ValueError("repository setup changed installed packages")
@@ -518,8 +524,8 @@ def native_install(plan, trusted, evidence, case):
         raise ValueError("native plugin candidate differs from the authenticated frozen feed")
     commands = []
     for arguments in (("install", "-n", "os-bind-rp"), ("install", "-y", "os-bind-rp")):
-        result = subprocess.run([PKG, *arguments], capture_output=True, text=True)
-        commands.append(dict(command=[PKG, *arguments], status=result.returncode,
+        result = subprocess.run([NATIVE_PKG, *arguments], capture_output=True, text=True)
+        commands.append(dict(command=[NATIVE_PKG, *arguments], status=result.returncode,
                              stdout=result.stdout, stderr=result.stderr))
         save_evidence(evidence, "native-" + case + "-transaction", dict(repositories=repository_evidence, commands=commands))
         if arguments[1] == "-n" and result.returncode not in {0, 1}:
@@ -563,17 +569,17 @@ def native_install(plan, trusted, evidence, case):
         repository = observation["repository"]
         if repository not in {"resolver-plugins", "OPNsense"} or name == "os-bind-rp" and repository != "resolver-plugins":
             raise ValueError("native installation used an unexpected repository")
-        if case == "fresh" and (repository != "resolver-plugins" or observation["installed"] != list(observation["staged"])):
+        if case == "fresh" and repository == "resolver-plugins" and observation["installed"] != list(observation["staged"]):
             raise ValueError("fresh pkg dependency selection differs from the signed Resolver pair")
         destination = evidence / ("native-" + case + "-archives") / name
         destination.mkdir(parents=True, exist_ok=True)
-        subprocess.run([PKG, "fetch", "-y", "-r", repository, "-o", str(destination),
+        subprocess.run([NATIVE_PKG, "fetch", "-y", "-r", repository, "-o", str(destination),
                         "-".join(observation["installed"][:2])], check=True)
         candidates = list(destination.rglob("*.pkg"))
-        if len(candidates) != 1 or list(releases.query_package(candidates[0], PKG)[0]) != observation["installed"]:
+        if len(candidates) != 1 or list(releases.query_package(candidates[0], NATIVE_PKG)[0]) != observation["installed"]:
             raise ValueError("authenticated selected archive differs from the installed identity")
         archive = candidates[0]
-        if sorted(map(tuple, observation["files"])) != sorted(package_checksums.verify_archive(PKG, archive)):
+        if sorted(map(tuple, observation["files"])) != sorted(package_checksums.verify_archive(NATIVE_PKG, archive)):
             raise ValueError("native installed files differ from the authenticated selected archive")
         selected.append(dict(name=name, disposition="authenticated-install", repository=repository,
                              archive=str(archive), sha256=releases.sha256(archive)))

@@ -148,6 +148,9 @@ mirror mode, symlink, or non-regular path is left byte-for-byte unchanged and
 produces a `manual migration` warning. Managed entries use repository-local
 priority 20; the provider recognizes both the old body and the priority-aware
 body. OPNsense repository settings and global solver policy are unchanged.
+Native dependency selection can choose a newer compatible BIND pair from
+OPNsense on a fresh installation. Qualification authenticates the selected pair
+and checks its versions and installed files.
 
 The package also installs `bindRepositoryReconcile.py`. The upgrade hook only
 marks reconciliation pending and returns; it performs no network or package
