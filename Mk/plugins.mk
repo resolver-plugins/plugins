@@ -163,9 +163,6 @@ manifest: check
 .if defined(PLUGIN_DEPEND_FORMULA)
 	@echo "dep_formula: \"${PLUGIN_DEPEND_FORMULA}\""
 .endif
-.if !empty(PLUGIN_CONFLICTS)
-	@echo 'conflicts: [ ${PLUGIN_CONFLICTS:@CONFLICT@"${CONFLICT}"@:ts,} ]'
-.endif
 	@if [ -f ${WRKSRC}${LOCALBASE}/opnsense/version/${PLUGIN_NAME} ]; then \
 	    echo "annotations $$(cat ${WRKSRC}${LOCALBASE}/opnsense/version/${PLUGIN_NAME})"; \
 	fi

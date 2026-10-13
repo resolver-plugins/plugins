@@ -9,7 +9,7 @@ Plugin Changelog
 
 1.36
 
-* Emit native plugin conflicts and enforce the minimum OPNsense core version
+* Enforce incompatible plugin names and the minimum OPNsense core version
 * Bound BIND shutdown and log forced recovery steps in the General Log
 * Preserve dynamic BIND records while package upgrades regenerate zone files
 * Add DHCP lease watcher and scoped dynamic DNS mappings
