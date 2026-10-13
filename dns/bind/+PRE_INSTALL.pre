@@ -18,3 +18,16 @@ case "${bind_package_comparison}" in
         exit 1
         ;;
 esac
+
+# A native archive conflict list is an installed-package database relationship.
+# Replacement uses shared-file resolution; this read-only check fences name drift.
+bind_package_installed=$("${bind_package_pkg}" query '%n')
+for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
+    for bind_package_name in ${bind_package_installed}; do
+        if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
+            printf 'os-bind-rp cannot coexist with installed %s\n' \
+                "${bind_package_conflict}" >&2
+            exit 1
+        fi
+    done
+done
