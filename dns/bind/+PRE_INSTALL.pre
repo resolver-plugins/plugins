@@ -27,8 +27,9 @@ esac
 
 bind_package_runtime_formula='%%PLUGIN_DEPEND_FORMULA%%'
 bind_package_minimum_runtime=${bind_package_runtime_formula#'bind920 >= '}
-[ -n "${bind_package_minimum_runtime}" ] && [ "${bind_package_minimum_runtime}" != "${bind_package_runtime_formula}" ] ||
+if [ -z "${bind_package_minimum_runtime}" ] || [ "${bind_package_minimum_runtime}" = "${bind_package_runtime_formula}" ]; then
     bind_package_refuse 'os-bind-rp minimum BIND version is missing'
+fi
 bind_package_runtime=$("${bind_package_pkg}" query -e '%n = bind920' '%v') ||
     bind_package_refuse 'os-bind-rp cannot read the installed bind920 version'
 [ -n "${bind_package_runtime}" ] || bind_package_refuse 'os-bind-rp requires installed bind920'
