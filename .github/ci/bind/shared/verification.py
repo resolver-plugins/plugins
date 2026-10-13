@@ -483,7 +483,7 @@ def native_install(plan, trusted, evidence, case):
     # Minimum-reader authentication is complete. Use the native package manager
     # for current OPNsense archives rather than keeping its old test role locked.
     subprocess.run([PKG, "unlock", "-y", "pkg"], check=True)
-    subprocess.run([PKG, "install", "-y", "-r", "OPNsense", "pkg"], check=True)
+    subprocess.run([str(evidence / "native-pkg-static"), "install", "-y", "-r", "OPNsense", "pkg"], check=True)
     inventory = native_inventory()
     if any(name in inventory for name in ("os-bind", "os-bind-devel")):
         raise ValueError("official BIND replacements require the existing migration installer")

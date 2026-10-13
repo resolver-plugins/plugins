@@ -68,6 +68,8 @@ then
 else
     pkg install -y -r OPNsense pkg opnsense
 fi
+install -d -m 0750 "$evidence"
+install -m 0755 /usr/local/sbin/pkg-static "$evidence/native-pkg-static"
 python3 "$ci/shared/target_pkg.py" install "$RP_TARGET_PKG_METADATA" "$series" \
     --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static
 python3 "$ci/shared/target_pkg.py" verify "$RP_TARGET_PKG_METADATA" "$series" \
