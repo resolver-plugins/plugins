@@ -20,6 +20,7 @@ repository_body()
     printf '%s\n' '  mirror_type: "none",'
     printf '%s\n' '  signature_type: "pubkey",'
     printf '  pubkey: "%s",\n' "${public_key}"
+    [ "${2:-20}" = none ] || printf '%s\n' '  priority: 20,'
     printf '%s\n' '  enabled: yes'
     printf '%s\n' '}'
 }
@@ -29,6 +30,10 @@ managed_body()
     url=$1
     temporary=$2
     repository_body "${url}" > "${temporary}"
+    cmp "${repository_config}" "${temporary}" >/dev/null 2>&1 || {
+        repository_body "${url}" none > "${temporary}"
+        cmp "${repository_config}" "${temporary}" >/dev/null 2>&1
+    }
 }
 
 extract_url()
@@ -85,8 +90,7 @@ for managed_url in \
     "https://github.com/resolver-plugins/repository/releases/download/pkg-26.7" \
     "${repository_base}/\${ABI}/latest"
 do
-    managed_body "${managed_url}" "${temporary}"
-    if cmp "${repository_config}" "${temporary}" >/dev/null 2>&1
+    if managed_body "${managed_url}" "${temporary}"
     then
         repository_managed=yes
         break
@@ -96,8 +100,7 @@ done
 url=$(extract_url "${repository_config}")
 case "${url}" in
     "${repository_base}/\${ABI}/"[0-9]*.[0-9]*"/latest")
-        managed_body "${url}" "${temporary}"
-        if cmp "${repository_config}" "${temporary}" >/dev/null 2>&1
+        if managed_body "${url}" "${temporary}"
         then
             repository_managed=yes
         fi
