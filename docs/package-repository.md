@@ -176,8 +176,11 @@ approved pair; an already installed compatible OPNsense pair may remain because
 pkg preserves repository affinity. Qualification records the actual provider
 and installed file maps. A below-minimum BIND or core state must upgrade or
 refuse the plugin, never install an unsupported state. The reviewed source
-package emits its official-plugin conflict and core dependency, and its native
-pre-install hook checks the actual core version without mutating packages.
+package emits its core dependency and a read-only pre-install guard for the
+actual core version and incompatible installed plugin names. Native file
+ownership resolution replaces official `os-bind` through the shared `bind.inc`
+payload. Native manifest `conflicts` entries are installed database relationships
+and do not express this prohibited-name policy.
 
 The custom installer is retained only until the replacement native acceptance
 cases pass on both supported series. Before mutation, that retained harness

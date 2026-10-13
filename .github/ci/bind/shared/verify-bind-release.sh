@@ -177,7 +177,8 @@ else
         then
             for plugin in os-bind-rp os-bind-rp-devel
             do
-                if /usr/local/sbin/pkg-static query -e "%n = $plugin" '%n' >/dev/null 2>&1
+                installed_plugin=$(/usr/local/sbin/pkg-static query -e "%n = $plugin" '%n')
+                if [ -n "$installed_plugin" ]
                 then
                     /usr/local/sbin/pkg-static delete -f -y "$plugin"
                 fi
