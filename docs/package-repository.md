@@ -440,7 +440,8 @@ verified public-channel installation succeeds. Its tag is
 `os-bind-rp-<series>-<plugin_version>-plugin-<plugin_fingerprint>` and its narrow
 asset set contains the original plugin archive and
 build/provenance records, including the raw source `plugin-package.mk`, from the
-signed component. A runtime-only publication
+signed component. Its display title is `os-bind-rp <series> <plugin_version>`;
+the build fingerprint remains in the tag. A runtime-only publication
 does not mint a source release. Retrying a source release with the exact same
 assets is a no-op; an existing tag with different bytes is rejected.
 
