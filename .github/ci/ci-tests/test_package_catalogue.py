@@ -32,6 +32,8 @@ def channels(tmp_path, monkeypatch):
     def query(path, command):
         identity = identities[path.name]
         deps = {('bind-tools', 'dns/bind-tools', '9.20.26_1')} if identity[0] == 'bind920' else set()
+        if identity[0] == 'os-bind-rp':
+            deps = {('bind920', 'dns/bind920', '9.20.26_1')}
         return identity, deps
 
     def sign(packages, output, key, pkg, metadata):

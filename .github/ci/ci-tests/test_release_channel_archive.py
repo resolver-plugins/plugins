@@ -706,7 +706,7 @@ class PublicationRecoveryTest(unittest.TestCase):
 class ChannelManifestValidationTest(unittest.TestCase):
     def test_manifest_contract(self):
         for fault, error in [
-            ('valid', None), ('formula', 'dependency formula'), ('exact-edge', 'exact BIND'),
+            ('valid', None), ('formula', 'dependency formula'), ('missing-edge', 'BIND dependency differs'),
             ('version', 'plugin version does not match OPNsense series'),
             ('filename', 'filename does not match package identity'),
         ]:
@@ -715,10 +715,11 @@ class ChannelManifestValidationTest(unittest.TestCase):
                     (('bind-tools', '9.20.26_1', 'dns/bind-tools', 'FreeBSD:15:amd64'), set()),
                     (('bind920', '9.20.26_1', 'dns/bind920', 'FreeBSD:15:amd64'),
                      {('bind-tools', 'dns/bind-tools', '9.20.26_1')}),
-                    (('os-bind-rp', '26.7_1', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'), set()),
+                    (('os-bind-rp', '26.7_1', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'),
+                     {('bind920', 'dns/bind920', '9.20.26_1')}),
                 ]
-                if fault == 'exact-edge':
-                    identities[2][1].add(('bind920', 'dns/bind920', '9.20.26_1'))
+                if fault == 'missing-edge':
+                    identities[2][1].clear()
                 if fault == 'version':
                     identities[2] = (('os-bind-rp', '1.36_2', 'opnsense/os-bind-rp', 'FreeBSD:15:amd64'), set())
                 packages = [Path(f'/tmp/{name}-{version}.pkg') for (name, version, _, _), _ in identities]
