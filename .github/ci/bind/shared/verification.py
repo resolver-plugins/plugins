@@ -569,7 +569,7 @@ def native_install(plan, trusted, evidence, case):
         destination.mkdir(parents=True, exist_ok=True)
         subprocess.run([PKG, "fetch", "-y", "-r", repository, "-o", str(destination),
                         "-".join(observation["installed"][:2])], check=True)
-        candidates = list((destination / "All").glob("*.pkg"))
+        candidates = list(destination.rglob("*.pkg"))
         if len(candidates) != 1 or list(releases.query_package(candidates[0], PKG)[0]) != observation["installed"]:
             raise ValueError("authenticated selected archive differs from the installed identity")
         archive = candidates[0]
