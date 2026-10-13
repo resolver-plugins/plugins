@@ -1,0 +1,22 @@
+{
+  "action": "update-review",
+  "bind_changed": false,
+  "control_commit": "27a4ec35fb43da14a9aa40a79d9e9575cdd94a2b",
+  "core_archive_sha256": "1cd2ae5a7204b69e01fa8bf87b13a4af4cbee5fa479d30eb79878fe0830c44cd",
+  "core_archive_url": "https://github.com/opnsense/core/archive/9ad30d73071d6a64ca5e9a71ccdb7a63803d53a7.tar.gz",
+  "core_commit": "9ad30d73071d6a64ca5e9a71ccdb7a63803d53a7",
+  "environment_changed": true,
+  "freebsd_release": "15.1",
+  "reason": "upstream tools/build environment changed",
+  "schema": 2,
+  "series": "26.7",
+  "source_commit": "1c241209df8a178db076c1970339ef9a507c0d3c",
+  "source_release": "release/bind-rp/26.7",
+  "sync_branch": "sync/bind/26.7/70399a6037a7-b8d9d29bc7f8",
+  "target_release": "release/bind-rp/26.7",
+  "tools_commit": "5625ce5fae2079b4133b7ebf29bb292f9576e9de",
+  "tools_tag": "26.7.7",
+  "upstream_commit": "70399a6037a717a6497086659b5ca57728c77220",
+  "upstream_head": "484ea085f28fdf4f701a9e503ed33e117c1425cd",
+  "upstream_ref": "upstream/stable/26.7"
+}

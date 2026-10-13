@@ -1,9 +1,11 @@
-name: Test BIND plugin
+name: Test BIND release source
 
 on:
   pull_request:
     paths:
       - 'dns/bind/**'
+      - 'Mk/plugins.mk'
+      - '.resolver-plugins/upstream.json'
       - '.github/workflows/bind-tests.yml'
 
 permissions:
@@ -11,9 +13,9 @@ permissions:
 
 jobs:
   test:
+    permissions:
+      contents: read
     uses: resolver-plugins/plugins/.github/workflows/bind-tests.yml@master
     with:
       pull_request_base: ${{ github.event.pull_request.base.ref }}
-      pull_request_sha: ${{ github.sha }}
-    permissions:
-      contents: read
+      pull_request_sha: ${{ github.event.pull_request.head.sha }}
