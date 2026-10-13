@@ -39,12 +39,23 @@ def plugin_requirement(directory, trusted, *, unsigned=False):
 
 def validate_plugin_manifest(record, requirement):
     deps = record.get("deps") or {}
-    if (record.get("dep_formula") != requirement["dependency_formula"]
-            or not set(requirement["conflicts"]).issubset((record.get("conflicts") or []))
-            or "bind920" in deps
-            or deps.get("opnsense") != {
-                "version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"}):
-        raise ValueError("archive dependency, replacement or core policy differs from source")
+    dependencies = {(name, edge["origin"], edge["version"]) for name, edge in deps.items()}
+    bind.validate_plugin_archive(record, dependencies, requirement,
+                                 development=record.get("name") == requirement["name"] + "-devel")
+
+
+def validate_installed_plugin_manifest(record, requirement):
+    """Installed deps resolve to current identities, including formula results."""
+    bind.validate_plugin_replacement(record, requirement,
+        development=record.get("name") == requirement["name"] + "-devel")
+    deps = record.get("deps") or {}
+    for name, origin, minimum in (("opnsense", "opnsense/opnsense", requirement["minimum_opnsense_version"]),
+                                  ("bind920", "dns/bind920", requirement["minimum_version"])):
+        identity = native_identity(name)
+        if (identity is None or identity[2] != origin
+                or deps.get(name) != {"version": identity[1], "origin": origin}
+                or compare_versions(identity[1], minimum) == "<"):
+            raise ValueError("installed plugin dependency differs from native state or source minimum")
 
 
 def native_identity(name):
@@ -193,6 +204,8 @@ def authenticate(plan, trusted, evidence, mode):
                 if any(edge[0] == "bind920" for edge in edges):
                     raise ValueError("formula dependency appears in the ordinary dependency table")
             checksums = package_checksums.verify_archive(PKG, archive)
+            if name.startswith("os-bind-rp"):
+                bind._validate_plugin_file_map(record, checksums)
             identities.append(dict(archive=archive.name, sha256=releases.sha256(archive), identity=identity, files=checksums))
             dependencies.update(edge[0] for edge in edges)
         if runtime_edges is not None and ("bind-tools", "dns/bind-tools", runtime_edges[0]) not in runtime_edges[1]:
@@ -222,6 +235,14 @@ def installed(packages, evidence, label, *, exact=True, requirement=None):
         eligible_runtime = not exact and name in {"bind-tools", "bind920"}
         if not eligible_runtime and sorted(map(tuple, checksums)) != sorted(package_checksums.verify_archive(PKG, archive)):
             raise ValueError("installed file set differs from exact archive")
+        if name.startswith("os-bind-rp"):
+            if requirement is None:
+                raise ValueError("installed plugin requires its original source definition")
+            record = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", name], text=True))
+            validate_installed_plugin_manifest(record, requirement)
+            bind._validate_plugin_file_map(record, checksums)
+            if not stat.S_ISREG(Path(bind.PLUGIN_SHARED_FILE).lstat().st_mode):
+                raise ValueError("installed shared BIND payload is not a regular file")
         for path, _ in checksums:
             owner = subprocess.check_output([PKG, "which", "-q", path], text=True).strip()
             if owner != f"{actual[0]}-{actual[1]}":
@@ -237,9 +258,11 @@ def installed(packages, evidence, label, *, exact=True, requirement=None):
         if f"bind-tools|dns/bind-tools|{records['bind-tools'][1]}" not in edges:
             raise ValueError("installed upstream runtime pair dependency differs")
     if any(name.startswith("os-bind-rp") for name in names):
-        official = subprocess.run([PKG, "query", "-e", "%n = os-bind", "%n"], capture_output=True, text=True)
-        if official.returncode not in {0, 1} or official.stdout.strip():
-            raise ValueError("official os-bind remains installed")
+        development = requirement["name"] + "-devel" in names
+        for conflict in bind._plugin_conflicts(requirement, development):
+            official = subprocess.run([PKG, "query", "-e", f"%n = {conflict}", "%n"], capture_output=True, text=True)
+            if official.returncode not in {0, 1} or official.stdout.strip():
+                raise ValueError("conflicting BIND plugin remains installed")
     subprocess.run([PKG, "check", "-s", *names], check=True, stdout=sys.stderr)
     save_evidence(evidence, label, observations)
     return observations
@@ -412,7 +435,7 @@ def native_install(plan, trusted, evidence, case):
     archives = [Path(path) for path in entry["packages"] if Path(path).name.startswith(("os-bind-rp-", "bind920-", "bind-tools-"))]
     observations = installed(archives, evidence, "native-" + case + "-installed", exact=False, requirement=requirement)
     manifest = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", "os-bind-rp"], text=True))
-    validate_plugin_manifest(manifest, requirement)
+    validate_installed_plugin_manifest(manifest, requirement)
     core = native_identity("opnsense")
     if core is None or compare_versions(core[1], requirement["minimum_opnsense_version"]) == "<":
         raise ValueError("native installation succeeded below the required OPNsense version")
@@ -488,7 +511,9 @@ def main():
         entry = next(entry for entry in plan["repositories"] if Path(entry["directory"]) == args.directory.resolve())
         packages = [Path(path) for path in entry["packages"] if not args.allow_upstream or not Path(path).name.startswith("os-dhcp-interface-ha-")]
         installed(packages, args.evidence_directory, args.label,
-                  exact=not args.allow_upstream, requirement=plugin_requirement(args.directory, args.trusted_directory) if args.allow_upstream else None)
+                  exact=not args.allow_upstream,
+                  requirement=plugin_requirement(args.directory, args.trusted_directory, unsigned=entry["unsigned"])
+                  if any(path.name.startswith("os-bind-rp") for path in packages) else None)
     elif args.command == "native-install":
         if args.mode != "public" or plan["composition"] is None or plan["composition"]["components"]["bind_plugin"] is None:
             raise ValueError("native user installation requires a complete authenticated public feed")

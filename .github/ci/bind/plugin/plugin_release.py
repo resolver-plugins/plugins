@@ -129,7 +129,11 @@ def validate_output(directory, selection, trusted, pkg_command):
         if (identity.name != "os-bind-rp-devel" or identity.origin != "opnsense/os-bind-rp-devel"
                 or identity.abi != inputs["package_abi"] or archive.name != f"{identity.name}-{identity.version}.pkg"):
             raise ValueError("development plugin identity differs from selected source")
-        package_checksums.verify_archive(pkg_command, archive)
+        _, dependencies = releases.query_package(archive, pkg_command)
+        record = releases.read_package_manifest(archive, pkg_command)
+        requirement = components.plugin_requirement_from_makefile((trusted / "plugin-package.mk").read_text())
+        components.validate_plugin_archive(record, dependencies, requirement, development=True)
+        components._validate_plugin_file_map(record, package_checksums.verify_archive(pkg_command, archive))
     # FreeBSD tar understands the native pkg compression; target Python need not.
     entries = subprocess.check_output(["tar", "-tf", str(archive)], text=True).splitlines()
     names = {"usr/local/opnsense/version/bind-rp", "/usr/local/opnsense/version/bind-rp",
@@ -186,6 +190,12 @@ def main():
             raise ValueError("plugin wrapper differs from trusted build input")
         components.validate_selected_git(selection, args.trusted_directory)
         materialize_source(args.repository_root, args.source_commit, args.trusted_directory / "upstream.json")
+        definition = args.repository_root / "dns/bind/Makefile"
+        trusted_definition = args.trusted_directory / "plugin-package.mk"
+        if definition.read_bytes() != trusted_definition.read_bytes():
+            raise ValueError("materialized plugin definition differs from trusted source")
+        components.validate_plugin_source(args.repository_root,
+            components.plugin_requirement_from_makefile(trusted_definition.read_text()))
     elif args.command == "intake":
         fetch_intake(args.repository, args.trusted_directory, selection, args.output_directory)
     elif args.command == "installed-runtime":

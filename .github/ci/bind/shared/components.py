@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import unquote_to_bytes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bind.runtime import bind920_profile
@@ -39,6 +40,41 @@ RUNTIME_SIDECARS = {"upstream.json", "creator-target.json", "bind920-profile.jso
                     "bind920-provenance.json"}
 PLUGIN_SIDECARS = {"upstream.json", "creator-target.json", "plugin-build-inputs.json",
                    "build-metadata.txt", "plugin-package.mk"}
+PLUGIN_SHARED_FILE = "/usr/local/etc/inc/plugins.inc.d/bind.inc"
+PLUGIN_PRE_INSTALL = r'''# Native dependency records do not enforce an installed core's minimum version.
+set -eu
+
+bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
+bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p')
+[ -n "${bind_package_minimum_core}" ] || {
+    printf '%s\n' 'os-bind-rp minimum OPNsense version is missing' >&2
+    exit 1
+}
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v')
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}")
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    *)
+        printf 'os-bind-rp requires OPNsense %s or later (installed %s)\n' \
+            "${bind_package_minimum_core}" "${bind_package_core}" >&2
+        exit 1
+        ;;
+esac
+
+# A native archive conflict list is an installed-package database relationship.
+# Replacement uses shared-file resolution; this read-only check fences name drift.
+bind_package_installed=$("${bind_package_pkg}" query '%n')
+for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
+    for bind_package_name in ${bind_package_installed}; do
+        if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
+            printf 'os-bind-rp cannot coexist with installed %s\n' \
+                "${bind_package_conflict}" >&2
+            exit 1
+        fi
+    done
+done
+'''
 
 
 def plugin_requirement_from_makefile(text):
@@ -60,7 +96,47 @@ def plugin_requirement_from_makefile(text):
         raise ValueError("unsupported plugin dependency, identity, conflict or core contract")
     return dict(name="os-" + fields["PLUGIN_NAME"], dependency="bind920", minimum_version=formula[1],
                 dependency_formula=f"bind920 >= {formula[1]}", formula_dependencies=["bind920"],
-                conflicts=["os-bind"], minimum_opnsense_version=core[1])
+                conflicts=["os-bind"], minimum_opnsense_version=core[1],
+                manifest_dependencies=fields["PLUGIN_MANIFEST_DEPENDS"])
+
+
+def _plugin_conflicts(requirement, development=False):
+    conflicts = set(requirement["conflicts"])
+    conflicts.update(name + "-devel" for name in requirement["conflicts"])
+    conflicts.add(requirement["name"] if development else requirement["name"] + "-devel")
+    return sorted(conflicts)
+
+
+def expected_plugin_pre_install(requirement, *, development=False):
+    """Render the trusted guard using only the original source's literal policy."""
+    return (PLUGIN_PRE_INSTALL.replace("%%PLUGIN_MANIFEST_DEPENDS%%", requirement["manifest_dependencies"])
+            .replace("%%PLUGIN_CONFLICTS%%", " ".join(_plugin_conflicts(requirement, development))))
+
+
+def decode_native_script(value):
+    """Undo the native manifest emitter's single percent-encoding pass."""
+    if not isinstance(value, str):
+        raise ValueError("native package script is missing or invalid")
+    return unquote_to_bytes(value).decode("utf-8", "strict")
+
+
+def validate_plugin_source(source, requirement):
+    """Require the exact materialized guard and ordinary shared BIND payload."""
+    plugin = source / "dns/bind"
+    definition = plugin / "Makefile"
+    hook = plugin / "+PRE_INSTALL.pre"
+    if (definition.is_symlink() or not definition.is_file()
+            or plugin_requirement_from_makefile(definition.read_text()) != requirement
+            or hook.is_symlink() or not hook.is_file() or hook.read_bytes() != PLUGIN_PRE_INSTALL.encode("utf-8")):
+        raise ValueError("plugin source package definition or canonical pre-install guard differs")
+    for name in ("+PRE_INSTALL", "+PRE_INSTALL.post", "+INSTALL", "pkg-install",
+                 "pkg-pre-install", "pkg-pre-install.lua"):
+        path = plugin / name
+        if path.exists() or path.is_symlink():
+            raise ValueError("plugin source has an overriding installation hook")
+    anchor = plugin / "src/etc/inc/plugins.inc.d/bind.inc"
+    if anchor.is_symlink() or not anchor.is_file():
+        raise ValueError("plugin source lacks the regular shared BIND payload")
 
 
 def compare_native_versions(pkg_command, left, right):
@@ -292,20 +368,42 @@ def _sidecars(directory, kind):
             else _json(directory / name) for name in names}
 
 
-def validate_plugin_archive(record, dependencies, requirement, *, development=False):
-    conflicts = requirement["conflicts"]
-    expected_conflicts = set(conflicts) | {name + "-devel" for name in conflicts}
-    expected_conflicts.add(requirement["name"] if development else requirement["name"] + "-devel")
-    core = record.get("deps", {}).get("opnsense")
-    if (any(edge[0] in requirement["formula_dependencies"] for edge in dependencies)
+def validate_plugin_replacement(record, requirement, *, development=False):
+    """Check the canonical program and shared payload in either native view."""
+    name = requirement["name"] + ("-devel" if development else "")
+    if (record.get("name") != name or record.get("origin") != "opnsense/" + name
             or record.get("dep_formula") != requirement["dependency_formula"]
-            or not isinstance(record.get("conflicts"), list) or set(record["conflicts"]) != expected_conflicts
-            or core != {"version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"}):
-        raise ValueError("plugin archive dependency, conflict or core floor differs from source")
+            or record.get("conflicts", []) != []):
+        raise ValueError("plugin identity, formula or replacement policy differs from source")
+    scripts, lua_scripts = record.get("scripts"), record.get("lua_scripts", {})
+    if (not isinstance(scripts, dict) or "install" in scripts
+            or not isinstance(lua_scripts, dict) or "pre-install" in lua_scripts
+            or decode_native_script(scripts.get("pre-install")).strip(" \t\r\n\f\v")
+               != expected_plugin_pre_install(requirement, development=development).strip(" \t\r\n\f\v")):
+        raise ValueError("plugin archive pre-install program differs from source")
+    files = record.get("files")
+    checksum = files.get(PLUGIN_SHARED_FILE) if isinstance(files, dict) else None
+    if not isinstance(checksum, str) or package_checksums.CHECKSUM_PATTERN.fullmatch(checksum) is None:
+        raise ValueError("plugin archive shared BIND payload checksum is missing or invalid")
+
+
+def validate_plugin_archive(record, dependencies, requirement, *, development=False):
+    """Archive dependency declarations must match the original source literally."""
+    core = (record.get("deps") or {}).get("opnsense")
+    if (any(edge[0] in requirement["formula_dependencies"] for edge in dependencies)
+            or core != {"version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"}
+            or ("opnsense", "opnsense/opnsense", requirement["minimum_opnsense_version"]) not in dependencies):
+        raise ValueError("plugin archive dependency or core floor differs from source")
+    validate_plugin_replacement(record, requirement, development=development)
+
+
+def _validate_plugin_file_map(record, checksums):
+    if dict(checksums).get(PLUGIN_SHARED_FILE) != record["files"][PLUGIN_SHARED_FILE]:
+        raise ValueError("native BIND payload checksum differs from the package file map")
 
 
 def _validate_archives(directory, manifest, sidecars, pkg_command):
-    identities, dependencies = {}, {}
+    identities, dependencies, files = {}, {}, {}
     for filename in manifest["packages"]:
         path = directory / filename
         identity, edges = releases.query_package(path, pkg_command)
@@ -320,7 +418,7 @@ def _validate_archives(directory, manifest, sidecars, pkg_command):
         if abi != manifest["package_abi"]:
             raise ValueError("archive ABI differs from component")
         identities[name], dependencies[name] = identity, edges
-        package_checksums.verify_archive(pkg_command, path)
+        files[name] = package_checksums.verify_archive(pkg_command, path)
     if manifest["kind"] == "bind-runtime":
         if ("bind-tools", "dns/bind-tools", identities["bind-tools"][1]) not in dependencies["bind920"]:
             raise ValueError("runtime archive pair dependency differs")
@@ -329,6 +427,7 @@ def _validate_archives(directory, manifest, sidecars, pkg_command):
         archive = directory / next(iter(manifest["packages"]))
         record = releases.read_package_manifest(archive, pkg_command)
         validate_plugin_archive(record, dependencies["os-bind-rp"], requirement)
+        _validate_plugin_file_map(record, files["os-bind-rp"])
 
 
 def validate_component(directory, kind, series, *, pkg_command=None):
@@ -848,7 +947,7 @@ def stage_preview(producer, selection, trusted_directory, output, *, pkg_command
         if (identity != ("os-bind-rp-devel", version, "opnsense/os-bind-rp-devel", inputs["package_abi"])
                 or packages[0].name != f"os-bind-rp-devel-{version}.pkg"):
             raise ValueError("preview archive identity differs")
-        package_checksums.verify_archive(pkg_command, packages[0])
+        checksums = package_checksums.verify_archive(pkg_command, packages[0])
         runtime = output.parent / "preview-runtime"
         receipt = _json(trusted_directory / "runtime-selection.json")
         fetch_frozen_component(REPOSITORY, receipt, runtime)
@@ -865,6 +964,7 @@ def stage_preview(producer, selection, trusted_directory, output, *, pkg_command
         record = releases.read_package_manifest(packages[0], pkg_command)
         requirement = plugin_requirement_from_makefile((trusted_directory / "plugin-package.mk").read_text())
         validate_plugin_archive(record, edges, requirement, development=True)
+        _validate_plugin_file_map(record, checksums)
         packages += [runtime / name for name in receipt["packages"]]
     _select_role(trusted_directory, selection["series"], "creator", pkg_command)
     output.mkdir(parents=True)

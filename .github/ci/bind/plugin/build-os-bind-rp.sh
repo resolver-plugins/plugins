@@ -116,8 +116,14 @@ creator_ports_commit=$(creator_field ports_commit)
 creator_recipe_path=$(creator_field recipe_path)
 opnsense_version=$("$pkg_static" rquery -r OPNsense -e '%n = opnsense' '%v')
 minimum_opnsense=$(
-    "$python_command" -I -c 'import pathlib,sys; sys.path.insert(0,sys.argv[1]); from bind.shared.components import plugin_requirement_from_makefile; print(plugin_requirement_from_makefile(pathlib.Path(sys.argv[2]).read_text())["minimum_opnsense_version"])' \
-        "$script_directory/../.." "$trusted/plugin-package.mk"
+    "$python_command" -I -c '
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from bind.shared.components import plugin_requirement_from_makefile, validate_plugin_source
+requirement = plugin_requirement_from_makefile(pathlib.Path(sys.argv[2]).read_text())
+validate_plugin_source(pathlib.Path(sys.argv[3]), requirement)
+print(requirement["minimum_opnsense_version"])
+' "$script_directory/../.." "$trusted/plugin-package.mk" "$repository_root"
 )
 case "$("$pkg_static" version -t "$opnsense_version" "$minimum_opnsense")" in
     '='|'>') ;;

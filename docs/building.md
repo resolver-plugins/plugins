@@ -112,9 +112,16 @@ incompatible, publish it with the runtime workflow and retry the plugin run.
 The plugin's recorded build-time runtime remains historical provenance; a later
 compatible runtime can be qualified with the same original plugin bytes.
 The plugin manifest records `dep_formula: "bind920 >= 9.20.26"`, not a locally
-built BIND revision, and native qualification verifies the OPNsense floor and conflict. The reviewed
-source package emits its declared core dependency and a read-only pre-install
-version guard; a dependency metadata version alone is not floor enforcement.
+built BIND revision. The reviewed source emits its declared core dependency and
+a read-only pre-install guard for the minimum core version and incompatible
+installed plugin names. Native file ownership resolution replaces official
+`os-bind` through the shared `bind.inc` payload. Qualification checks the exact
+source-generated guard and both installation directions. Native manifest
+`conflicts` entries describe installed database relationships and cannot express
+this prohibited-name policy; dependency metadata alone also does not enforce
+the core floor.
+Archive checks require the declared source floor. Installed checks use native
+effective dependency versions and verify that they satisfy that floor.
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
 `make clean` target after materializing a release source, because that target
 resets `dns/bind/src` to the control-plane checkout.
@@ -205,6 +212,13 @@ Native BIND qualification prepares the OPNsense core with the current package
 manager before selecting the minimum reader. It then uses that reader's verified
 `pkg-static` for catalogues, official `os-bind` preparation, installation and
 rollback operations. The ordinary public installation gate uses this same executable.
+An already-booted FreeBSD qualification VM also needs the core's normal PHP
+initialization before plugin package hooks run. When `/conf/config.xml` is absent,
+the verifier copies the installed factory configuration, then runs
+`rc.subr.d/php`, starts the real configd service and renders `OPNsense/WebGui`.
+It requires PHP to resolve and load `config.inc` through the generated include
+path. Existing customer configuration is preserved; this setup does not run the
+appliance's network or firewall boot sequence.
 Local qualification requests each built package's exact version and compares its
 installed identity with the archive. Public native pkg qualification also checks
 the supported behavior of keeping a newer compatible upstream BIND pair.

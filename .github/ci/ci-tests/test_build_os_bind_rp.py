@@ -4,6 +4,7 @@ from module_fixtures import load_module
 from package_fixtures import (
     creator_identity, make_bind_component, make_ports_recipe,
     make_tools_repository, runtime_approval, write_json, write_resolved_target,
+    PLUGIN_PRE_INSTALL,
 )
 
 plugin = load_module('plugin_release', 'bind/plugin/plugin_release.py')
@@ -44,7 +45,7 @@ def native_command_fixture(path):
         def dependencies(record):
             if record['name'] == 'bind920':
                 return [('bind-tools', 'dns/bind-tools', record['version'])]
-            return []
+            return [(name, edge['origin'], edge['version']) for name, edge in record.get('deps', {}).items()]
         def query(record, fmt):
             if fmt == '%Fp|%Fs':
                 print('\n'.join(path + '|' + checksum for path, checksum in
@@ -149,6 +150,7 @@ def build_fixture(tmp_path):
     if 'PLUGIN_MANIFEST_DEPENDS=' not in selected_definition:
         selected_definition += '\nPLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }\n'
     makefile.write_text(selected_definition)
+    (root / 'dns/bind/+PRE_INSTALL.pre').write_text(PLUGIN_PRE_INSTALL)
     git(root, 'add', 'dns/bind', 'Mk', 'Scripts', 'Templates', '.resolver-plugins')
     git(root, 'commit', '-m', 'selected package inputs')
     source_commit = git(root, 'rev-parse', 'HEAD')
@@ -190,6 +192,8 @@ def build_fixture(tmp_path):
         #!/usr/bin/env python3
         import hashlib, io, json, os, pathlib, sys, tarfile
         args = sys.argv[1:]
+        sys.path.insert(0, str(pathlib.Path(args[1]).parents[1] / '.github/ci/ci-tests'))
+        from package_fixtures import BIND_COLLISION_PATH, plugin_manifest
         assert args[0] == '-C' and args[-1] == 'package'
         assert '_PLUGIN_DEVEL=' in args
         assert 'PLUGIN_HASH=' + os.environ['SOURCE_COMMIT'] in args
@@ -197,14 +201,15 @@ def build_fixture(tmp_path):
         assert state['locked'] and state['pkg']['version'] == '2.3.1_1'
         output = pathlib.Path(args[1]) / 'work/pkg'
         output.mkdir(parents=True)
+        bind = pathlib.Path(args[1]) / 'src/etc/inc/plugins.inc.d/bind.inc'
         record = dict(name='os-bind-rp', version='26.1_1', origin='opnsense/os-bind-rp',
-            abi='FreeBSD:14:amd64', dep_formula='bind920 >= 9.20.26',
-            conflicts=['os-bind', 'os-bind-devel', 'os-bind-rp-devel'],
-            deps={'opnsense': {'version': '26.1.11_10', 'origin': 'opnsense/opnsense'}})
+            abi='FreeBSD:14:amd64')
+        record.update(plugin_manifest((pathlib.Path(args[1]) / 'Makefile').read_text(), payload=bind.read_bytes()))
         version = json.dumps(dict(product_hash=os.environ['SOURCE_COMMIT'])).encode()
-        record['files'] = {'/usr/local/opnsense/version/bind-rp': '1$' + hashlib.sha256(version).hexdigest()}
+        record['files']['/usr/local/opnsense/version/bind-rp'] = '1$' + hashlib.sha256(version).hexdigest()
         with tarfile.open(output / 'os-bind-rp-26.1_1.pkg', 'w') as package:
             for name, data in [('+MANIFEST', json.dumps(record).encode()),
+                               (BIND_COLLISION_PATH.lstrip('/'), bind.read_bytes()),
                                ('usr/local/opnsense/version/bind-rp', version)]:
                 entry = tarfile.TarInfo(name)
                 entry.size = len(data)
@@ -283,14 +288,7 @@ def test_cached_plugin_copy_and_source_assets_preserve_original_build_record(tmp
     creator = creator_identity('FreeBSD:14:amd64')
     cached = make_bind_component('bind_plugin', tmp_path / 'cached', series='26.1', creator=creator,
         source_commit=environment['SOURCE_COMMIT'], control_commit='e' * 40, profile=upstream, version='26.1_1')
-    archive = cached / 'os-bind-rp-26.1_1.pkg'
-    record = json.loads(archive.read_text())
-    record.update(dep_formula='bind920 >= 9.20.26', conflicts=['os-bind', 'os-bind-devel', 'os-bind-rp-devel'],
-                  deps={'opnsense': {'version': '26.1.11_10', 'origin': 'opnsense/opnsense'}})
-    write_json(archive, record)
     original = json.loads((cached / 'channel.json').read_text())
-    original['packages'][archive.name] = original['assets'][archive.name] = hashlib.sha256(archive.read_bytes()).hexdigest()
-    write_json(cached / 'channel.json', original)
     # Today's qualification pair is B; the cached build remains attributed to A.
     current = make_bind_component('bind_runtime', tmp_path / 'current', series='26.1', creator=creator,
         source_commit='b' * 40, control_commit='c' * 40, profile=upstream, version='9.20.27')

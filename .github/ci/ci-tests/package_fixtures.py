@@ -17,6 +17,55 @@ PLUGIN_DEPEND_FORMULA_DEPENDS= bind920
 PLUGIN_CONFLICTS= bind
 PLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }
 '''
+PLUGIN_PRE_INSTALL = r'''# Native dependency records do not enforce an installed core's minimum version.
+set -eu
+
+bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
+bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p')
+[ -n "${bind_package_minimum_core}" ] || {
+    printf '%s\n' 'os-bind-rp minimum OPNsense version is missing' >&2
+    exit 1
+}
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v')
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}")
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    *)
+        printf 'os-bind-rp requires OPNsense %s or later (installed %s)\n' \
+            "${bind_package_minimum_core}" "${bind_package_core}" >&2
+        exit 1
+        ;;
+esac
+
+# A native archive conflict list is an installed-package database relationship.
+# Replacement uses shared-file resolution; this read-only check fences name drift.
+bind_package_installed=$("${bind_package_pkg}" query '%n')
+for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
+    for bind_package_name in ${bind_package_installed}; do
+        if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
+            printf 'os-bind-rp cannot coexist with installed %s\n' \
+                "${bind_package_conflict}" >&2
+            exit 1
+        fi
+    done
+done
+'''
+BIND_COLLISION_PATH = '/usr/local/etc/inc/plugins.inc.d/bind.inc'
+
+
+def plugin_manifest(definition=PLUGIN_PACKAGE, *, development=False, payload=b'fixture bind.inc\n'):
+    """Independent source fixture and the actual ASCII native script representation."""
+    fields = dict(re.findall(r'^(PLUGIN_\w+)=\s*(.*)$', definition, re.M))
+    core = re.search(r'version: "([^"]+)"', fields['PLUGIN_MANIFEST_DEPENDS'])[1]
+    conflicts = 'os-bind os-bind-devel ' + ('os-bind-rp' if development else 'os-bind-rp-devel')
+    script = PLUGIN_PRE_INSTALL.replace('%%PLUGIN_MANIFEST_DEPENDS%%', fields['PLUGIN_MANIFEST_DEPENDS'])
+    script = script.replace('%%PLUGIN_CONFLICTS%%', conflicts)
+    name = 'os-bind-rp-devel' if development else 'os-bind-rp'
+    return dict(name=name, origin='opnsense/' + name, dep_formula=fields['PLUGIN_DEPEND_FORMULA'],
+                deps={'opnsense': {'version': core, 'origin': 'opnsense/opnsense'}},
+                files={BIND_COLLISION_PATH: '1$' + hashlib.sha256(payload).hexdigest()},
+                scripts={'pre-install': script.replace('%', '%25').strip(' \t\r\n\f\v')})
 
 
 def runtime_approval(version='9.20.26_2', ports_commit='1' * 40):
@@ -160,8 +209,10 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
                 packages=runtime_packages))
         archives = [('os-bind-rp', version, 'opnsense/os-bind-rp')]
     for name, archive_version, origin in archives:
-        (directory / f'{name}-{archive_version}.pkg').write_bytes(json.dumps(
-            dict(name=name, version=archive_version, origin=origin, abi=creator['abi']), sort_keys=True).encode())
+        record = dict(name=name, version=archive_version, origin=origin, abi=creator['abi'])
+        if name == 'os-bind-rp':
+            record.update(plugin_manifest((directory / 'plugin-package.mk').read_text()))
+        (directory / f'{name}-{archive_version}.pkg').write_bytes(json.dumps(record, sort_keys=True).encode())
     manifest['packages'] = {f'{name}-{archive_version}.pkg': hashlib.sha256(
         (directory / f'{name}-{archive_version}.pkg').read_bytes()).hexdigest()
         for name, archive_version, _ in archives}

@@ -10,7 +10,7 @@ from ha_fixtures import make_ha_channel
 from git_fixtures import upstream_profile
 from package_fixtures import (PLUGIN_PACKAGE, BIND_PROFILE, creator_identity, make_bind_component,
                               make_ports_recipe, make_tools_repository, runtime_approval, fixture_version_comparison,
-                              write_resolved_target, write_json)
+                              write_resolved_target, write_json, plugin_manifest, BIND_COLLISION_PATH)
 from bind.shared import components as bind_components
 
 
@@ -118,16 +118,18 @@ def publication_environment(tmp_path,monkeypatch):
         if operation=='which': return response(command,kwargs,'pkg-'+installed[0]['version']+'\n')
         if operation=='check': return response(command,kwargs)
         if operation=='info':
-            return response(command,kwargs,json.dumps(dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'],
-                deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}})))
+            return response(command,kwargs,Path(args[args.index('-F')+1]).read_text())
         if operation=='query':
             if '%k' in args: return response(command,kwargs,'1\n' if locked[0] else '0\n')
             identity=archive_identity(Path(args[args.index('-F')+1])) if '-F' in args else installed[0]
             if args[-1]=='%Fp|%Fs':
-                return response(command,kwargs,'/usr/local/fixture/'+identity['name']+'|'+'1'*64+'\n')
+                files=identity.get('files',{'/usr/local/fixture/'+identity['name']:'1'*64})
+                return response(command,kwargs,''.join(path+'|'+checksum+'\n' for path,checksum in files.items()))
             if args[-1].startswith('%dn'):
                 separator='\t' if '\t' in args[-1] else '|'
-                return response(command,kwargs,separator.join(('bind-tools','dns/bind-tools',identity['version']))+'\n' if identity['name']=='bind920' else '')
+                edges=[('bind-tools','dns/bind-tools',identity['version'])] if identity['name']=='bind920' else [
+                    (name,edge['origin'],edge['version']) for name,edge in identity.get('deps',{}).items()]
+                return response(command,kwargs,''.join(separator.join(edge)+'\n' for edge in edges))
             return response(command,kwargs,identity_line(identity,'\t' if '\t' in args[-1] else '|'))
         if operation in {'update','rquery','fetch'}:
             repository=None
@@ -527,17 +529,19 @@ def channels(tmp_path, monkeypatch):
     (tmp_path / 'runtime-approval.mk').write_text(runtime_approval())
     def query(path,command):
         identity=identities[path.name]
-        return identity,{('bind-tools','dns/bind-tools',identity[1])} if identity[0]=='bind920' else set()
+        edges={('bind-tools','dns/bind-tools',identity[1])} if identity[0]=='bind920' else (
+            {('opnsense','opnsense/opnsense','26.1.11_10')} if identity[0]=='os-bind-rp' else set())
+        return identity,edges
     def sign(packages,output,key,pkg,metadata):
         output.mkdir()
         for package in packages: shutil.copyfile(package,output / package.name)
         for name in catalogue.CATALOGUE_ASSETS: (output / name).write_bytes(b'new signed catalogue')
     monkeypatch.setattr(catalogue.releases,'query_package',query)
-    monkeypatch.setattr(catalogue.releases,'read_package_manifest',lambda *a:dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp-devel'],
-                deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}}))
+    monkeypatch.setattr(catalogue.releases,'read_package_manifest',lambda *a:plugin_manifest())
     monkeypatch.setattr(catalogue.target_pkg,'verify_target_pkg',Mock())
     monkeypatch.setattr(catalogue.bind,'select_role',Mock())
-    monkeypatch.setattr(catalogue.package_checksums,'verify_archive',Mock())
+    monkeypatch.setattr(catalogue.package_checksums,'verify_archive',lambda command,path:
+        list(json.loads(path.read_text())['files'].items()) if path.name.startswith('os-bind-rp-') else [])
     def output(command,**kwargs):
         if command[1:3]==['version','-t']:
             return fixture_version_comparison(*command[-2:])+'\n'
@@ -749,11 +753,21 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     packages=[tmp_path / f'{name}-{identity[1]}.pkg' for name,identity in identities.items()]
     expected=[('/usr/local/file','1'*64)]
     actual={name:[('/usr/local/file','2'*64 if name.startswith('bind') else '1'*64)] for name in identities}
+    manifest=plugin_manifest()
+    actual['os-bind-rp']=list(manifest['files'].items())
+    core=('opnsense','26.7.3','opnsense/opnsense','FreeBSD:15:amd64')
+    manifest['deps']['opnsense']['version']=core[1]
+    manifest['deps']['bind920']={'version':identities['bind920'][1],'origin':'dns/bind920'}
+    anchor=tmp_path / 'bind.inc';anchor.write_bytes(b'fixture bind.inc\n')
+    native_path=verification.Path
+    monkeypatch.setattr(verification,'Path',lambda value:anchor if str(value)==BIND_COLLISION_PATH else native_path(value))
     monkeypatch.setattr(verification.releases,'query_package',lambda path,command:(identities[next(name for name in identities if path.name.startswith(name+'-'))],set()))
-    monkeypatch.setattr(verification.package_checksums,'verify_archive',lambda *args:expected)
+    monkeypatch.setattr(verification.package_checksums,'verify_archive',lambda command,path:
+        list(manifest['files'].items()) if path.name.startswith('os-bind-rp-') else expected)
     def output(command,**kwargs):
         if command[1]=='version': return fixture_version_comparison(*command[-2:])+'\n'
         if command[1]=='which': return current_owner[0]+'\n'
+        if command[1]=='info': return json.dumps(manifest)
         name=command[command.index('-e')+1].removeprefix('%n = ')
         current_owner[0]=f'{name}-{identities[name][1]}'
         if command[-1]=='%R': return 'OPNsense'
@@ -765,8 +779,10 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     def native_run(command,**kwargs):
         if command[1]=='query' and command[-1]=='%n|%v|%o|%q':
             name=command[command.index('-e')+1].removeprefix('%n = ')
-            return SimpleNamespace(returncode=0,stdout='|'.join(identities[name]))
-        return SimpleNamespace(returncode=1,stdout='')
+            return SimpleNamespace(returncode=0,stdout='|'.join(core if name=='opnsense' else identities[name]))
+        if command[1]=='query': return SimpleNamespace(returncode=1,stdout='')
+        if command[1]=='check': return SimpleNamespace(returncode=0,stdout='')
+        raise AssertionError(command)
     native=Mock(side_effect=native_run)
     monkeypatch.setattr(verification.subprocess,'run',native)
     requirement=bind_components.plugin_requirement_from_makefile(PLUGIN_PACKAGE)
@@ -777,7 +793,7 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     assert any(call.args[0]==[verification.PKG,'check','-s','bind-tools','bind920','os-bind-rp'] for call in native.call_args_list)
     with pytest.raises(ValueError,match='file set differs'):
         verification.installed(packages,tmp_path / 'evidence','local')
-    actual['os-bind-rp']=[('/usr/local/file','3'*64)]
+    actual['os-bind-rp']=[(BIND_COLLISION_PATH,'3'*64)]
     with pytest.raises(ValueError,match='file set differs'):
         verification.installed(packages,tmp_path / 'evidence','invalid-public',exact=False,requirement=requirement)
     assert not (tmp_path / 'evidence/local.json').exists() and not (tmp_path / 'evidence/invalid-public.json').exists()

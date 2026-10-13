@@ -79,9 +79,20 @@ metadata authenticate
 install -d -m 0750 /conf
 if [ ! -e /conf/config.xml ]
 then
-    printf '%s\n' '<opnsense/>' > /conf/config.xml
-    chmod 0640 /conf/config.xml
+    test -r /usr/local/etc/config.xml || fail 'installed core factory configuration is missing'
+    install -m 0640 /usr/local/etc/config.xml /conf/config.xml
 fi
+# A package-installed core has not run the appliance's early PHP initialization.
+sh /usr/local/etc/rc.subr.d/php
+service configd onestatus || service configd onestart
+/usr/local/opnsense/service/template_ctl.py OPNsense/WebGui
+/usr/local/bin/php -r '
+if (stream_resolve_include_path("config.inc") !== "/usr/local/etc/inc/config.inc") {
+    fwrite(STDERR, "native PHP cannot resolve config.inc\n");
+    exit(1);
+}
+require_once "config.inc";
+'
 
 # An isolated feed configuration prevents a global repository from hiding a missing payload.
 python3 - "$evidence/preflight.json" "$temporary" "$checkout/docs/package-repository/resolver-plugins.pub" <<'PY'

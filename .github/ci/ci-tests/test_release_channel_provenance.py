@@ -5,7 +5,7 @@ from module_fixtures import *
 from package_fixtures import (
     BIND_PROFILE as PROFILE, bind_records, creator_identity, make_bind_component,
     write_resolved_target, write_build_metadata, write_json, PLUGIN_PACKAGE,
-    make_ports_recipe, make_tools_repository, fixture_version_comparison,
+    make_ports_recipe, make_tools_repository, fixture_version_comparison, plugin_manifest,
 )
 
 release_channel = load_module('release_channel', 'shared/release_channel.py')
@@ -64,7 +64,8 @@ class StageProvenanceTest(unittest.TestCase):
                 def query(path,command):
                     data=json.loads(path.read_text())
                     return tuple(data[field] for field in ('name','version','origin','abi')), (
-                        {('bind-tools','dns/bind-tools',data['version'])} if data['name']=='bind920' else set())
+                        {('bind-tools','dns/bind-tools',data['version'])} if data['name']=='bind920' else {
+                            (name,edge['origin'],edge['version']) for name,edge in data.get('deps',{}).items()})
                 previous=Path.cwd()
                 try:
                     os.chdir(history)
@@ -75,8 +76,8 @@ class StageProvenanceTest(unittest.TestCase):
                             patch.object(components.subprocess,'check_output',side_effect=output),
                             patch.object(components.releases,'snapshot_release',return_value=SimpleNamespace(existed=True,draft=False,directory=runtime)),
                             patch.object(components.releases,'query_package',side_effect=query),
-                            patch.object(components.releases,'read_package_manifest',side_effect=lambda archive,command:dict(dep_formula='bind920 >= 9.20.26',conflicts=['os-bind','os-bind-devel','os-bind-rp' if 'devel' in archive.name else 'os-bind-rp-devel'],deps={'opnsense':{'version':'26.1.11_10','origin':'opnsense/opnsense'}})),
-                            patch.object(components.package_checksums,'verify_archive'),
+                            patch.object(components.releases,'read_package_manifest',side_effect=lambda archive,command:plugin_manifest(development='devel' in archive.name)),
+                            patch.object(components.package_checksums,'verify_archive',side_effect=lambda command,archive:list(json.loads(archive.read_text()).get('files',{}).items())),
                             patch.object(components,'_select_role'),
                             patch.object(package_catalogue,'verify_packages'), patch.object(package_catalogue,'verify_repository')):
                             providers.enter_context(provider)
