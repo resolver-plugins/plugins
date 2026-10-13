@@ -643,8 +643,10 @@ jobs:
             --series "$SERIES" --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
             --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256" \
             --output-directory "$RUNNER_TEMP/source-release")
+          version=$(python3 -I .github/ci/shared/workflow_data.py field \
+            "artifacts/$SERIES/repository/component/current/channel.json" plugin_version)
           python3 -I .github/ci/shared/release_channel.py publish-immutable --repository "$GITHUB_REPOSITORY" \
-            --tag "$tag" --directory "$RUNNER_TEMP/source-release" --title "os-bind-rp $SERIES $tag"
+            --tag "$tag" --directory "$RUNNER_TEMP/source-release" --title "os-bind-rp $SERIES $version"
 
   retention:
     if: >-
