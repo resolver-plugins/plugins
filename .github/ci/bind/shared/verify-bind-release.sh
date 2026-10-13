@@ -78,23 +78,7 @@ SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
 export SSL_CERT_FILE
 metadata authenticate
 
-install -d -m 0750 /conf
-if [ ! -e /conf/config.xml ]
-then
-    test -r /usr/local/etc/config.xml || fail 'installed core factory configuration is missing'
-    install -m 0640 /usr/local/etc/config.xml /conf/config.xml
-fi
-# A package-installed core has not run the appliance's early PHP initialization.
-sh /usr/local/etc/rc.subr.d/php
-service configd onestatus || service configd onestart
-/usr/local/opnsense/service/template_ctl.py OPNsense/WebGui
-/usr/local/bin/php -r '
-if (stream_resolve_include_path("config.inc") !== "/usr/local/etc/inc/config.inc") {
-    fwrite(STDERR, "native PHP cannot resolve config.inc\n");
-    exit(1);
-}
-require_once "config.inc";
-'
+sh "$ci/shared/prepare-opnsense-vm.sh"
 
 # An isolated feed configuration prevents a global repository from hiding a missing payload.
 metadata prepare-feeds --directory "$temporary"

@@ -239,9 +239,11 @@ Native BIND qualification prepares the OPNsense core with the current package
 manager before selecting the minimum reader. It then uses that reader's verified
 `pkg-static` for catalogues, official `os-bind` preparation, installation and
 rollback operations. The ordinary public installation gate uses this same executable.
-An already-booted FreeBSD qualification VM also needs the core's normal PHP
-initialization before plugin package hooks run. When `/conf/config.xml` is absent,
-the verifier copies the installed factory configuration, then runs
+An already-booted FreeBSD VM also needs the core's normal PHP
+initialization before plugin package hooks run. BIND qualification and the HA
+builder and staged/public installation checks use
+`.github/ci/shared/prepare-opnsense-vm.sh`. When `/conf/config.xml` is absent,
+this helper copies the installed factory configuration, then runs
 `rc.subr.d/php`, starts the real configd service and renders `OPNsense/WebGui`.
 It requires PHP to resolve and load `config.inc` through the generated include
 path. Existing customer configuration is preserved; this setup does not run the
