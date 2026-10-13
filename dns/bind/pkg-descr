@@ -9,7 +9,7 @@ Plugin Changelog
 
 1.36
 
-* Enforce incompatible plugin names and the minimum OPNsense core version
+* Check minimum BIND and OPNsense versions and refuse incompatible plugin names
 * Preserve dynamic BIND records while package upgrades regenerate zone files
 * Add DHCP lease watcher and scoped dynamic DNS mappings
 * Add reverse DNS zone management
