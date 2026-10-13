@@ -73,6 +73,9 @@ def native_manifest(name):
         record = record[0]
     if not isinstance(record, dict) or record.get("name") != name:
         raise ValueError("installed manifest is not one matching package")
+    if isinstance(record.get("files"), dict):
+        record = dict(record, files={path: value.get("sum") if isinstance(value, dict) else value
+                                     for path, value in record["files"].items()})
     return record
 
 
