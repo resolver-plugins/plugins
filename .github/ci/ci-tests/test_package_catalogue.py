@@ -752,12 +752,13 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
         ('os-bind-rp','26.7_1','opnsense/os-bind-rp')]}
     packages=[tmp_path / f'{name}-{identity[1]}.pkg' for name,identity in identities.items()]
     expected=[('/usr/local/file','1'*64)]
-    actual={name:[('/usr/local/file','2'*64 if name.startswith('bind') else '1'*64)] for name in identities}
+    actual={name:[(f'/usr/local/{name}','2'*64 if name.startswith('bind') else '1'*64)] for name in identities}
     manifest=plugin_manifest()
+    del manifest['dep_formula']
     actual['os-bind-rp']=list(manifest['files'].items())
+    owners={path:f'{name}-{identities[name][1]}' for name,rows in actual.items() for path,_ in rows}
     core=('opnsense','26.7.3','opnsense/opnsense','FreeBSD:15:amd64')
     manifest['deps']['opnsense']['version']=core[1]
-    manifest['deps']['bind920']={'version':identities['bind920'][1],'origin':'dns/bind920'}
     anchor=tmp_path / 'bind.inc';anchor.write_bytes(b'fixture bind.inc\n')
     native_path=verification.Path
     monkeypatch.setattr(verification,'Path',lambda value:anchor if str(value)==BIND_COLLISION_PATH else native_path(value))
@@ -766,15 +767,16 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
         list(manifest['files'].items()) if path.name.startswith('os-bind-rp-') else expected)
     def output(command,**kwargs):
         if command[1]=='version': return fixture_version_comparison(*command[-2:])+'\n'
-        if command[1]=='which': return current_owner[0]+'\n'
+        if command[1]=='which': return owners[command[-1]]+'\n'
         if command[1]=='info': return json.dumps(manifest)
         name=command[command.index('-e')+1].removeprefix('%n = ')
-        current_owner[0]=f'{name}-{identities[name][1]}'
         if command[-1]=='%R': return 'OPNsense'
         if command[-1]=='%Fp|%Fs': return '\n'.join('|'.join(row) for row in actual[name])
-        if command[-1]=='%dn|%do|%dv': return 'bind-tools|dns/bind-tools|9.20.26_2\n'
+        if command[-1]=='%dn|%do|%dv':
+            assert name=='bind920'
+            tools=identities['bind-tools']
+            return f'{tools[0]}|{tools[2]}|{tools[1]}\n'
         return '|'.join(identities[name])
-    current_owner=['']
     monkeypatch.setattr(verification.subprocess,'check_output',output)
     def native_run(command,**kwargs):
         if command[1]=='query' and command[-1]=='%n|%v|%o|%q':
@@ -789,7 +791,7 @@ def test_installed_checkpoint_separates_exact_plugin_from_policy_eligible_runtim
     verification.installed(packages,tmp_path / 'evidence','public',exact=False,requirement=requirement)
     observed=json.loads((tmp_path / 'evidence/public.json').read_text())
     assert [row['validation'] for row in observed]==['eligible-runtime','eligible-runtime','exact-archive']
-    assert observed[0]['files']==[['/usr/local/file','2'*64]]
+    assert observed[0]['files']==[['/usr/local/bind-tools','2'*64]]
     assert any(call.args[0]==[verification.PKG,'check','-s','bind-tools','bind920','os-bind-rp'] for call in native.call_args_list)
     with pytest.raises(ValueError,match='file set differs'):
         verification.installed(packages,tmp_path / 'evidence','local')

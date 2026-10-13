@@ -45,17 +45,22 @@ def validate_plugin_manifest(record, requirement):
 
 
 def validate_installed_plugin_manifest(record, requirement):
-    """Installed deps resolve to current identities, including formula results."""
+    """Native info omits formulas; verify their installed prerequisites directly."""
     bind.validate_plugin_replacement(record, requirement,
         development=record.get("name") == requirement["name"] + "-devel")
-    deps = record.get("deps") or {}
-    for name, origin, minimum in (("opnsense", "opnsense/opnsense", requirement["minimum_opnsense_version"]),
-                                  ("bind920", "dns/bind920", requirement["minimum_version"])):
-        identity = native_identity(name)
-        if (identity is None or identity[2] != origin
-                or deps.get(name) != {"version": identity[1], "origin": origin}
-                or compare_versions(identity[1], minimum) == "<"):
-            raise ValueError("installed plugin dependency differs from native state or source minimum")
+    core = native_identity("opnsense")
+    if (core is None or core[2] != "opnsense/opnsense"
+            or (record.get("deps") or {}).get("opnsense") != {"version": core[1], "origin": core[2]}
+            or compare_versions(core[1], requirement["minimum_opnsense_version"]) == "<"):
+        raise ValueError("installed plugin core dependency differs from native state or source minimum")
+    runtime, tools = native_identity("bind920"), native_identity("bind-tools")
+    if (runtime is None or tools is None
+            or not bind.runtime_is_eligible(requirement, tuple(runtime[:3]), tuple(tools[:3]), compare_versions)
+            or compare_versions(tools[1], requirement["minimum_version"]) == "<"):
+        raise ValueError("installed plugin runtime differs from native state or source minimum")
+    edges = subprocess.check_output([PKG, "query", "-e", "%n = bind920", "%dn|%do|%dv"], text=True).splitlines()
+    if f"bind-tools|dns/bind-tools|{tools[1]}" not in edges:
+        raise ValueError("installed plugin runtime pair dependency differs")
 
 
 def native_identity(name):

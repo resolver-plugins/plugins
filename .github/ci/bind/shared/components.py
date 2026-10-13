@@ -372,9 +372,8 @@ def validate_plugin_replacement(record, requirement, *, development=False):
     """Check the canonical program and shared payload in either native view."""
     name = requirement["name"] + ("-devel" if development else "")
     if (record.get("name") != name or record.get("origin") != "opnsense/" + name
-            or record.get("dep_formula") != requirement["dependency_formula"]
             or record.get("conflicts", []) != []):
-        raise ValueError("plugin identity, formula or replacement policy differs from source")
+        raise ValueError("plugin identity or replacement policy differs from source")
     scripts, lua_scripts = record.get("scripts"), record.get("lua_scripts", {})
     if (not isinstance(scripts, dict) or "install" in scripts
             or not isinstance(lua_scripts, dict) or "pre-install" in lua_scripts
@@ -389,6 +388,8 @@ def validate_plugin_replacement(record, requirement, *, development=False):
 
 def validate_plugin_archive(record, dependencies, requirement, *, development=False):
     """Archive dependency declarations must match the original source literally."""
+    if record.get("dep_formula") != requirement["dependency_formula"]:
+        raise ValueError("plugin archive dependency formula differs from source")
     core = (record.get("deps") or {}).get("opnsense")
     if (any(edge[0] in requirement["formula_dependencies"] for edge in dependencies)
             or core != {"version": requirement["minimum_opnsense_version"], "origin": "opnsense/opnsense"}

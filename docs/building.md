@@ -120,8 +120,11 @@ source-generated guard and both installation directions. Native manifest
 `conflicts` entries describe installed database relationships and cannot express
 this prohibited-name policy; dependency metadata alone also does not enforce
 the core floor.
-Archive checks require the declared source floor. Installed checks use native
-effective dependency versions and verify that they satisfy that floor.
+Archive checks require the exact declared formula and core floor. Installed
+`pkg info` omits dependency formulas and reports the current core dependency
+version. Qualification checks the installed core, BIND and tools against the
+source minimums and verifies BIND's native tools dependency directly. See the
+[minimum reader's installed-package query](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkgdb_query.c).
 It clears only `dns/bind/work` before packaging; do not invoke the inherited
 `make clean` target after materializing a release source, because that target
 resets `dns/bind/src` to the control-plane checkout.
