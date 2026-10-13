@@ -43,11 +43,7 @@ package=$1
 python3 "$ci/shared/package_checksums.py" --pkg-command "$pkg_static" "$package"
 
 # Verify installation in the disposable VM, with no configured HA interface.
-install -d -m 0750 /conf
-if [ ! -e /conf/config.xml ]; then
-    printf '%s\n' '<opnsense/>' > /conf/config.xml
-    chmod 0640 /conf/config.xml
-fi
+sh "$ci/shared/prepare-opnsense-vm.sh"
 "$pkg_static" add "$package"
 "$pkg_static" check -s os-dhcp-interface-ha
 /usr/local/bin/php "$plugin/tests/native/test_ui_routes.php"

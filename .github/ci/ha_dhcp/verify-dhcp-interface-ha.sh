@@ -37,11 +37,7 @@ case "$url" in
         ;;
 esac
 python3 "$ci/shared/package_catalogue.py" verify --directory "$combined" --url "$url" --reader-target "$RP_READER_PKG_METADATA" --upstream "$RP_UPSTREAM_METADATA"
-install -d -m 0750 /conf
-if [ ! -e /conf/config.xml ]; then
-    printf '%s\n' '<opnsense/>' > /conf/config.xml
-    chmod 0640 /conf/config.xml
-fi
+sh "$ci/shared/prepare-opnsense-vm.sh"
 install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
 install -m 0644 "$root/docs/package-repository/resolver-plugins.pub" /usr/local/etc/pkg/keys/resolver-plugins.pub
 cat > /usr/local/etc/pkg/repos/resolver-plugins-dhcpha.conf <<CONFIG
