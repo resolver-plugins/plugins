@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import shutil
 import re
 import subprocess
@@ -182,6 +183,13 @@ def stage_selected_repository(
     for source in metadata:
         shutil.copy2(source, output / source.name)
     subprocess.run([pkg_command, "repo", str(output), f"rsa:{private_key}"], check=True, stdout=sys.stderr)
+    for alias, target in (("data.tzst", "data.pkg"), ("packagesite.tzst", "packagesite.pkg")):
+        link, source = output / alias, output / target
+        if link.is_symlink():
+            if os.readlink(link) != target or source.is_symlink() or not source.is_file():
+                raise ValueError("generated catalogue alias has an unexpected target")
+            link.unlink()
+            shutil.copy2(source, link)
     assets = sorted(path for path in output.iterdir() if path.is_file())
     if any(package not in assets for package in copied) or any(
         output / source.name not in assets for source in metadata

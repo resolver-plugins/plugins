@@ -104,8 +104,11 @@ def publication_environment(tmp_path,monkeypatch):
         if operation=='version': return response(command,kwargs,fixture_version_comparison(*args[-2:])+'\n')
         if operation=='repo':
             catalogues[0]+=1
-            for name in bind_components.CATALOGUE_ASSETS:
-                (Path(args[1]) / name).write_bytes(f'simulated signed catalogue {catalogues[0]}'.encode())
+            output=Path(args[1])
+            for name in bind_components.CATALOGUE_ASSETS-{'data.tzst','packagesite.tzst'}:
+                (output / name).write_bytes(f'simulated signed {name} catalogue {catalogues[0]}'.encode())
+            for name in ('data','packagesite'):
+                (output / (name+'.tzst')).symlink_to(name+'.pkg')
             return response(command,kwargs)
         if operation in {'lock','unlock'}:
             if '-l' in args: return response(command,kwargs,'pkg-'+installed[0]['version']+'\n' if locked[0] else '')

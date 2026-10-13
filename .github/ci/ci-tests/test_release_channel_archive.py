@@ -324,6 +324,11 @@ class TestSelfContainedRepositoryStage:
         assert_original_component(stack,'bind_runtime',runtime_original)
         assert_original_component(stack,'bind_plugin',own)
         assert directory_bytes(repository / 'stack/snapshot')==stack
+        for directory in ('component/current','component/snapshot','stack/current','stack/snapshot','combined'):
+            for name in ('data','packagesite'):
+                alias=repository / directory / (name+'.tzst')
+                assert alias.is_file() and not alias.is_symlink()
+                assert alias.read_bytes()==alias.with_suffix('.pkg').read_bytes()
 
     def test_staging_rejects_a_common_abi_that_differs_from_the_trusted_target(self,publication_environment):
         environment=publication_environment

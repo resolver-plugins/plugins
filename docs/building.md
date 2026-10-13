@@ -230,6 +230,8 @@ Qualification records current reader authentication separately. Composed
 catalogues preserve original component provenance and record their current
 catalogue writer separately; all selected archives must share the exact ABI.
 Creator byte reissues no longer need hash-update PRs.
+Staging turns `pkg repo`'s two `.tzst` catalogue aliases into regular copies of
+their corresponding `.pkg` files before recording the complete asset hashes.
 
 Historical snapshots remain installable through `pkg`; they are not inputs to
 current CI. Preserve their original metadata as the record of the actual build.
