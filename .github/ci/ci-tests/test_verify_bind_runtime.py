@@ -185,7 +185,7 @@ def test_runtime_verifier_restores_named_conf_on_every_exit(
     restart_index = commands.index("service|named|onerestart")
     assert check_index < enable_index < conf_index < start_index < restart_index
     assert "drill|-p|15353|canary.invalid|@127.0.0.1|A" in commands
-    assert (f"rndc|-k|{fake_state / 'runtime/rndc.key'}|-s|127.0.0.1|-p|1953|status" in commands) is canary_success
+    assert (f"rndc|-c|{fake_state / 'runtime/rndc.conf'}|-s|127.0.0.1|-p|1953|status" in commands) is canary_success
     assert not (fake_state / "runtime").exists()
     assert all("named_flags" not in command for command in commands)
 

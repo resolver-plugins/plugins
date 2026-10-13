@@ -85,7 +85,7 @@ cleanup() {
     if ! rm -f "$runtime_directory/named.conf" \
         "$runtime_directory/canary.invalid.zone" \
         "$runtime_directory/answer.txt" "$runtime_directory/named.pid" \
-        "$runtime_directory/rndc.key" "$runtime_directory/session.key"
+        "$runtime_directory/rndc.key" "$runtime_directory/rndc.conf" "$runtime_directory/session.key"
     then
         cleanup_failed=yes
     fi
@@ -103,6 +103,12 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
 rndc-confgen -a -c "$runtime_directory/rndc.key"
+cat > "$runtime_directory/rndc.conf" <<EOF
+include "$runtime_directory/rndc.key";
+options {
+    default-key "rndc-key";
+};
+EOF
 cat > "$runtime_directory/named.conf" <<EOF
 options {
     directory "$runtime_directory";
@@ -132,6 +138,7 @@ EOF
 chown -R bind:bind "$runtime_directory"
 chmod 0755 "$runtime_directory"
 chmod 0644 "$runtime_directory/named.conf" "$runtime_directory/canary.invalid.zone"
+chmod 0600 "$runtime_directory/rndc.conf"
 
 named-checkconf "$runtime_directory/named.conf"
 named_enable_mutated=yes
@@ -148,7 +155,7 @@ do
     if drill -p 15353 canary.invalid @127.0.0.1 A > "$runtime_directory/answer.txt" 2>&1 && \
         grep -q '192\.0\.2\.53' "$runtime_directory/answer.txt"
     then
-        rndc -k "$runtime_directory/rndc.key" -s 127.0.0.1 -p 1953 status
+        rndc -c "$runtime_directory/rndc.conf" -s 127.0.0.1 -p 1953 status
         exit 0
     fi
     sleep 1

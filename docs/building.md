@@ -228,6 +228,9 @@ the supported behavior of keeping a newer compatible upstream BIND pair.
 File checksum validation accepts SHA256 hex and BLAKE2b z-base32, as supported
 by the [minimum reader's checksum implementation](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkg_checksum.c).
 Installed file contents still require a successful `pkg check -s`.
+The runtime canary uses its own RNDC client configuration and key. An installed
+plugin's default `rndc.conf` therefore cannot change the probe's control key;
+installed and customer configuration files remain untouched by that probe.
 
 New BIND provenance uses schema 4, independent runtime/plugin component channels
 use schema 1, full BIND stack channels use schema 6, and combined catalogues use
