@@ -67,6 +67,15 @@ def validate_plugin_manifest(record, requirement, *, built_runtime_version):
                                  development=record.get("name") == requirement["name"] + "-devel")
 
 
+def native_manifest(name):
+    record = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", name], text=True))
+    if isinstance(record, list) and len(record) == 1:
+        record = record[0]
+    if not isinstance(record, dict) or record.get("name") != name:
+        raise ValueError("installed manifest is not one matching package")
+    return record
+
+
 def validate_installed_plugin_manifest(record, requirement, *, inventory=None):
     """Native info omits formulas; verify their installed prerequisites directly."""
     bind.validate_plugin_replacement(record, requirement,
@@ -277,7 +286,7 @@ def installed(packages, evidence, label, *, exact=True, requirement=None):
         if name.startswith("os-bind-rp"):
             if requirement is None:
                 raise ValueError("installed plugin requires its original source definition")
-            record = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", name], text=True))
+            record = native_manifest(name)
             validate_installed_plugin_manifest(record, requirement, inventory=inventory)
             bind._validate_plugin_file_map(record, checksums)
             if not stat.S_ISREG(Path(bind.PLUGIN_SHARED_FILE).lstat().st_mode):
@@ -550,7 +559,7 @@ def native_install(plan, trusted, evidence, case):
         raise RuntimeError("native plugin installation failed or left an unsupported plugin")
     archives = [Path(path) for path in entry["packages"] if Path(path).name.startswith(("os-bind-rp-", "bind920-", "bind-tools-"))]
     observations = installed(archives, evidence, "native-" + case + "-installed", exact=False, requirement=requirement)
-    manifest = json.loads(subprocess.check_output([PKG, "info", "--raw", "--raw-format", "json", "os-bind-rp"], text=True))
+    manifest = native_manifest("os-bind-rp")
     validate_installed_plugin_manifest(manifest, requirement)
     core = native_identity("opnsense")
     if core is None or compare_versions(core[1], requirement["minimum_opnsense_version"]) == "<":
