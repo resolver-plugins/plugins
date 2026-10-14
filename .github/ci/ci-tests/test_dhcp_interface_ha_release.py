@@ -344,7 +344,7 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
         assert args[1] == 'pkg-dhcp-interface-ha-26.7-0.2_30'
         archive.existed = True
         archive.directory = signed_channel
-    monkeypatch.setattr(channel.releases, 'publish_immutable_release', publish_archive)
+    monkeypatch.setattr(channel.releases, 'publish_snapshot', publish_archive)
     publish = Mock(side_effect=RuntimeError('upload failed'))
     restore = Mock()
     monkeypatch.setattr(channel.releases, 'publish', publish)
@@ -410,7 +410,7 @@ def test_identical_current_can_restore_a_missing_immutable_snapshot(signed_chann
     monkeypatch.setattr(channel.releases, "snapshot_matches_directory", lambda a, b: True)
     archive = Mock()
     update = Mock()
-    monkeypatch.setattr(channel.releases, "publish_immutable_release", archive)
+    monkeypatch.setattr(channel.releases, "publish_snapshot", archive)
     monkeypatch.setattr(channel.releases, "publish", update)
     channel.promote("example/repository", signed_channel, tmp_path / "recovery")
     assert archive.call_args.args[1] == "pkg-dhcp-interface-ha-26.7-0.2_30"

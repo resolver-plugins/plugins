@@ -7,6 +7,10 @@ its first publication. The distribution repository retains independent signed
 component Releases for the BIND runtime, BIND plugin and HA DHCP, plus complete
 BIND stack rollback snapshots;
 source releases contain the plugin archive and build metadata.
+Distribution snapshots use byte-identity checks to prohibit replacing a published
+archive. They use the shared snapshot publisher for BIND and HA; repository-wide
+GitHub release locking stays disabled so current channels can be updated. The
+source repository separately enables GitHub's immutable-release policy.
 
 ## Channels
 
