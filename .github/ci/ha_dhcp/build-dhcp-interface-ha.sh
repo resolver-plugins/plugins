@@ -46,7 +46,7 @@ if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
 fi
 package=$1
 [ "$("$pkg_static" query -F "$package" '%n|%o')" = 'os-dhcp-interface-ha|opnsense/os-dhcp-interface-ha' ]
-python3 "$ci/shared/package_checksums.py" --pkg-command "$pkg_static" "$package"
+python3 "$ci/shared/package_checksums.py" --scalar-file-checksums --pkg-command "$pkg_static" "$package"
 python3 -I "$ci/ha_dhcp/dhcp_interface_ha_release.py" verify-package --package "$package" --source-commit "$SOURCE_COMMIT"
 
 # Verify installation in the disposable VM, with no configured HA interface.

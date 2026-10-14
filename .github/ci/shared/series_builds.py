@@ -20,7 +20,7 @@ INPUT_FILE = 'series-build-inputs.json'
 WORKFLOWS = {'bind_runtime': 'bind-runtime-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
              'dhcp_interface_ha': 'ha-dhcp-interface-release.yml'}
 COMMON_RECIPES = ('.github/ci/shared/metadata_profile.py', '.github/ci/shared/target_pkg.py',
-                  '.github/ci/shared/setup-opnsense-repository.sh')
+                  '.github/ci/shared/setup-opnsense-repository.sh', '.github/ci/shared/package_checksums.py')
 RECIPES = {
     'bind_runtime': ('.github/ci/bind/runtime', *COMMON_RECIPES),
     'bind_plugin': ('.github/ci/bind/plugin', '.github/ci/shared/plugin_source.py', *COMMON_RECIPES),
