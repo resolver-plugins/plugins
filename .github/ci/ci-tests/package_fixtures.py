@@ -171,7 +171,7 @@ def write_build_metadata(path, **changes):
 
 def make_bind_component(kind, directory, *, series, creator, source_commit,
                         control_commit, profile, version, recipe_sha256=None,
-                        runtime_receipt=None, package_definition=None, bind_profile=None):
+                        runtime_receipt=None, package_definition=None, bind_profile=None, series_inputs=None):
     """Two concrete original component records with independently saved bytes."""
     ci = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(ci))
@@ -180,6 +180,10 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
         raise ValueError('invalid fixture component')
     directory.mkdir()
     write_json(directory / 'upstream.json', profile)
+    series_digest = None
+    if series_inputs is not None:
+        write_json(directory / 'series-build-inputs.json', series_inputs)
+        series_digest = hashlib.sha256(json.dumps(series_inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     write_resolved_target(directory / 'creator-target.json', profile, creator=creator)
     source = dict(release=profile['tools_tag'], repository='https://github.com/opnsense/ports.git',
                   commit='4' * 40, path=creator['origin'])
@@ -193,6 +197,8 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
         inputs = dict(schema=4, series=series, freebsd_release=profile['freebsd_release'],
                       architecture='x86_64', bind_profile=pin, build_recipe_sha256=recipe_sha256 or 'e' * 64,
                       package_creator=creator)
+        if series_digest is not None:
+            inputs.update(schema=5, build_inputs_sha256=series_digest)
         # Independent canonical hashing: do not manufacture the oracle using production.
         fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         provenance = {key: inputs[key] for key in inputs if key != 'bind_profile'}
@@ -209,6 +215,8 @@ def make_bind_component(kind, directory, *, series, creator, source_commit,
         inputs = dict(schema=1, source_commit=source_commit, series=series,
                       package_abi=creator['abi'], freebsd_release=profile['freebsd_release'],
                       package_creator=creator, build_recipe_sha256=recipe_sha256 or 'd' * 64)
+        if series_digest is not None:
+            inputs.update(schema=2, build_inputs_sha256=series_digest)
         write_json(directory / 'plugin-build-inputs.json', inputs)
         fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         runtime_version = '9.20.26_2'
