@@ -132,11 +132,13 @@ def test_release_targets_exact_commit_and_verifies_draft_before_publication(rele
     directory, calls = release
     publisher.publish("example/plugins", directory, "26.7", COMMIT)
     create, promote = [c.args[0] for c in calls.run_gh.call_args_list]
-    assert create[:3] == ["release", "create", "dhcp-interface-ha-26.7-0.2_30"]
+    assert create[:3] == ["release", "create", "os-dhcp-interface-ha-26.7-0.2_30"]
+    assert create[create.index("--title") + 1] == 'os-dhcp-interface-ha 26.7 0.2_30'
     assert create[create.index("--target") + 1] == COMMIT
     assert "--prerelease" in create and "--draft" in create
-    assert promote == ['release', 'edit', 'dhcp-interface-ha-26.7-0.2_30',
-                       '--repo', 'example/plugins', '--draft=false', '--latest=false']
+    assert promote == ['release', 'edit', 'os-dhcp-interface-ha-26.7-0.2_30',
+                       '--repo', 'example/plugins', '--title', 'os-dhcp-interface-ha 26.7 0.2_30',
+                       '--draft=false', '--latest=false']
     names = [c[0] for c in calls.mock_calls]
     assert names == ['snapshot_release', 'run_gh', 'upload_release_assets',
                      'snapshot_release', 'snapshot_matches_directory', 'run_gh']

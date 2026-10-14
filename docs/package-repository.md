@@ -508,3 +508,12 @@ runs automatically when the plugin's package version increases on `master`;
 manual dispatch from `master` supports recovery. It publishes experimental
 `os-dhcp-interface-ha` packages for 26.7 / amd64 after staged and public
 installation checks. Publication does not deploy to appliances.
+
+Source release titles use `os-dhcp-interface-ha <series> <plugin_version>`,
+and new source tags use `os-dhcp-interface-ha-<series>-<plugin_version>`.
+Existing source tags retain their original names because published source
+releases are immutable. Distribution titles use the same package name, with
+`latest` for the current channel. The distribution lookup tags remain
+`pkg-dhcp-interface-ha-<series>` and
+`pkg-dhcp-interface-ha-<series>-<plugin_version>`; signed component receipts
+and publication retries use these existing identities.

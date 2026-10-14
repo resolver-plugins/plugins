@@ -27,26 +27,29 @@ def publish(repository: str, directory: Path, series: str, source_commit: str) -
                 "upstream.json", "SHA256SUMS"}
     if {path.name for path in directory.iterdir()} != expected:
         raise ValueError("unexpected release assets")
-    tag = f"dhcp-interface-ha-{series}-{version}"
+    tag = f"os-dhcp-interface-ha-{series}-{version}"
+    title = f"os-dhcp-interface-ha {series} {version}"
     with tempfile.TemporaryDirectory() as temporary:
         existing = snapshot_release(repository, tag, Path(temporary))
         if existing.existed:
             if not snapshot_matches_directory(existing, directory):
                 raise RuntimeError(f"immutable GitHub Release has different bytes: {tag}")
             # Also finish a retry whose complete upload was left as a draft.
-            run_gh(["release", "edit", tag, "--repo", repository, "--draft=false", "--latest=false"])
+            run_gh(["release", "edit", tag, "--repo", repository, "--title", title,
+                    "--draft=false", "--latest=false"])
             return
     # Upload to a draft so a partial upload is never presented as a complete release.
     run_gh(["release", "create", tag, "--repo", repository, "--target", source_commit,
-            "--title", f"HA DHCP Interface {version} — OPNsense {series}",
+            "--title", title,
             "--prerelease", "--draft", "--latest=false", "--notes",
-            "Experimental HA DHCP Interface package. See build-metadata.txt for build provenance."])
+            "Experimental os-dhcp-interface-ha package. See build-metadata.txt for build provenance."])
     upload_release_assets(repository, tag, asset_order(directory))
     with tempfile.TemporaryDirectory() as temporary:
         uploaded = snapshot_release(repository, tag, Path(temporary))
         if not snapshot_matches_directory(uploaded, directory):
             raise RuntimeError(f"uploaded release has different bytes: {tag}")
-    run_gh(["release", "edit", tag, "--repo", repository, "--draft=false", "--latest=false"])
+    run_gh(["release", "edit", tag, "--repo", repository, "--title", title,
+            "--draft=false", "--latest=false"])
 
 
 if __name__ == "__main__":
