@@ -6,8 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   test:
@@ -51,11 +50,22 @@ jobs:
             '+refs/heads/stable/*:refs/remotes/upstream/stable/*'
           git clone --no-checkout https://github.com/opnsense/tools.git \
             "$RUNNER_TEMP/opnsense-tools"
+      - name: Create repository-scoped synchronization token
+        id: sync-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
       - name: Recover an interrupted review publication
         id: recovery
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.sync-app.outputs.token }}
           RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}
         run: |
           set -euo pipefail
@@ -123,7 +133,7 @@ jobs:
         if: steps.recovery.outputs.handled != 'true' && steps.plan.outputs.action != 'noop'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.sync-app.outputs.token }}
           RP_SYNC_REVIEWER: ${{ vars.RP_SYNC_REVIEWER }}
         run: |
           set -euo pipefail

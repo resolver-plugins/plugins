@@ -2,7 +2,7 @@ from common_imports import *
 
 from workflow_fixtures import (assert_checkout_credentials,
                                assert_permissions, assert_action_release_tags,
-                               job_text, workflow_jobs)
+                               job_text, workflow_jobs, workflow_steps)
 
 
 REPOSITORY_ROOT = pathlib.Path(
@@ -24,7 +24,7 @@ def test_workflow_runs_daily_and_manually_with_exact_permissions():
     assert re.search(r'^\s{2}schedule:\s*$', workflow, re.MULTILINE)
     assert re.search(r'^\s{2}workflow_dispatch:\s*$', workflow, re.MULTILINE)
     assert any(expression.split()[2:] == ['*', '*', '*'] for expression in cron_expressions)
-    assert_permissions(workflow, {'contents': 'write', 'pull-requests': 'write'})
+    assert_permissions(workflow, {'contents': 'read'})
     jobs = workflow_jobs(workflow)
     for name, job in jobs.items():
         assert_permissions(job, {'contents': 'read'} if name == 'test' else None, indent=4)
@@ -47,11 +47,29 @@ def test_workflow_uses_api_only_credentials_for_recovery_and_publication():
     for job in workflow_jobs(workflow).values():
         assert_checkout_credentials(job)
     assert 'git push' not in workflow
+    reconcile = job_text(workflow, 'reconcile')
+    token_steps = [step for step in workflow_steps(reconcile)
+                   if 'uses: actions/create-github-app-token@' in step]
+    assert len(token_steps) == 1
+    token_step = token_steps[0]
+    assert re.findall(r'^        id: (.+)$', token_step, re.MULTILINE) == ['sync-app']
+    assert dict(re.findall(r'^          ([a-z-]+): (.+)$', token_step, re.MULTILINE)) == {
+        'client-id': '${{ vars.RP_SYNC_APP_CLIENT_ID }}',
+        'private-key': '${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}',
+        'owner': '${{ github.repository_owner }}',
+        'repositories': '${{ github.event.repository.name }}',
+        'permission-contents': 'write',
+        'permission-pull-requests': 'write',
+        'permission-workflows': 'write',
+    }
+    assert reconcile.index('id: sync-app') < reconcile.index('publish_upstream.py recover')
+    assert re.findall(r'\bsecrets\.([A-Za-z0-9_]+)', workflow) == ['RP_SYNC_APP_PRIVATE_KEY']
     operations = []
     for step in re.split(r'^      - ', workflow, flags=re.MULTILINE):
         operation = re.findall(r'python3 \.github/ci/publish_upstream\.py (recover|publish)\b', step)
         operations.extend(operation)
-        for binding, value in (('GH_TOKEN', 'github.token'), ('RP_SYNC_REVIEWER', 'vars.RP_SYNC_REVIEWER')):
+        for binding, value in (('GH_TOKEN', 'steps.sync-app.outputs.token'),
+                               ('RP_SYNC_REVIEWER', 'vars.RP_SYNC_REVIEWER')):
             expected = f'${{{{ {value} }}}}'
             assert re.findall(r'^          ' + binding + r': (.+)$', step, re.MULTILINE) == (
                 [expected] if operation else []
@@ -85,12 +103,11 @@ def test_workflow_uses_one_frozen_discovery_and_sealed_plan_for_review_mutation(
             assert '--tools-repository "$RUNNER_TEMP/opnsense-tools"' in step
 
 
-def test_workflow_uses_release_tags_and_has_no_publication_authority_or_commands():
+def test_workflow_uses_release_tags_and_has_no_package_publication_commands():
     workflow = workflow_text()
     lowered = workflow.lower()
 
     assert_action_release_tags(workflow)
-    assert 'secrets.' not in workflow
     assert not re.search(r'^\s*environment:', workflow, re.MULTILINE)
     for forbidden in (
         'gh release', 'create-release', 'pages:', 'id-token:', 'packages:',
