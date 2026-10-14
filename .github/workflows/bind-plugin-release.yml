@@ -35,7 +35,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: package-release
+  group: bind-plugin-${{ inputs.series || github.event.pull_request.base.ref || 'discovery' }}
   cancel-in-progress: false
   queue: max
 
@@ -123,11 +123,10 @@ jobs:
             --sha256 '${{ needs.select.outputs.discovery_sha256 }}' \
             --source-commit "$source_commit" --control-commit "$control_commit" --series "$SERIES" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" --output "$RUNNER_TEMP/upstream.json"
-          git show "$control_commit:dns/bind/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
           git show "$source_commit:dns/bind/Makefile" > "$RUNNER_TEMP/plugin-package.mk"
           python3 -I .github/ci/bind/shared/components.py inputs \
-            --component bind_plugin --series "$SERIES" --mode "$MODE" \
-            --upstream "$RUNNER_TEMP/upstream.json" --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
+            --component bind_plugin --series "$SERIES" --mode "$MODE" --independent \
+            --upstream "$RUNNER_TEMP/upstream.json" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" --package-definition "$RUNNER_TEMP/plugin-package.mk" --recipe .github/ci/bind/plugin/build-os-bind-rp.sh \
             --series-build-inputs "$RUNNER_TEMP/discovered/series-build-inputs.json" \
             --creator-target "$RUNNER_TEMP/discovered/creator-target.json" --reader-target "$RUNNER_TEMP/discovered/reader-target.json" \
@@ -170,7 +169,6 @@ jobs:
       producer_artifact_id: ${{ steps.producer.outputs.artifact-id }}
     env:
       RP_TRUSTED_DIRECTORY: artifacts/trusted
-      RP_RUNTIME_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/intake/bind_runtime
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
     steps:
@@ -202,7 +200,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: RP_TRUSTED_DIRECTORY RP_RUNTIME_DIRECTORY RP_SELECTION_SHA256 SOURCE_COMMIT
+          envs: RP_TRUSTED_DIRECTORY RP_SELECTION_SHA256 SOURCE_COMMIT
           usesh: true
           disable-cache: true
           copyback: true
@@ -229,10 +227,6 @@ jobs:
               .github/ci/shared/setup-opnsense-repository.sh "$series" >/dev/null
               python3 -I .github/ci/shared/target_pkg.py install "$RP_TARGET_PKG_METADATA" "$series" \
                 --upstream "$RP_UPSTREAM_METADATA" --role reader --pkg-command /usr/local/sbin/pkg-static >/dev/null
-              python3 -I .github/ci/bind/shared/components.py freeze-runtime \
-                --component bind_plugin --series "$series" --trusted-directory "$RP_TRUSTED_DIRECTORY" \
-                --selection-sha256 "$RP_SELECTION_SHA256" --directory "$RP_RUNTIME_DIRECTORY" \
-                --pkg-command /usr/local/sbin/pkg-static >/dev/null
               python3 -I .github/ci/bind/plugin/plugin_release.py reuse \
                 --series "$series" --trusted-directory "$RP_TRUSTED_DIRECTORY" --selection-sha256 "$RP_SELECTION_SHA256" \
                 --directory "artifacts/$series/intake/cached_component" --output-directory "$output" \
@@ -667,62 +661,3 @@ jobs:
             "artifacts/$SERIES/repository/component/current/channel.json" plugin_version)
           python3 -I .github/ci/shared/release_channel.py publish-immutable --repository "$GITHUB_REPOSITORY" \
             --tag "$tag" --directory "$RUNNER_TEMP/source-release" --title "os-bind-rp $SERIES $version"
-
-  retention:
-    if: >-
-      needs.select.outputs.mode == 'production' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
-       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
-        startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
-        github.workflow_ref == format('{0}/.github/workflows/bind-plugin-release.yml@refs/heads/master', github.repository)))
-    needs: [select, profile, sign, verify-published, source-release]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
-      RP_PROFILE_CONTROL_COMMIT: ${{ needs.profile.outputs.control_commit }}
-      RP_SERIES: ${{ needs.select.outputs.series }}
-      RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
-      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
-          merge-multiple: true
-          path: artifacts/trusted
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
-          merge-multiple: true
-          path: artifacts/${{ needs.select.outputs.series }}/repository
-      - name: Bind privileged code to the executing control
-        run: |
-          set -eu
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_plugin --series "$RP_SERIES" \
-            --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
-            --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT" \
-            --repository-root "artifacts/$RP_SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256"
-      - id: distribution-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
-          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
-          owner: resolver-plugins
-          repositories: repository
-          permission-contents: write
-      - name: Retain referenced component and stack history
-        env:
-          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
-        run: |
-          python3 -I .github/ci/bind/shared/components.py publish --component bind_plugin \
-            --series '${{ needs.select.outputs.series }}' --trusted-directory artifacts/trusted \
-            --selection-sha256 "$RP_SELECTION_SHA256" --composition-sha256 "$RP_COMPOSITION_SHA256" \
-            --repository-root 'artifacts/${{ needs.select.outputs.series }}/repository' \
-            --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery" --retention-only

@@ -220,7 +220,7 @@ def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verifi
     watched = ['.github/ci/ha_dhcp/build.sh', '.github/ci/shared/package_catalogue.py',
                '.github/ci/bind/shared/components.py', '.github/ci/bind/runtime/bind920_profile.py',
                '.github/ci/ci-tests/test_dhcp_interface_ha_release.py',
-               '.github/workflows/bind-runtime-release.yml', '.github/workflows/bind-plugin-release.yml']
+               '.github/workflows/ha-dhcp-interface-release.yml']
     patterns = trigger_paths(test_workflow, 'pull_request')
     for path in watched:
         assert any(fnmatchcase(path, pattern) for pattern in patterns), path
@@ -251,7 +251,8 @@ def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verifi
 
     publish = jobs['publish']
     assert publish.index('package_catalogue.py validate') < publish.index('check-peers') < publish.index('Mint distribution repository token')
-    assert publish.index('dhcp_interface_ha_channel.py promote') < publish.index('--owned-must-match') < publish.index('package_catalogue.py publish')
+    assert publish.index('dhcp_interface_ha_channel.py promote') < publish.index('--owned-must-match')
+    assert 'package_catalogue.py publish' not in publish
     composition = dict(component='dhcp', series='26.7', components={
         name: {'current_tag': name} for name in ('bind_runtime', 'bind_plugin', 'dhcp')})
     monkeypatch.setattr(selection.components, 'load_composition', Mock(return_value=composition))
@@ -283,7 +284,7 @@ def test_builder_retains_target_parser_and_native_installation_gates(tmp_path, m
     native = next(step for step in workflow_steps(signer) if 'uses: vmactions/freebsd-vm@' in step)
     body = textwrap.dedent(re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', native, re.MULTILINE)[1])
     assert 'unset RP_OPNSENSE_SNAPSHOT' in body
-    assert body.index('authenticate-peers') < body.index('base64 -d')
+    assert body.index('dhcp_interface_ha_channel.py authenticate') < body.index('base64 -d')
     from shared import package_catalogue
     calls = Mock()
     monkeypatch.setattr(selection.components, 'select_role', calls.select_role)

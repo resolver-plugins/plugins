@@ -28,8 +28,11 @@ export RP_UPSTREAM_METADATA RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
 target_pkg_metadata=$RP_TARGET_PKG_METADATA
 profile_path=$trusted_directory/bind920-profile.json
 
+component=$("$python_command" -I "$script_directory/../../shared/workflow_data.py" field "$trusted_directory/selection.json" component)
+case "$component" in bind_runtime|bind_tools|bind920) ;; *) fail 'invalid runtime package' ;; esac
+
 build_recipe_sha256=$("$python_command" -I "$script_directory/../shared/components.py" validate \
-    --component bind_runtime --series "$series" --trusted-directory "$trusted_directory" \
+    --component "$component" --series "$series" --trusted-directory "$trusted_directory" \
     --selection-sha256 "$RP_SELECTION_SHA256" --build-recipe "$script_directory/build-bind920.sh") ||
     fail 'invalid sealed runtime build inputs'
 
@@ -43,7 +46,11 @@ makefile_sha256=$(metadata_field makefile_sha256) || fail 'invalid BIND profile'
 distinfo_sha256=$(metadata_field distinfo_sha256) || fail 'invalid BIND profile'
 distversion=$(metadata_field distversion) || fail 'invalid BIND profile'
 portrevision=$(metadata_field portrevision) || fail 'invalid BIND profile'
-package_version=$(metadata_field package_version) || fail 'invalid BIND profile'
+package_version=$(metadata_field package_version)
+bind_tools_version=$package_version
+if [ "$component" = bind920 ]; then
+    bind_tools_version=$("$python_command" -I "$script_directory/../../shared/workflow_data.py" field "$trusted_directory/producer-inputs.json" tools_version)
+fi || fail 'invalid BIND profile'
 freebsd_release=$("$python_command" "$script_directory/../../shared/metadata_profile.py" \
     "$RP_UPSTREAM_METADATA" "$series" freebsd_release) || fail 'invalid upstream metadata'
 
@@ -80,7 +87,9 @@ makefile="$ports_directory/dns/bind920/Makefile"
 distinfo="$ports_directory/dns/bind920/distinfo"
 [ "$(sha256 -q "$makefile")" = "$makefile_sha256" ] || fail 'BIND Makefile hash does not match pinned metadata'
 [ "$(sha256 -q "$distinfo")" = "$distinfo_sha256" ] || fail 'BIND distinfo hash does not match pinned metadata'
-"$python_command" -I "$script_directory/bind920_profile.py" "$profile_path" verify-recipe \
+set --
+case "$component" in bind_tools) set -- --package bind-tools ;; bind920) set -- --package bind920 ;; esac
+"$python_command" -I "$script_directory/bind920_profile.py" "$profile_path" verify-recipe "$@" \
     --ports-commit "$resolved_commit" --makefile "$makefile" --distinfo "$distinfo"
 
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
@@ -90,13 +99,15 @@ ALLOW_UNSUPPORTED_SYSTEM=yes BATCH=yes NO_DEPENDS=yes OPTIONS_SET=GSSAPI_NONE OP
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
-set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$package_version".pkg
+set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$bind_tools_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind-tools package was not produced as expected'
 bind_tools_package=$1
 "$python_command" "$script_directory/../../shared/package_checksums.py" \
     --scalar-file-checksums --pkg-command "$pkg_static" "$bind_tools_package"
 "$pkg_command" add "$bind_tools_package"
 
+bind_package=
+if [ "$component" != bind_tools ]; then
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
     "$target_pkg_metadata" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator --pkg-command "$pkg_command" \
     --pkg-static "$pkg_static"
@@ -118,22 +129,36 @@ case "$comparison" in
     *) fail "BIND $bind_version is below the required $distversion" ;;
 esac
 
+fi
+
 mkdir -p "$artifact_directory"
 provenance="$temporary_directory/bind920-provenance.json"
 set --
 if [ -f "$trusted_directory/series-build-inputs.json" ]; then
     build_inputs_sha256=$("$python_command" -I "$script_directory/../../shared/series_builds.py" fingerprint \
-        --directory "$trusted_directory" --component bind_runtime)
+        --directory "$trusted_directory" --component "$component")
     set -- --build-inputs-sha256 "$build_inputs_sha256"
 fi
+case "$component" in
+    bind_tools) set -- "$@" --package bind-tools ;;
+    bind920) set -- "$@" --package bind920 --tools-version "$bind_tools_version" ;;
+esac
 "$python_command" "$script_directory/bind920_profile.py" "$profile_path" \
     provenance "$series" "$freebsd_release" \
     --package-creator "$pkg_creator_record" \
     --recipe-sha256 "$build_recipe_sha256" \
     "$@" \
     --bind-tools "$bind_tools_package" --bind920 "$bind_package" --output "$provenance"
-cp "$bind_tools_package" "$bind_package" "$provenance" "$artifact_directory/"
+case "$component" in
+    bind_tools) cp "$bind_tools_package" "$artifact_directory/" ;;
+    bind920)
+        cp "$bind_package" "$artifact_directory/"
+        cp "$bind_tools_package" "$artifact_directory/qualification-$(basename -- "$bind_tools_package")"
+        ;;
+    bind_runtime) cp "$bind_tools_package" "$bind_package" "$artifact_directory/" ;;
+esac
+cp "$provenance" "$artifact_directory/"
 "$python_command" "$script_directory/../shared/components.py" validate \
-    --component bind_runtime --series "$series" --trusted-directory "$trusted_directory" \
+    --component "$component" --series "$series" --trusted-directory "$trusted_directory" \
     --selection-sha256 "$RP_SELECTION_SHA256" --directory "$artifact_directory" \
     --pkg-command "$pkg_static" >/dev/null

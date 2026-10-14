@@ -1,0 +1,77 @@
+name: Publish bind-tools release
+
+on:
+  pull_request:
+    branches: [master]
+    paths: ['packages/bind-tools/Makefile']
+  push:
+    branches: [master]
+    paths: ['packages/bind-tools/Makefile']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: development builds an unsigned preview; production publishes only bind-tools
+        required: true
+        type: choice
+        options: [development, production]
+      series:
+        description: OPNsense release series
+        required: true
+        type: string
+      pull_number:
+        description: Pull request for an unsigned development preview
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      mode: ${{ steps.matrix.outputs.mode }}
+      pull_number: ${{ steps.matrix.outputs.pull_number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I .github/ci/bind/runtime/candidate_matrix.py --component bind_tools \
+            --event-file "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
+  preview:
+    if: needs.discover.outputs.mode == 'development'
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    uses: ./.github/workflows/bind-runtime-package.yml
+    with:
+      component: bind_tools
+      mode: development
+      series: ${{ matrix.series }}
+      pull_number: ${{ needs.discover.outputs.pull_number }}
+  release:
+    if: >-
+      needs.discover.outputs.mode == 'production' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'production'))
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    uses: ./.github/workflows/bind-runtime-package.yml
+    with:
+      component: bind_tools
+      mode: production
+      series: ${{ matrix.series }}
+    secrets:
+      RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+      RP_DISTRIBUTION_APP_PRIVATE_KEY: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}

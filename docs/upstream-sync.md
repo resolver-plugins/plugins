@@ -11,7 +11,8 @@ the reviewed source ancestry and discovers one review decision. No file under
 This workflow tracks OPNsense plugin source changes and new stable series.
 Build controllers discover tools, FreeBSD and core inputs when needed; a tools
 update alone does not create a metadata-refresh PR. Runtime approval remains the separate pair of RP_BIND fields in
-`dns/bind/Makefile`; synchronization does not advance that approval.
+`packages/bind-tools/Makefile` and `packages/bind920/Makefile`; synchronization
+does not advance either approval or build runtime packages.
 
 ## Synchronization app setup
 
@@ -69,10 +70,8 @@ Review the generated PR and merge it only after the fork-specific behavior has
 been verified. The synchronizer never silently advances a release branch for a
 new OPNsense series, even when its BIND tree is unchanged.
 
-The retained `bootstrap-build` compatibility path produces only an unsigned
-runtime artifact named `bind-runtime-bootstrap-<series>`. It restores CI, raw approval and key bytes from the trusted workflow commit, seals development inputs
-for the selected immutable profile, and passes that external selection digest
-to the runtime wrapper. It does not build a plugin or create a stable channel.
+New-series discovery produces a source review. It does not build a temporary
+runtime artifact or dispatch any package pipeline.
 
 ## Provenance and recovery
 
@@ -110,44 +109,25 @@ run's generated profile first, then reproduce the build using [Building](buildin
 
 ## Runtime and plugin publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) uses the
-reviewed BIND version approval on `master`. It runs for a version-update review
-and an explicitly authorized manual runtime build, with no daily schedule.
-The [plugin workflow](../.github/workflows/bind-plugin-release.yml) selects only
-changes to its own reviewed package code, including merged daily upstream source
-reviews. HA selects only its own reviewed package code changes. CI, metadata,
-framework, environment and other package changes do not trigger plugin rebuilds.
+The [tools workflow](../.github/workflows/bind-tools-release.yml) and
+[daemon workflow](../.github/workflows/bind920-release.yml) build their own package
+for a version-update PR and its approved merge, or an explicitly authorized
+manual run. They have separate approvals and no schedule. Missing generated
+metadata or a changed OPNsense environment alone does not select a build.
 
-The shared selector compares package code independently with each series' existing
-published source provenance before discovering any build environment. It builds
-one eligible series and dispatches that same producer for other eligible series;
-a change confined to one series never rebuilds its peers. The source and environment
-are frozen once in a sealed discovery artifact, including both pkg recipes.
-Package jobs validate that artifact without repeating upstream discovery.
-A merged plugin-affecting PR into an exact `release/bind-rp/<series>` selects
-only plugin production for that series and its merged immutable source/profile
-commit; unmerged closure selects neither producer. Unchanged package code or runtime approval
-skip the build even for a manual dispatch. Workflow code and privileged
-helpers remain pinned to the trusted default-branch workflow commit. A manual
-production dispatch requires `master` and an explicit registered series; use the
-runtime workflow directly to publish the approved runtime for another series.
-Development dispatch requires a PR and writes only its unsigned component preview.
+The [BIND plugin workflow](../.github/workflows/bind-plugin-release.yml) and
+[HA workflow](../.github/workflows/ha-dhcp-interface-release.yml) compare only their
+own reviewed code with the published source, before discovering build inputs.
+A source merge confined to one series selects only that package and series.
+Daily upstream BIND source reviews therefore reach only the BIND plugin workflow.
+Unchanged code or runtime approvals skip production, including manual dispatch.
 
-For a new series or approved runtime pin, run runtime production first, then
-plugin production. The plugin freezes an already published runtime receipt and
-fails if it is absent or incompatible; it never builds or dispatches its peer.
-The three writers, including HA, share the `package-release` lock with
-cancellation disabled and the full native queue enabled. A queued plugin run
-may reach selection before the runtime it needs, so retry it after runtime
-publication succeeds. Queue order does not supply dependency ordering.
-
-Runtime-only updates preserve an unchanged plugin's archive and original
-`built_against_runtime` record. The retained plugin's source requirement and current reader authentication
-are recorded separately when creating the complete stack and feed. Only the
-plugin producer creates a human-facing plugin source release after public
-installation succeeds. [Package repository](package-repository.md) documents
-component tags, complete rollback stacks, reference-aware retention and retry
-recovery.
+Every package signs and publishes only its own channel. BIND builds use a frozen
+ordinary OPNsense dependency; HA does not fetch BIND. No release-order sequence
+is required. The [repository index](../.github/workflows/repository-index.yml)
+authenticates available published packages and refreshes the shared feed without
+building or republishing them. Index failures are repaired by refreshing or
+rerunning that index workflow, not by rebuilding a plugin or runtime package.
 
 ## BIND runtime candidate workflow
 
@@ -158,7 +138,7 @@ at the selected ref, defaulting to `main`.
 
 When the candidate is newer than the current pin, the workflow creates or
 updates a `sync/bind920/<version>-<portrevision>` PR against `master`. The PR
-contains only the two updated `dns/bind/Makefile` approval fields and a deterministic
+contains only the two updated approval fields in the selected `packages/<name>/Makefile` and a deterministic
 assessment classifying the change as `security`, `risky`, `critical-bugfix`,
 or `routine`.
 

@@ -17,12 +17,16 @@ from bind.shared import selection
 from shared import metadata_profile, release_channel, upstream_inputs, target_pkg
 
 INPUT_FILE = 'series-build-inputs.json'
-WORKFLOWS = {'bind_runtime': 'bind-runtime-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
+# Legacy runtime records remain readable; that paired workflow is retired.
+WORKFLOWS = {'bind_runtime': None,
+             'bind_tools': 'bind-tools-release.yml', 'bind920': 'bind920-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
              'dhcp_interface_ha': 'ha-dhcp-interface-release.yml'}
 COMMON_RECIPES = ('.github/ci/shared/metadata_profile.py', '.github/ci/shared/target_pkg.py',
                   '.github/ci/shared/setup-opnsense-repository.sh', '.github/ci/shared/package_checksums.py')
 RECIPES = {
     'bind_runtime': ('.github/ci/bind/runtime', *COMMON_RECIPES),
+    'bind_tools': ('.github/ci/bind/runtime', *COMMON_RECIPES),
+    'bind920': ('.github/ci/bind/runtime', *COMMON_RECIPES),
     'bind_plugin': ('.github/ci/bind/plugin', '.github/ci/shared/plugin_source.py', *COMMON_RECIPES),
     'dhcp_interface_ha': ('.github/ci/ha_dhcp/build-dhcp-interface-ha.sh',
                         '.github/ci/ha_dhcp/dhcp_interface_ha_release.py',
@@ -45,6 +49,10 @@ def tree_digest(repository, commit, paths):
             continue
         path = entry.split(b'\t', 1)[1].decode()
         if '/tests/' not in path and not path.endswith('/README.md'):
+            if path == 'dns/bind/Makefile':
+                raw = upstream_inputs.git(repository, 'show', f'{commit}:{path}')
+                package = '\n'.join(line for line in raw.splitlines() if not selection.APPROVAL_LINE.match(line))
+                entry = entry.split(b'\t', 1)[0].split(b' ', 2)[0] + b' ' + hashlib.sha256(package.encode()).hexdigest().encode() + b'\t' + path.encode()
             filtered.append(entry)
     return hashlib.sha256(b'\0'.join(filtered)).hexdigest()
 
@@ -53,13 +61,13 @@ def build_inputs(repository, component, series, source_commit, control_commit, u
     metadata_profile.validate_profile(upstream, series)
     metadata_profile.validate_tools_record(tools, upstream)
     record = dict(schema=1, component=component, series=series,
-                  source_sha256=None if component == 'bind_runtime' else tree_digest(
+                  source_sha256=None if component in selection.RUNTIME_KINDS else tree_digest(
                       repository, source_commit, (PACKAGES[component], 'Mk', 'Scripts', 'Templates')),
                   recipe_sha256=tree_digest(repository, control_commit, RECIPES[component]),
                   environment={field: (upstream if field == 'core_commit' else tools)[field]
                                for field in ENVIRONMENT_FIELDS}, runtime_approval=None)
-    if component == 'bind_runtime':
-        raw = upstream_inputs.git(repository, 'show', f'{control_commit}:dns/bind/Makefile')
+    if component in selection.RUNTIME_KINDS:
+        raw = upstream_inputs.git(repository, 'show', f'{control_commit}:{selection.APPROVAL_PATHS[component]}')
         record['runtime_approval'] = bind920_profile.approval_from_makefile(raw)
     if targets is not None:
         record.update(schema=2, package_targets=targets)
@@ -79,7 +87,7 @@ def validate_inputs(record):
         raise ValueError('invalid per-series build inputs')
     for field in ('recipe_sha256', 'source_sha256'):
         value = record[field]
-        if field == 'source_sha256' and record['component'] == 'bind_runtime' and value is None:
+        if field == 'source_sha256' and record['component'] in selection.RUNTIME_KINDS and value is None:
             continue
         if not isinstance(value, str) or metadata_profile.SHA256_PATTERN.fullmatch(value) is None:
             raise ValueError('invalid per-series source/recipe digest')
@@ -93,7 +101,7 @@ def validate_inputs(record):
             or metadata_profile.SHA256_PATTERN.fullmatch(environment['build_conf_sha256']) is None):
         raise ValueError('invalid per-series upstream environment')
     approval = record['runtime_approval']
-    if record['component'] == 'bind_runtime':
+    if record['component'] in selection.RUNTIME_KINDS:
         if (not isinstance(approval, dict) or set(approval) != {'version', 'ports_commit'}
                 or not isinstance(approval['version'], str)
                 or re.fullmatch(r'\d+(?:\.\d+)*(?:_\d+)?', approval['version']) is None
@@ -131,7 +139,7 @@ def current_identity(repository, component, series):
                             text=True, capture_output=True)
     if result.returncode:
         if 'not found' in result.stderr.lower():
-            return None
+            return current_identity(repository, 'bind_runtime', series) if component in ('bind_tools', 'bind920') else None
         raise RuntimeError(result.stderr.strip() or 'cannot inspect current series build')
     payload = json.loads(result.stdout)
     if payload.get('isDraft') is not False:
@@ -142,7 +150,7 @@ def current_identity(repository, component, series):
         channel = json.loads((directory / 'channel.json').read_text())
         if channel.get('series') != series:
             raise ValueError('current package belongs to a different series')
-        if component == 'bind_runtime':
+        if component in selection.RUNTIME_KINDS:
             name = 'bind920-profile.json'
             release_channel.download_release_asset(repository, tag, name, directory)
             if channel['assets'].get(name) != release_channel.sha256(directory / name):
@@ -186,8 +194,8 @@ def select_builds(repository, component, event, refs, changed, distribution, *, 
             source = upstream_inputs.git(repository, 'rev-parse', 'FETCH_HEAD^{commit}')
             previous = published(distribution, component, candidate['series']) if candidate['mode'] == 'production' else None
             if previous is not None:
-                if component == 'bind_runtime':
-                    raw = upstream_inputs.git(repository, 'show', f'{candidate["control_ref"]}:dns/bind/Makefile')
+                if component in selection.RUNTIME_KINDS:
+                    raw = upstream_inputs.git(repository, 'show', f'{candidate["control_ref"]}:{selection.APPROVAL_PATHS[component]}')
                     unchanged = previous['runtime_approval'] == bind920_profile.approval_from_makefile(raw)
                     if not unchanged:
                         old = previous['runtime_approval']
@@ -217,7 +225,7 @@ def select_builds(repository, component, event, refs, changed, distribution, *, 
             inputs = build_inputs(repository, component, candidate['series'], source,
                                   candidate['control_ref'], profile, tools, targets)
             candidate.update(profile_ref=source)
-            if component != 'bind_runtime':
+            if component not in selection.RUNTIME_KINDS:
                 candidate['source_ref'] = source
             selected.append(dict(selection=candidate, upstream=profile, tools=tools, inputs=inputs, targets=targets))
     return selected
@@ -271,6 +279,8 @@ def materialize_discovery(repository, directory, digest, component, series, sour
 
 
 def dispatch(repository, component, series):
+    if WORKFLOWS[component] is None:
+        raise ValueError('legacy paired runtime has no package pipeline')
     inputs = dict(series=series)
     if component != 'dhcp_interface_ha':
         inputs['mode'] = 'production'
@@ -293,6 +303,8 @@ def main():
     parser.add_argument('--dispatch', action='store_true')
     parser.add_argument('--sha256')
     parser.add_argument('--series')
+    parser.add_argument('--mode', choices=('production', 'development'))
+    parser.add_argument('--pull-number')
     parser.add_argument('--source-commit')
     parser.add_argument('--control-commit')
     parser.add_argument('--tools-repository', type=Path)
@@ -309,6 +321,13 @@ def main():
         return
     document = json.loads(args.event_file.read_text())
     event = selection.normalize_event(document)
+    if args.series is not None:
+        if args.mode == 'production' and not (
+                event['ref'] == 'refs/heads/master' and (event['name'] == 'push' or
+                event['name'] == 'workflow_dispatch' and event['inputs']['mode'] == 'production')):
+            raise ValueError('runtime publication requires a trusted master event')
+        event = dict(event, name='workflow_dispatch',
+                     inputs=dict(mode=args.mode, series=args.series, pull_number=args.pull_number))
     if event['name'] == 'workflow_dispatch' and event['inputs']['mode'] == 'development':
         pull = event['inputs']['pull_number']
         if not pull or re.fullmatch(r'[1-9]\d*', pull) is None:
@@ -316,10 +335,12 @@ def main():
         event['pr_base_ref'] = subprocess.check_output(['gh', 'api', f'repos/{args.github_repository}/pulls/{pull}', '--jq', '.base.ref'], text=True).strip()
     changed = selection.discover_changed_paths(event, document)
     package = {}
-    if event['name'] == 'push' and selection.PACKAGE_DEFINITION in changed:
+    definition = selection.APPROVAL_PATHS.get(args.component, selection.PACKAGE_DEFINITION)
+    if event['name'] == 'push' and definition in changed:
         for name in ('before', 'after'):
             commit = event['before'] if name == 'before' else event['sha']
-            package[name + '_package'] = '' if commit == '0' * 40 else upstream_inputs.git(args.repository_root, 'show', f'{commit}:{selection.PACKAGE_DEFINITION}')
+            exists = subprocess.run(['git', '-C', str(args.repository_root), 'cat-file', '-e', f'{commit}:{definition}'], capture_output=True).returncode == 0
+            package[name + '_package'] = upstream_inputs.git(args.repository_root, 'show', f'{commit}:{definition}') if exists else ''
     builds = select_builds(args.repository_root, args.component, event, json.loads(args.refs_file.read_text()), changed,
                            args.distribution_repository, **package)
     chosen = builds[0]['selection'] if builds else dict.fromkeys(selection.OUTPUT_FIELDS)

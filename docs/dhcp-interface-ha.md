@@ -4,7 +4,7 @@
 one IPv4 DHCP client interface in an existing active/passive CARP pair. The
 [plugin guide](../net/dhcp-interface-ha/README.md) covers configuration and recovery;
 the [package repository guide](package-repository.md#ha-dhcp-interface) covers the
-shared BIND/HA catalogue and publication. This guide records implemented behavior and
+independent HA publication and a shared index that consumes published packages. This guide records implemented behavior and
 remaining qualification. Completed implementation plans are retained in Git history.
 
 Package releases follow the BIND plugin model: reviewed source on

@@ -3,6 +3,12 @@ name: Propose bind920 candidate
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: Runtime package whose next BIND version is being proposed
+        required: true
+        default: bind920
+        type: choice
+        options: [bind920, bind-tools]
       ports_ref:
         description: FreeBSD Ports ref to inspect
         required: false
@@ -16,6 +22,9 @@ on:
 permissions:
   contents: write
   pull-requests: write
+
+env:
+  RUNTIME_APPROVAL: packages/${{ inputs.package }}/Makefile
 
 jobs:
   propose:
@@ -50,7 +59,7 @@ jobs:
           git -C "$RUNNER_TEMP/freebsd-ports" sparse-checkout set dns/bind920
           git -C "$RUNNER_TEMP/freebsd-ports" checkout "$candidate_commit"
           current_commit=$(python3 -I .github/ci/bind/runtime/bind920_profile.py approval-field \
-            --runtime-approval dns/bind/Makefile --field ports_commit)
+            --runtime-approval "$RUNTIME_APPROVAL" --field ports_commit)
           git -C "$RUNNER_TEMP/freebsd-ports" fetch --no-tags origin "$current_commit"
           git -C "$RUNNER_TEMP/freebsd-ports" show "$current_commit:dns/bind920/Makefile" > "$RUNNER_TEMP/current.Makefile"
           git -C "$RUNNER_TEMP/freebsd-ports" diff --no-ext-diff "$current_commit" "$candidate_commit" -- dns/bind920 > "$RUNNER_TEMP/ports.diff"
@@ -72,8 +81,8 @@ jobs:
           PORTS_DIR: ${{ steps.ports.outputs.ports_dir }}
         run: |
           set -euo pipefail
-          python3 .github/ci/bind920_candidate.py evaluate \
-            --makefile dns/bind/Makefile --ports-directory "$PORTS_DIR" \
+          python3 .github/ci/bind920_candidate.py evaluate --package '${{ inputs.package }}' \
+            --makefile "$RUNTIME_APPROVAL" --ports-directory "$PORTS_DIR" \
             --ports-repository "$PORTS_REPOSITORY" --ports-commit "$CANDIDATE_COMMIT" \
             --output "$GITHUB_OUTPUT"
       - name: Stop when no newer candidate exists
@@ -100,7 +109,7 @@ jobs:
             cat "$RUNNER_TEMP/maintainer-notes.txt"
           } > "$RUNNER_TEMP/changelog.txt"
           python3 .github/ci/bind920_candidate.py update-approval \
-            --makefile dns/bind/Makefile \
+            --makefile "$RUNTIME_APPROVAL" \
             --ports-commit "$CANDIDATE_COMMIT" \
             --version '${{ steps.candidate.outputs.package_version }}'
           python3 .github/ci/bind920_candidate.py assess \
@@ -147,29 +156,40 @@ jobs:
             printf -- '- New BIND version: `%s`\n' '${{ steps.candidate.outputs.package_version }}'
             printf -- '- Publication: not performed by this workflow\n'
           } > "$RUNNER_TEMP/pr-body.md"
+      - name: Authenticate candidate review automation
+        if: steps.candidate.outputs.newer == 'true'
+        id: review-token
+        uses: actions/create-github-app-token@v2
+        with:
+          client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: plugins
+          permission-contents: write
+          permission-pull-requests: write
       - name: Open or update candidate PR
         if: steps.candidate.outputs.newer == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.review-token.outputs.token }}
         run: |
           set -euo pipefail
           version="${{ steps.candidate.outputs.package_version }}"
           distversion="${{ steps.candidate.outputs.candidate_distversion }}"
           revision='${{ steps.candidate.outputs.portrevision }}'
-          branch="sync/bind920/$distversion-$revision"
+          branch="sync/${{ inputs.package }}/$distversion-$revision"
           git config user.name github-actions
           git config user.email github-actions@github.com
           git checkout -B "$branch"
-          git add dns/bind/Makefile
+          git add "$RUNTIME_APPROVAL"
           if git diff --cached --quiet; then
             echo "Candidate approval is unchanged."
             exit 0
           fi
-          git commit -m "ci(bind): update bind920 to ${version}"
-          git push --force-with-lease origin "$branch"
+          git commit -m "ci(bind): update ${{ inputs.package }} to ${version}"
+          git -c http.https://github.com/.extraheader= -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push --force-with-lease origin "$branch"
           number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --json number --jq '.[0].number // empty')
-          title="ci(bind): update bind920 to ${version}"
+          title="ci(bind): update ${{ inputs.package }} to ${version}"
           if [ -n "$number" ]; then
             gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
           else

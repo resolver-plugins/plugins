@@ -22,7 +22,7 @@ do
     esac
     shift 2
 done
-case "$component" in bind_runtime|bind_plugin) ;; *) fail 'invalid component' ;; esac
+case "$component" in bind_runtime|bind_plugin|bind_tools|bind920) ;; *) fail 'invalid component' ;; esac
 case "$mode" in local|public) ;; *) fail 'invalid verification mode' ;; esac
 case "$install_case" in fresh|upstream|below-minimum|below-core) ;; *) fail 'invalid native installation case' ;; esac
 if [ -z "$repository_root" ] || [ -z "$trusted_directory" ] || [ -z "$series" ]
@@ -150,6 +150,10 @@ else
             done
             /usr/local/sbin/pkg-static install -f -y -r OPNsense os-bind
         fi
+        while IFS= read -r dependency
+        do
+            /usr/local/sbin/pkg-static add -f "$dependency"
+        done < "$temporary/$index/native-dependencies.txt"
         set --
         while IFS= read -r archive
         do
@@ -164,8 +168,13 @@ else
         then
             metadata source
         fi
-        "$ci/bind/runtime/verify-bind-runtime.sh"
-        metadata canary --label "canary-$index"
+        if [ "$component" = bind_tools ]; then
+            dig -v
+            host -V
+        else
+            "$ci/bind/runtime/verify-bind-runtime.sh"
+            metadata canary --label "canary-$index"
+        fi
     done < "$temporary/indices.txt"
 fi
 if [ "$mode" = public ] && [ -d "$repository_root/combined" ]

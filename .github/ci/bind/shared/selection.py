@@ -11,9 +11,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bind.runtime import bind920_profile
 
-KINDS = ("bind_runtime", "bind_plugin", "dhcp_interface_ha")
+RUNTIME_KINDS = ("bind_runtime", "bind_tools", "bind920")
+KINDS = (*RUNTIME_KINDS, "bind_plugin", "dhcp_interface_ha")
 RELEASE_PREFIX = {"bind_runtime": "release/bind-rp/", "bind_plugin": "release/bind-rp/",
+                  "bind_tools": "release/bind-rp/", "bind920": "release/bind-rp/",
                   "dhcp_interface_ha": "release/dhcp-interface-ha/"}
+APPROVAL_PATHS = {"bind_runtime": "dns/bind/Makefile", "bind_tools": "packages/bind-tools/Makefile",
+                  "bind920": "packages/bind920/Makefile"}
 EVENT_FIELDS = {"name", "ref", "sha", "workflow_sha", "before", "merged", "base_ref",
                 "merge_commit_sha", "inputs", "pr_base_ref"}
 OUTPUT_FIELDS = ("mode", "series", "source_ref", "profile_ref", "control_ref",
@@ -30,8 +34,8 @@ def watches(component, path):
         if path == "net/dhcp-interface-ha/README.md" or path.startswith(("net/dhcp-interface-ha/tests/", ".github/ci/ci-tests/")):
             return False
         return path.startswith("net/dhcp-interface-ha/")
-    if component == "bind_runtime":
-        return path == PACKAGE_DEFINITION
+    if component in RUNTIME_KINDS:
+        return path == APPROVAL_PATHS[component]
     if path.startswith(("dns/bind/tests/", ".github/ci/ci-tests/")):
         return False
     return path.startswith("dns/bind/") and path != "dns/bind/README.md"
@@ -48,8 +52,8 @@ def package_changes(before, after):
     if not isinstance(before, str) or not isinstance(after, str):
         raise ValueError("package changes require immutable before/after definitions")
     previous = bind920_profile.approval_from_makefile(before, allow_absent=True)
-    current = bind920_profile.approval_from_makefile(after)
-    runtime_changed = previous is not None and previous != current
+    current = bind920_profile.approval_from_makefile(after, allow_absent=True)
+    runtime_changed = previous is not None and current is not None and previous != current
     if runtime_changed:
         def version(value):
             base, _, revision = value.partition("_")
@@ -77,10 +81,11 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
         if event["ref"] != "refs/heads/master":
             raise ValueError("production pushes require merged master control")
         relevant = [path for path in changed_paths if watches(component, path)]
-        if component != "dhcp_interface_ha" and PACKAGE_DEFINITION in relevant:
+        definition = APPROVAL_PATHS.get(component, PACKAGE_DEFINITION)
+        if component != "dhcp_interface_ha" and definition in relevant:
             runtime_changed, plugin_changed = package_changes(before_package, after_package)
-            if not (runtime_changed if component == "bind_runtime" else plugin_changed):
-                relevant.remove(PACKAGE_DEFINITION)
+            if not (runtime_changed if component in RUNTIME_KINDS else plugin_changed):
+                relevant.remove(definition)
         if not relevant:
             return selected
         if not series_refs:
@@ -91,7 +96,7 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
     elif name == "pull_request_target":
         if type(event["merged"]) is not bool:
             raise ValueError("invalid release-source merge state")
-        if not event["merged"] or component == "bind_runtime":
+        if not event["merged"] or component in RUNTIME_KINDS:
             return selected
         match = re.fullmatch(re.escape(prefix) + r"([0-9]+\.[0-9]+)", event["base_ref"] or "")
         if match is None or match[1] not in series_refs:
@@ -127,7 +132,7 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
     else:
         raise ValueError("unsupported package producer event")
     selected.update(series=series, profile_ref=profile, control_ref=control, release=True)
-    if component != "bind_runtime":
+    if component not in RUNTIME_KINDS:
         selected["source_ref"] = profile
     return selected
 
@@ -214,10 +219,11 @@ def main():
     changed = (json.loads(args.changed_paths_file.read_text()) if args.changed_paths_file is not None
                else discover_changed_paths(event, document))
     package = {}
-    if event["name"] == "push" and PACKAGE_DEFINITION in changed:
+    definition = APPROVAL_PATHS.get(args.component, PACKAGE_DEFINITION)
+    if event["name"] == "push" and definition in changed:
         for key, commit in (("before_package", event["before"]), ("after_package", event["sha"])):
             package[key] = ("" if _commit(commit) == "0" * 40 else subprocess.check_output(
-                ["git", "show", f"{commit}:{PACKAGE_DEFINITION}"], text=True))
+                ["git", "show", f"{commit}:{definition}"], text=True))
     selected = select_event(args.component, event, json.loads(args.refs_file.read_text()), changed, **package)
     args.output.write_text(json.dumps(selected, sort_keys=True, indent=2) + "\n")
     if args.github_output is not None:

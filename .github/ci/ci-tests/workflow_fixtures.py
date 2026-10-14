@@ -34,6 +34,10 @@ def trigger_paths(workflow, event):
                       header, re.MULTILINE | re.DOTALL)
     if block is None:
         return []
+    inline = re.search(r'^    paths: (\[[^\n]+\])$', block[1], re.MULTILINE)
+    if inline:
+        import ast
+        return ast.literal_eval(inline[1])
     paths = re.search(r'^    paths:\n((?:      [^\n]*\n)*)', block[1], re.MULTILINE)
     return re.findall(r"^      - '([^']+)'$", paths[1], re.MULTILINE) if paths else []
 

@@ -1,32 +1,32 @@
-name: Publish BIND runtime release
+name: BIND runtime package jobs
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'dns/bind/Makefile'
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      mode:
-        description: development builds an unsigned PR preview; production publishes the runtime channel
+      component:
         required: true
-        type: choice
-        options: [development, production]
+        type: string
+      mode:
+        required: true
+        type: string
       series:
-        description: OPNsense release series (<major>.<minor>)
         required: true
         type: string
       pull_number:
-        description: Required for development; identifies a master or release-source PR
         required: false
         type: string
+    secrets:
+      RP_PKG_SIGNING_KEY:
+        required: false
+      RP_DISTRIBUTION_APP_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: package-release
+  group: runtime-${{ inputs.component }}-${{ inputs.series }}
   cancel-in-progress: false
   queue: max
 
@@ -36,7 +36,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: write
     outputs:
       mode: ${{ steps.select.outputs.mode }}
       series: ${{ steps.select.outputs.series }}
@@ -63,15 +62,15 @@ jobs:
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/release/bind-rp/" > "$RUNNER_TEMP/refs-pages.json"
           jq '[.[][] | .ref]' "$RUNNER_TEMP/refs-pages.json" > "$RUNNER_TEMP/refs.json"
           python3 -I .github/ci/shared/series_builds.py select-event \
-            --component bind_runtime --event-file "$GITHUB_EVENT_PATH" \
+            --component '${{ inputs.component }}' --event-file "$GITHUB_EVENT_PATH" \
             --refs-file "$RUNNER_TEMP/refs.json" \
-            --directory artifacts/discovered --dispatch \
+            --directory artifacts/discovered --series '${{ inputs.series }}' --mode '${{ inputs.mode }}' --pull-number '${{ inputs.pull_number }}' \
             --output "$RUNNER_TEMP/event-selection.json" --github-output "$GITHUB_OUTPUT"
       - id: discovered
         if: steps.select.outputs.release == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-discovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/discovered
           if-no-files-found: error
           retention-days: 30
@@ -101,23 +100,25 @@ jobs:
           merge-multiple: true
       - id: profile
         env:
+          RUNTIME_COMPONENT: ${{ inputs.component }}
           MODE: ${{ needs.select.outputs.mode }}
           SERIES: ${{ needs.select.outputs.series }}
           PROFILE_REF: ${{ needs.select.outputs.profile_ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          case "$RUNTIME_COMPONENT" in bind_tools) RUNTIME_PACKAGE=bind-tools ;; bind920) RUNTIME_PACKAGE=bind920 ;; *) exit 1 ;; esac
           control_commit=$(git rev-parse HEAD)
           git fetch --no-tags origin "$PROFILE_REF"
           profile_commit=$(git rev-parse FETCH_HEAD)
           python3 -I .github/ci/shared/series_builds.py materialize-discovery \
-            --component bind_runtime --directory "$RUNNER_TEMP/discovered" \
+            --component '${{ inputs.component }}' --directory "$RUNNER_TEMP/discovered" \
             --sha256 '${{ needs.select.outputs.discovery_sha256 }}' \
             --source-commit "$profile_commit" --control-commit "$control_commit" --series "$SERIES" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" --output "$RUNNER_TEMP/upstream.json"
-          git show "$control_commit:dns/bind/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
+          git show "$control_commit:packages/${RUNTIME_PACKAGE}/Makefile" > "$RUNNER_TEMP/runtime-approval.mk"
           python3 -I .github/ci/bind/shared/components.py inputs \
-            --component bind_runtime --series "$SERIES" --mode "$MODE" \
+            --component '${{ inputs.component }}' --series "$SERIES" --mode "$MODE" --independent \
             --upstream "$RUNNER_TEMP/upstream.json" --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" --recipe .github/ci/bind/runtime/build-bind920.sh \
             --series-build-inputs "$RUNNER_TEMP/discovered/series-build-inputs.json" \
@@ -131,7 +132,7 @@ jobs:
       - id: trusted
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-trusted-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-trusted-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/trusted
           if-no-files-found: error
           retention-days: 30
@@ -182,9 +183,9 @@ jobs:
         env:
           SERIES: ${{ needs.select.outputs.series }}
         run: |
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
+          python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
-      - name: Produce the selected BIND runtime pair
+      - name: Produce the selected BIND bind920 package
         uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
@@ -203,14 +204,14 @@ jobs:
             git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
             output="artifacts/$series/producer"
-            python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$series" \
+            python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$series" \
               --trusted-directory "$RP_TRUSTED_DIRECTORY" --selection-sha256 "$RP_SELECTION_SHA256"
             test '${{ needs.profile.outputs.producer_action }}' = build
             .github/ci/bind/runtime/build-bind920.sh "$series" "$output"
       - id: producer
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-producer-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-producer-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/producer
           if-no-files-found: error
           retention-days: 30
@@ -259,7 +260,7 @@ jobs:
           RP_PROFILE_CONTROL_COMMIT: ${{ needs.profile.outputs.control_commit }}
         run: |
           set -eu
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
+          python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
             --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT"
       - name: Independently stage and sign the runtime repository
@@ -282,16 +283,16 @@ jobs:
             export IGNORE_OSVERSION=yes
             git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
-            python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$series" \
+            python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$series" \
               --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
-            python3 -I .github/ci/bind/shared/components.py authenticate --component bind_runtime --series "$series" \
+            python3 -I .github/ci/bind/shared/components.py authenticate --component '${{ inputs.component }}' --series "$series" \
               --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
               --directory "artifacts/$series/producer" --pkg-command /usr/local/sbin/pkg-static
             umask 077
             key=.rp-pkg-signing-key.pem
             trap 'rm -f "$key"' EXIT HUP INT TERM
             printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
-            python3 -I .github/ci/bind/shared/components.py stage --component bind_runtime --series "$series" \
+            python3 -I .github/ci/bind/shared/components.py stage --component '${{ inputs.component }}' --series "$series" \
               --directory "artifacts/$series/producer" --trusted-directory artifacts/trusted \
               --selection-sha256 "$RP_SELECTION_SHA256" --output "artifacts/$series/repository" \
               --pkg-command /usr/local/sbin/pkg-static --key "$key"
@@ -307,7 +308,7 @@ jobs:
       - id: repository
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-repository-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-repository-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/${{ needs.select.outputs.series }}/repository
           if-no-files-found: error
           retention-days: 30
@@ -322,7 +323,7 @@ jobs:
     env:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
-      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-local
+      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind920-local
     steps:
       - uses: actions/checkout@v6
         with:
@@ -343,7 +344,7 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.select.outputs.series }}/repository
-      - name: Qualify the signed pair and every composed repository
+      - name: Qualify the signed bind920 package and its owned repository
         uses: vmactions/freebsd-vm@v1
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
@@ -360,14 +361,14 @@ jobs:
             set -eu
             export IGNORE_OSVERSION=yes
             git config --global --add safe.directory "$PWD"
-            .github/ci/bind/shared/verify-bind-release.sh --component bind_runtime --mode local \
+            .github/ci/bind/shared/verify-bind-release.sh --component '${{ inputs.component }}' --mode local \
               --repository-root 'artifacts/${{ needs.select.outputs.series }}/repository' \
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
       - name: Save native qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-local-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-local-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
           retention-days: 30
@@ -411,19 +412,10 @@ jobs:
           RP_PROFILE_CONTROL_COMMIT: ${{ needs.profile.outputs.control_commit }}
         run: |
           set -eu
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
+          python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
             --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT" \
             --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256"
-      - name: Require the distribution Pages health marker
-        run: |
-          set -eu
-          attempt=1
-          while [ "$(curl --fail --silent --show-error https://resolver-plugins.github.io/repository/pages-health || true)" != resolver-plugins-pages-ok ]; do
-            [ "$attempt" -lt 10 ] || exit 1
-            sleep 15
-            attempt=$((attempt + 1))
-          done
       - id: distribution-token
         uses: actions/create-github-app-token@v2
         with:
@@ -437,7 +429,7 @@ jobs:
           SERIES: ${{ needs.select.outputs.series }}
           GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
         run: |
-          python3 -I .github/ci/bind/shared/components.py publish --component bind_runtime --series "$SERIES" \
+          python3 -I .github/ci/bind/shared/components.py publish --component '${{ inputs.component }}' --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
             --composition-sha256 "$RP_COMPOSITION_SHA256" --repository-root "artifacts/$SERIES/repository" \
             --repository resolver-plugins/repository --recovery "$RUNNER_TEMP/recovery"
@@ -445,7 +437,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/recovery
           if-no-files-found: ignore
           retention-days: 30
@@ -460,7 +452,7 @@ jobs:
     env:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
-      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-public
+      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind920-public
     steps:
       - uses: actions/checkout@v6
         with:
@@ -498,79 +490,17 @@ jobs:
             set -eu
             export IGNORE_OSVERSION=yes
             git config --global --add safe.directory "$PWD"
-            .github/ci/bind/shared/verify-bind-release.sh --component bind_runtime --mode public \
+            .github/ci/bind/shared/verify-bind-release.sh --component '${{ inputs.component }}' --mode public \
               --repository-root 'artifacts/${{ needs.select.outputs.series }}/repository' \
               --trusted-directory artifacts/trusted --series '${{ needs.select.outputs.series }}'
       - name: Save public qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-public-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-public-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
           retention-days: 30
-
-  retention:
-    if: >-
-      needs.select.outputs.mode == 'production' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
-    needs: [select, profile, sign, verify-published]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
-      RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require immutable controller and qualified repository artifacts
-        run: |
-          test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
-          test -n '${{ needs.sign.outputs.repository_artifact_id }}'
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
-          merge-multiple: true
-          path: artifacts/trusted
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
-          merge-multiple: true
-          path: artifacts/${{ needs.select.outputs.series }}/repository
-      - name: Check the external selection and composition seals
-        env:
-          SERIES: ${{ needs.select.outputs.series }}
-          RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
-          RP_PROFILE_CONTROL_COMMIT: ${{ needs.profile.outputs.control_commit }}
-        run: |
-          set -eu
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
-            --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256" \
-            --expected-control-commit "$RP_EXPECTED_CONTROL_COMMIT" --profile-control-commit "$RP_PROFILE_CONTROL_COMMIT" \
-            --repository-root "artifacts/$SERIES/repository" --composition-sha256 "$RP_COMPOSITION_SHA256"
-      - id: distribution-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
-          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
-          owner: resolver-plugins
-          repositories: repository
-          permission-contents: write
-      - name: Prune only unreferenced published snapshots
-        env:
-          SERIES: ${{ needs.select.outputs.series }}
-          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
-        run: |
-          python3 -I .github/ci/bind/shared/components.py publish --retention-only \
-            --component bind_runtime --series "$SERIES" --trusted-directory artifacts/trusted \
-            --selection-sha256 "$RP_SELECTION_SHA256" --composition-sha256 "$RP_COMPOSITION_SHA256" \
-            --repository-root "artifacts/$SERIES/repository" --repository resolver-plugins/repository \
-            --recovery "$RUNNER_TEMP/retention-recovery"
 
   verify-development:
     if: needs.select.outputs.mode == 'development' && github.event_name == 'workflow_dispatch' && inputs.mode == 'development'
@@ -581,7 +511,7 @@ jobs:
       contents: read
     env:
       RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
-      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind_runtime-development
+      RP_VERIFY_EVIDENCE_DIRECTORY: artifacts/${{ needs.select.outputs.series }}/verification-bind920-development
     steps:
       - uses: actions/checkout@v6
         with:
@@ -608,7 +538,7 @@ jobs:
           PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
         run: |
           set -eu
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
+          python3 -I .github/ci/bind/shared/components.py validate --component '${{ inputs.component }}' --series "$SERIES" \
             --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
           git fetch --no-tags origin "$PROFILE_COMMIT"
       - name: Qualify an unsigned temporary runtime catalogue
@@ -629,75 +559,17 @@ jobs:
             export IGNORE_OSVERSION=yes
             git config --global --add safe.directory "$PWD"
             series='${{ needs.select.outputs.series }}'
-            python3 -I .github/ci/bind/shared/components.py stage --component bind_runtime --series "$series" \
+            python3 -I .github/ci/bind/shared/components.py stage --component '${{ inputs.component }}' --series "$series" \
               --directory "artifacts/$series/producer" --trusted-directory artifacts/trusted \
               --selection-sha256 "$RP_SELECTION_SHA256" --output "artifacts/$series/repository" \
               --pkg-command /usr/local/sbin/pkg-static
-            .github/ci/bind/shared/verify-bind-release.sh --component bind_runtime --mode local \
+            .github/ci/bind/shared/verify-bind-release.sh --component '${{ inputs.component }}' --mode local \
               --repository-root "artifacts/$series/repository" --trusted-directory artifacts/trusted --series "$series"
       - name: Save preview qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bind-runtime-preview-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.component }}-preview-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RP_VERIFY_EVIDENCE_DIRECTORY }}
           if-no-files-found: ignore
           retention-days: 30
-
-  publish-development:
-    if: needs.select.outputs.mode == 'development' && github.event_name == 'workflow_dispatch' && inputs.mode == 'development'
-    needs: [select, profile, producer, verify-development]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      pull-requests: read
-    env:
-      RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.profile.outputs.control_commit }}
-          persist-credentials: false
-      - name: Require immutable controller and preview producer artifacts
-        run: |
-          test -n '${{ needs.profile.outputs.trusted_artifact_id }}'
-          test -n '${{ needs.producer.outputs.producer_artifact_id }}'
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.profile.outputs.trusted_artifact_id }}
-          merge-multiple: true
-          path: artifacts/trusted
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.producer.outputs.producer_artifact_id }}
-          merge-multiple: true
-          path: artifacts/${{ needs.select.outputs.series }}/producer
-      - name: Publish the exact runtime PR preview
-        env:
-          TAG: ${{ needs.select.outputs.prerelease_tag }}
-          SERIES: ${{ needs.select.outputs.series }}
-          PULL_NUMBER: ${{ needs.select.outputs.pull_number }}
-          INPUT_SERIES: ${{ inputs.series }}
-          INPUT_PULL_NUMBER: ${{ inputs.pull_number }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          [ "$SERIES" = "$INPUT_SERIES" ] && [ "$PULL_NUMBER" = "$INPUT_PULL_NUMBER" ]
-          [ "$TAG" = "pr-$PULL_NUMBER-$SERIES-bind-runtime" ]
-          python3 -I .github/ci/bind/shared/components.py validate --component bind_runtime --series "$SERIES" \
-            --trusted-directory artifacts/trusted --selection-sha256 "$RP_SELECTION_SHA256"
-          pr_state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state)
-          if [ "$pr_state" != open ]; then
-            python3 -I .github/ci/shared/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
-            exit 0
-          fi
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "BIND runtime development $TAG" \
-              --prerelease --notes 'Unsigned BIND runtime preview for pull request testing.'
-          fi
-          gh release upload "$TAG" "artifacts/$SERIES/producer"/* --clobber --repo "$GITHUB_REPOSITORY"
-          pr_state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_NUMBER" --jq .state)
-          if [ "$pr_state" != open ]; then
-            python3 -I .github/ci/shared/release_channel.py cleanup-tag --repository "$GITHUB_REPOSITORY" --tag "$TAG"
-          fi

@@ -12,7 +12,7 @@ ci="$root/.github/ci"
 : "${RP_TARGET_PKG_METADATA:?creator target metadata is required}"
 : "${RP_READER_PKG_METADATA:?reader target metadata is required}"
 : "${RP_COMPOSITION_SHA256:?external composition seal is required}"
-python3 -I "$ci/shared/package_catalogue.py" validate --repository-root "$(dirname -- "$combined")" \
+python3 -I "$ci/shared/package_catalogue.py" validate --repository-root "$(dirname -- "$expected")" \
     --component dhcp --series "$series" --composition-sha256 "$RP_COMPOSITION_SHA256" >/dev/null
 python3 "$ci/shared/target_pkg.py" field "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 python3 "$ci/shared/target_pkg.py" field "$RP_READER_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role reader >/dev/null
@@ -35,7 +35,7 @@ case "$url" in
         done
         ;;
 esac
-python3 "$ci/shared/package_catalogue.py" verify --directory "$combined" --url "$url" --reader-target "$RP_READER_PKG_METADATA" --upstream "$RP_UPSTREAM_METADATA"
+python3 "$ci/shared/package_catalogue.py" verify-owned --component dhcp --series "$series" --directory "$expected" --url "$url" --reader-target "$RP_READER_PKG_METADATA" --upstream "$RP_UPSTREAM_METADATA"
 kldload -n carp
 sysctl -n net.inet.carp.allow >/dev/null
 sh "$ci/shared/prepare-opnsense-vm.sh"

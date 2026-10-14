@@ -58,44 +58,65 @@ def approval_from_makefile(text: str, *, allow_absent: bool = False) -> dict[str
     return {"version": values["RP_BIND_VERSION"], "ports_commit": values["RP_BIND_PORTS_COMMIT"]}
 
 
+def recipe_version(text, package=None):
+    """Select literal revisions in the native master/slave recipe branches."""
+    scope, fields = [], {"DISTVERSION": [], "PORTREVISION": []}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith((".if ", ".ifdef ", ".ifndef ")):
+            condition = True if package is None else (package == "bind-tools") if stripped in (
+                ".if defined(BIND_TOOLS_SLAVE)", ".ifdef BIND_TOOLS_SLAVE") else None
+            scope.append(condition)
+        elif stripped == ".else" and scope:
+            scope[-1] = True if package is None else None if scope[-1] is None else not scope[-1]
+        elif stripped.startswith(".elif ") and scope:
+            scope[-1] = True if package is None else None
+        elif stripped.startswith(".endif") and scope:
+            scope.pop()
+        for field in fields:
+            if re.match(rf"\s*{field}\s*[?+:!]?=", line):
+                if package is not None and False in scope:
+                    continue
+                if package is not None and None in scope:
+                    raise ValueError(f"conditional recipe {field} cannot be resolved safely")
+                match = re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", line)
+                if match is None:
+                    raise ValueError(f"recipe {field} must be literal")
+                fields[field].append(match[1].strip())
+    if len(fields["DISTVERSION"]) != 1 or len(set(fields["PORTREVISION"])) > 1:
+        raise ValueError("missing or ambiguous recipe version")
+    version = fields["DISTVERSION"][0]
+    revision = next(iter(fields["PORTREVISION"]), "0")
+    if re.fullmatch(r"9\.20\.[0-9]+", version) is None or re.fullmatch(r"[0-9]+", revision) is None:
+        raise ValueError("invalid recipe version")
+    return version, int(revision)
+
+
 def profile_from_recipe(approval: dict[str, str], resolved_commit: str,
-                        makefile_bytes: bytes, distinfo_bytes: bytes) -> dict[str, str | int]:
+                        makefile_bytes: bytes, distinfo_bytes: bytes, package=None) -> dict[str, str | int]:
     """Hash exact Git blobs and require the recipe's declared native version."""
     if resolved_commit != approval["ports_commit"] or COMMIT_PATTERN.fullmatch(resolved_commit) is None:
         raise ValueError("resolved Ports object differs from runtime approval")
     text = makefile_bytes.decode("utf-8")
-    declarations = {}
-    for field in ("DISTVERSION", "PORTREVISION"):
-        lines = [line for line in text.splitlines() if re.match(rf"\s*{field}\s*[?+:!]?=", line)]
-        if field == "DISTVERSION" and len(lines) != 1:
-            raise ValueError(f"missing or ambiguous recipe {field}")
-        matches = [re.fullmatch(rf"\s*{field}\s*=\s*([^#]*?)(?:\s*#.*)?", line) for line in lines]
-        if any(match is None for match in matches):
-            raise ValueError(f"recipe {field} must be literal")
-        values = {match[1].strip() for match in matches}
-        if len(values) > 1:
-            raise ValueError(f"missing or ambiguous recipe {field}")
-        declarations[field] = next(iter(values), "0")
-    if re.fullmatch(r"[0-9]+", declarations["PORTREVISION"]) is None:
-        raise ValueError("invalid recipe PORTREVISION")
+    version, revision = recipe_version(text, package)
     profile = validate_profile(dict(
         ports_repository=PORTS_REPOSITORY, ports_commit=resolved_commit,
         makefile_sha256=hashlib.sha256(makefile_bytes).hexdigest(),
         distinfo_sha256=hashlib.sha256(distinfo_bytes).hexdigest(),
-        distversion=declarations["DISTVERSION"], portrevision=int(declarations["PORTREVISION"])))
+        distversion=version, portrevision=revision))
     if package_version(profile) != approval["version"]:
         raise ValueError("Ports recipe version differs from runtime approval")
     return profile
 
 
-def resolve_profile(approval: dict[str, str], *, repository: Path | None = None) -> dict[str, str | int]:
+def resolve_profile(approval: dict[str, str], *, repository: Path | None = None, package=None) -> dict[str, str | int]:
     """Resolve the approved immutable recipe once at the controller boundary."""
     def read(directory):
         command = ["git", "-C", str(directory)]
         commit = subprocess.check_output([*command, "rev-parse", f"{approval['ports_commit']}^{{commit}}"], text=True).strip()
         return profile_from_recipe(approval, commit,
             subprocess.check_output([*command, "show", f"{commit}:dns/bind920/Makefile"]),
-            subprocess.check_output([*command, "show", f"{commit}:dns/bind920/distinfo"]))
+            subprocess.check_output([*command, "show", f"{commit}:dns/bind920/distinfo"]), package)
     if repository is not None:
         return read(repository)
     with tempfile.TemporaryDirectory() as temporary:
@@ -103,6 +124,21 @@ def resolve_profile(approval: dict[str, str], *, repository: Path | None = None)
         subprocess.run(["git", "-C", temporary, "fetch", "--quiet", "--depth=1", PORTS_REPOSITORY,
                         approval["ports_commit"]], check=True, stdout=sys.stderr)
         return read(Path(temporary))
+
+
+def resolve_tools_version(profile):
+    """Read the internal tools prerequisite from the same immutable master blob."""
+    import base64
+    from shared import release_channel
+    profile = validate_profile(profile)
+    payload = release_channel.gh_api(f"repos/freebsd/freebsd-ports/contents/dns/bind920/Makefile?ref={profile['ports_commit']}")
+    raw = base64.b64decode(payload["content"])
+    if hashlib.sha256(raw).hexdigest() != profile["makefile_sha256"]:
+        raise ValueError("tools prerequisite differs from the approved master recipe")
+    version, revision = recipe_version(raw.decode(), "bind-tools")
+    if version != profile["distversion"]:
+        raise ValueError("tools prerequisite differs from approved BIND source version")
+    return version + (f"_{revision}" if revision else "")
 
 
 def validate_profile(profile: object) -> dict[str, str | int]:
@@ -171,6 +207,8 @@ def producer_inputs(
     *,
     recipe_sha256: str,
     build_inputs_sha256: str | None = None,
+    package: str | None = None,
+    tools_version: str | None = None,
 ) -> dict[str, object]:
     """Return the canonical schema-4 runtime build inputs."""
     profile = validate_profile(profile)
@@ -196,6 +234,17 @@ def producer_inputs(
         if SHA256_PATTERN.fullmatch(build_inputs_sha256) is None:
             raise ValueError("invalid per-series build inputs SHA256")
         inputs.update(schema=5, build_inputs_sha256=build_inputs_sha256)
+    if package is not None:
+        if package not in PACKAGE_ORIGINS:
+            raise ValueError("unsupported runtime package")
+        inputs.update(schema=6, package=package)
+    if package == "bind920":
+        if (not isinstance(tools_version, str) or re.fullmatch(r"9\.20\.[0-9]+(?:_[1-9][0-9]*)?", tools_version) is None
+                or tools_version.split("_")[0] != profile["distversion"]):
+            raise ValueError("invalid internal tools prerequisite version")
+        inputs["tools_version"] = tools_version
+    elif tools_version is not None:
+        raise ValueError("only bind920 has an internal tools prerequisite")
     return inputs
 
 
@@ -208,10 +257,13 @@ def compatibility_fingerprint(
     *,
     recipe_sha256: str,
     build_inputs_sha256: str | None = None,
+    package: str | None = None,
+    tools_version: str | None = None,
 ) -> str:
     """Hash explicit inputs without consulting the validator's checkout."""
     inputs = producer_inputs(profile, series, freebsd_release, architecture,
-                             package_creator, recipe_sha256=recipe_sha256, build_inputs_sha256=build_inputs_sha256)
+                             package_creator, recipe_sha256=recipe_sha256, build_inputs_sha256=build_inputs_sha256,
+                             package=package, tools_version=tools_version)
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -226,6 +278,8 @@ def build_provenance(
     *,
     recipe_sha256: str,
     build_inputs_sha256: str | None = None,
+    package: str | None = None,
+    tools_version: str | None = None,
 ) -> dict[str, object]:
     """Describe the exact BIND pair available for one compatibility identity."""
     profile = validate_profile(profile)
@@ -233,14 +287,16 @@ def build_provenance(
     fingerprint = compatibility_fingerprint(
         profile, series, freebsd_release, architecture, package_creator,
         recipe_sha256=recipe_sha256, build_inputs_sha256=build_inputs_sha256,
+        package=package, tools_version=tools_version,
     )
-    if not isinstance(packages, dict) or set(packages) != set(PACKAGE_ORIGINS):
+    origins = PACKAGE_ORIGINS if package is None else {package: PACKAGE_ORIGINS[package]}
+    if not isinstance(packages, dict) or set(packages) != set(origins):
         raise ValueError("BIND provenance has an invalid package set")
     expected_version = package_version(profile)
     validated_packages: dict[str, dict[str, str]] = {}
-    for package_name, origin in PACKAGE_ORIGINS.items():
-        package = packages[package_name]
-        if not isinstance(package, dict) or set(package) != {"name", "version", "origin", "filename"}:
+    for package_name, origin in origins.items():
+        package_record = packages[package_name]
+        if not isinstance(package_record, dict) or set(package_record) != {"name", "version", "origin", "filename"}:
             raise ValueError(f"{package_name} package has an invalid schema")
         expected = {
             "name": package_name,
@@ -248,9 +304,9 @@ def build_provenance(
             "origin": origin,
             "filename": f"{package_name}-{expected_version}.pkg",
         }
-        if package != expected:
+        if package_record != expected:
             raise ValueError(f"{package_name} package does not match the BIND profile")
-        validated_packages[package_name] = package
+        validated_packages[package_name] = package_record
     provenance = {
         "schema": PROVENANCE_SCHEMA,
         "fingerprint": fingerprint,
@@ -263,6 +319,10 @@ def build_provenance(
     }
     if build_inputs_sha256 is not None:
         provenance.update(schema=5, build_inputs_sha256=build_inputs_sha256)
+    if package is not None:
+        provenance.update(schema=6, package=package)
+    if package == "bind920":
+        provenance["tools_version"] = tools_version
     return provenance
 
 
@@ -273,33 +333,26 @@ def write_provenance(
     freebsd_release: str,
     architecture: str,
     package_creator: object,
-    bind_tools: Path,
-    bind920: Path,
+    bind_tools: Path | None,
+    bind920: Path | None,
     *,
     recipe_sha256: str | None = None,
     build_inputs_sha256: str | None = None,
+    package: str | None = None,
+    tools_version: str | None = None,
 ) -> None:
-    """Write canonical provenance for two finished BIND package archives."""
-    if not bind_tools.is_file() or not bind920.is_file():
+    """Write provenance for the selected, independently owned archives."""
+    paths = {"bind-tools": bind_tools, "bind920": bind920}
+    selected = paths if package is None else {package: paths[package]}
+    if any(path is None or not path.is_file() for path in selected.values()):
         raise ValueError("BIND package archive does not exist")
-    packages = {
-        "bind-tools": {
-            "name": "bind-tools",
-            "version": package_version(profile),
-            "origin": "dns/bind-tools",
-            "filename": bind_tools.name,
-        },
-        "bind920": {
-            "name": "bind920",
-            "version": package_version(profile),
-            "origin": "dns/bind920",
-            "filename": bind920.name,
-        },
-    }
+    packages = {name: dict(name=name, version=package_version(profile),
+                           origin=PACKAGE_ORIGINS[name], filename=path.name)
+                for name, path in selected.items()}
     provenance = build_provenance(
         profile, series, freebsd_release, architecture, package_creator, packages,
         recipe_sha256=build_recipe_sha256() if recipe_sha256 is None else recipe_sha256,
-        build_inputs_sha256=build_inputs_sha256,
+        build_inputs_sha256=build_inputs_sha256, package=package, tools_version=tools_version,
     )
     output.write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
@@ -331,6 +384,8 @@ def main() -> None:
     parser.add_argument("--package-creator")
     parser.add_argument("--recipe-sha256", help="explicit original recipe hash; defaults to this wrapper")
     parser.add_argument("--build-inputs-sha256")
+    parser.add_argument("--package", choices=tuple(PACKAGE_ORIGINS))
+    parser.add_argument("--tools-version")
     parser.add_argument("--bind-tools", type=Path)
     parser.add_argument("--bind920", type=Path)
     parser.add_argument("--output", type=Path)
@@ -344,7 +399,7 @@ def main() -> None:
             parser.error("verify-recipe requires --ports-commit, --makefile and --distinfo")
         actual = profile_from_recipe(
             {"version": package_version(profile), "ports_commit": profile["ports_commit"]},
-            arguments.ports_commit, arguments.makefile.read_bytes(), arguments.distinfo.read_bytes())
+            arguments.ports_commit, arguments.makefile.read_bytes(), arguments.distinfo.read_bytes(), arguments.package)
         if actual != profile:
             raise ValueError("native Ports recipe differs from the sealed approval")
         return
@@ -376,7 +431,9 @@ def main() -> None:
             )
         )
         return
-    if arguments.bind_tools is None or arguments.bind920 is None or arguments.output is None:
+    if (arguments.output is None or arguments.package is None and (arguments.bind_tools is None or arguments.bind920 is None)
+            or arguments.package == "bind-tools" and arguments.bind_tools is None
+            or arguments.package == "bind920" and arguments.bind920 is None):
         parser.error("provenance requires --bind-tools, --bind920, and --output")
     write_provenance(
         arguments.output,
@@ -388,7 +445,7 @@ def main() -> None:
         arguments.bind_tools,
         arguments.bind920,
         recipe_sha256=arguments.recipe_sha256,
-        build_inputs_sha256=arguments.build_inputs_sha256,
+        build_inputs_sha256=arguments.build_inputs_sha256, package=arguments.package, tools_version=arguments.tools_version,
     )
 
 

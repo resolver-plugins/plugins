@@ -15,7 +15,7 @@ from shared import release_channel as releases
 ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_KEY = ROOT / "docs/package-repository/resolver-plugins.pub"
 PKG = "/usr/local/sbin/pkg-static"
-COMPONENTS = ("bind_runtime", "bind_plugin", "dhcp")
+COMPONENTS = ("bind_runtime", "bind_tools", "bind920", "bind_plugin", "dhcp")
 CATALOGUE_FILES = bind.CATALOGUE_FILES
 CATALOGUE_ASSETS = bind.CATALOGUE_ASSETS
 CATALOGUE_ARCHIVES = {"data.pkg", "data.tzst", "packagesite.pkg", "packagesite.tzst"}
@@ -223,12 +223,13 @@ def validate(directory):
         fields.add("packages")
         schema = 6
     elif data.get("kind") == "combined":
-        schema = 2
+        schema = 3 if data.get("schema") == 3 else 2
     else:
         raise ValueError("invalid composed catalogue kind")
     if (set(data) != fields or type(data["schema"]) is not int or data["schema"] != schema
-            or not isinstance(data["components"],dict)
-            or set(data["components"]) not in ({"bind_runtime","bind_plugin"},{"bind_runtime","bind_plugin","dhcp"})
+            or not isinstance(data["components"], dict)
+            or (not data["components"] or not set(data["components"]) <= set(COMPONENTS))
+            or schema != 3 and set(data["components"]) not in ({"bind_runtime","bind_plugin"},{"bind_runtime","bind_plugin","dhcp"})
             or data["kind"] == "bind-stack" and "dhcp" in data["components"]
             or (directory / "resolver-plugins.pub").read_bytes() != PUBLIC_KEY.read_bytes()):
         raise ValueError("invalid composed catalogue identity")
@@ -242,13 +243,22 @@ def validate(directory):
         raise ValueError("catalogue original creator differs")
     expected = {}
     expected_assets = {"resolver-plugins.pub","catalogue-upstream.json","catalogue-creator-target.json"} | (CATALOGUE_ASSETS & set(assets))
+    if schema == 3:
+        from shared import repository_index
+        index = repository_index.validate_inputs(directory, releases.sha256(directory / "index-inputs.json"), prefix="catalogue-")
+        if data["components"] != repository_index.selected_records(index["components"]):
+            raise ValueError("index package selection differs from sealed original receipts")
+        expected_assets |= {"index-inputs.json", "catalogue-reader-target.json", "catalogue-tools-profile.json"}
     for component,record in data["components"].items():
-        if not isinstance(record,dict) or set(record) != RECORD_FIELDS:
+        if not isinstance(record,dict) or set(record) != RECORD_FIELDS | ({"selected_packages"} if schema == 3 else set()):
             raise ValueError("invalid original composition record")
         if (directory / f"{component}-resolver-plugins.pub").read_bytes() != PUBLIC_KEY.read_bytes():
             raise ValueError("retained component key differs from committed public key")
         originals,packages = bind._hashes(record["assets"]),bind._hashes(record["packages"])
-        for name,digest in packages.items():
+        selected = bind._hashes(record["selected_packages"]) if schema == 3 else packages
+        if not selected or any(packages.get(name) != digest for name, digest in selected.items()):
+            raise ValueError("index selection differs from original package bytes")
+        for name,digest in selected.items():
             if name in expected or originals.get(name) != digest or actual.get(name) != digest:
                 raise ValueError("composed package bytes differ from original provenance")
             expected[name] = digest
@@ -260,14 +270,16 @@ def validate(directory):
                 expected_assets.add(prefixed)
         channel = json.loads((directory / f"{component}-channel.json").read_text())
         if component in bind.KINDS:
-            names = bind.RUNTIME_SIDECARS if component == "bind_runtime" else bind.PLUGIN_SIDECARS
+            names = bind.RUNTIME_SIDECARS if component in bind.RUNTIME_KINDS else bind.PLUGIN_SIDECARS
+            if component == "bind_plugin" and channel.get("schema") == 2:
+                names = names | {"bind-build-dependency.json"}
             if "series-build-inputs.json" in channel["assets"]:
                 names = names | {"series-build-inputs.json"}
             sidecars = {name:(directory / f"{component}-{name}").read_text() if name.endswith((".txt", ".mk"))
                         else json.loads((directory / f"{component}-{name}").read_text()) for name in names}
             bind.validate_component_record(channel,sidecars,packages,component,data["series"])
             component_creator = channel["package_creator"]
-            version = bind.bind920_profile.package_version(sidecars["bind920-profile.json"]) if component == "bind_runtime" else channel["plugin_version"]
+            version = bind.bind920_profile.package_version(sidecars["bind920-profile.json"]) if component in bind.RUNTIME_KINDS else channel["plugin_version"]
             tags = bind.component_tags(component,data["series"],version,channel["build_fingerprint"])
         else:
             build = dhcp.read_metadata(directory / "dhcp-build-metadata.txt")
@@ -284,7 +296,7 @@ def validate(directory):
     expected_assets.update(expected)
     if (set(assets) != expected_assets or "meta.conf" not in assets or not CATALOGUE_FILES.intersection(assets)
             or {name for name in assets if name.endswith(".pkg") and name not in CATALOGUE_FILES
-                and not any(name.startswith(component+"-") for component in COMPONENTS)} != set(expected)
+                } != set(expected)
             or data["kind"] == "bind-stack" and data["packages"] != expected):
         raise ValueError("composed catalogue package or sidecar set differs")
     return data
@@ -292,7 +304,7 @@ def validate(directory):
 
 def verify(directory,url,reader_target,upstream):
     data = validate(directory)
-    packages = [directory / name for record in data["components"].values() for name in record["packages"]]
+    packages = [directory / name for record in data["components"].values() for name in record.get("selected_packages", record["packages"])]
     verify_packages(packages,url,reader_target,upstream)
 
 
@@ -302,6 +314,8 @@ def validate_composition(repository_root,*,component,series,composition_sha256):
     owned=repository_root / ("current" if component=="dhcp" else "component/current")
     if receipt(owned,component,series)!=composition["components"][component]:
         raise ValueError("owned channel differs from sealed composition")
+    if composition["schema"] == 2:
+        return composition
     if composition["components"]["bind_plugin"] is not None:
         data=validate(repository_root / "combined")
         expected={name:component_record(record) for name,record in composition["components"].items() if record is not None}
@@ -310,6 +324,22 @@ def validate_composition(repository_root,*,component,series,composition_sha256):
     elif (repository_root / "combined").exists():
         raise ValueError("bootstrap composition cannot expose combined feed")
     return composition
+
+
+def seal_owned(repository_root, component, series):
+    """Seal one HA publication without consulting any peer package."""
+    if component != "dhcp":
+        raise ValueError("BIND controllers seal their own channels")
+    current = repository_root / "current"
+    shutil.copytree(current, repository_root / "snapshot")
+    selected = receipt(current, component, series)
+    path = repository_root / "composition-inputs.json"
+    path.write_text(json.dumps(dict(schema=2, component=component, series=series,
+                                   components={component: selected}, native_dependencies={}),
+                               sort_keys=True, indent=2) + "\n")
+    digest = releases.sha256(path)
+    validate_composition(repository_root, component=component, series=series, composition_sha256=digest)
+    return digest
 
 
 def publish(repository,repository_root,recovery,*,component,series,composition_sha256):
@@ -323,7 +353,7 @@ def publish(repository,repository_root,recovery,*,component,series,composition_s
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command",choices=("fetch","stage","stage-stack","validate","verify","publish"))
+    parser.add_argument("command",choices=("fetch","stage","stage-stack","validate","verify","verify-owned","seal-owned","publish"))
     parser.add_argument("--repository",default="resolver-plugins/repository")
     parser.add_argument("--component",choices=COMPONENTS)
     parser.add_argument("--owner",choices=("dhcp",))
@@ -333,7 +363,14 @@ def main():
         parser.add_argument("--"+name,type=Path)
     parser.add_argument("--url")
     args = parser.parse_args()
-    if args.command == "fetch":
+    if args.command == "seal-owned":
+        print(seal_owned(args.repository_root, args.component, args.series))
+        return
+    elif args.command == "verify-owned":
+        selected = component_packages(args.directory, args.component, args.series)
+        verify_packages(selected, args.url, args.reader_target, args.upstream)
+        return
+    elif args.command == "fetch":
         result = fetch(args.repository,args.component,args.series,args.output)
     elif args.command in ("stage","stage-stack"):
         if args.approved_profile is None or args.runtime_approval is None:
