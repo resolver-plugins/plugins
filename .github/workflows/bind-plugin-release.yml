@@ -1,31 +1,19 @@
 name: Publish BIND plugin release
 
 on:
-  schedule:
-    - cron: '20 5 * * *'
   push:
     branches: [master]
     paths:
-      - '.github/ci/bind/plugin/**'
-      - '.github/ci/bind/shared/**'
-      - '.github/ci/shared/**'
-      - '.github/workflows/bind-plugin-release.yml'
-      - 'docs/package-repository/resolver-plugins.pub'
       - 'dns/bind/**'
       - '!dns/bind/tests/**'
-      - 'Mk/**'
-      - 'Scripts/**'
-      - 'Templates/**'
-      - 'scripts/install-os-bind-rp*'
+      - '!dns/bind/README.md'
   pull_request_target:
     types: [closed]
     branches: ['release/bind-rp/**']
     paths:
       - 'dns/bind/**'
       - '!dns/bind/tests/**'
-      - 'Mk/**'
-      - 'Scripts/**'
-      - 'Templates/**'
+      - '!dns/bind/README.md'
   workflow_dispatch:
     inputs:
       mode:
@@ -358,7 +346,7 @@ jobs:
   sign:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
@@ -499,7 +487,7 @@ jobs:
   publish:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
@@ -627,7 +615,7 @@ jobs:
   source-release:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&
@@ -683,7 +671,7 @@ jobs:
   retention:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/bind-rp/') &&

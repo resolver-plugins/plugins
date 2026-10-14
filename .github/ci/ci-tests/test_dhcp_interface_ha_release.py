@@ -30,7 +30,7 @@ def release_history(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('event_name,changed,base,series', [
     ('push', ['net/dhcp-interface-ha/tests/test_runtime.py'], None, None),
-    ('push', ['.github/ci/ha_dhcp/build-dhcp-interface-ha.sh'], None, '26.7'),
+    ('push', ['.github/ci/ha_dhcp/build-dhcp-interface-ha.sh'], None, None),
     ('pull_request_target', ['net/dhcp-interface-ha/src/controller.py'], 'release/dhcp-interface-ha/26.1', '26.1'),
     ('pull_request_target', ['net/dhcp-interface-ha/README.md'], 'release/dhcp-interface-ha/26.7', None),
     ('workflow_dispatch', [], None, '26.1'),

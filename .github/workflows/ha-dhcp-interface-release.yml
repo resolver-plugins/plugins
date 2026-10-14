@@ -1,22 +1,12 @@
 name: Publish HA DHCP Interface package release
 
 on:
-  schedule:
-    - cron: '50 5 * * *'
   push:
     branches: [master]
     paths:
-      - '.github/ci/ha_dhcp/**'
-      - '.github/ci/bind/shared/**'
-      - '.github/ci/shared/**'
-      - '.github/workflows/ha-dhcp-interface-release.yml'
-      - 'docs/package-repository/resolver-plugins.pub'
       - 'net/dhcp-interface-ha/**'
       - '!net/dhcp-interface-ha/tests/**'
       - '!net/dhcp-interface-ha/README.md'
-      - 'Mk/**'
-      - 'Scripts/**'
-      - 'Templates/**'
   pull_request_target:
     types: [closed]
     branches: ['release/dhcp-interface-ha/**']
@@ -24,9 +14,6 @@ on:
       - 'net/dhcp-interface-ha/**'
       - '!net/dhcp-interface-ha/tests/**'
       - '!net/dhcp-interface-ha/README.md'
-      - 'Mk/**'
-      - 'Scripts/**'
-      - 'Templates/**'
   workflow_dispatch:
     inputs:
       series:
@@ -234,7 +221,7 @@ jobs:
     needs: [profile, build]
     if: >-
       needs.profile.outputs.release == 'true' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
@@ -448,7 +435,7 @@ jobs:
     needs: [profile, sign, verify]
     if: >-
       needs.profile.outputs.release == 'true' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
@@ -595,7 +582,7 @@ jobs:
     needs: [profile, sign, verify-published]
     if: >-
       needs.profile.outputs.release == 'true' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
         startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
