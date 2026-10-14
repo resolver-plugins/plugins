@@ -200,7 +200,11 @@ also selects the minimum reader recipe: `26.1.11` for 26.1, and the base
 `<series>` release for later series.
 Both use the profile's FreeBSD major and `amd64` ABI. The resolver accepts the
 literal version, revision and epoch from either `opnsense/pkg` or
-`ports-mgmt/pkg`; ambiguous or unsupported recipes stop the build.
+`ports-mgmt/pkg`. When both exist, the role's matching tools tag selects its
+literal origin through `config/<series>/ports.conf`; creator selection uses the
+already frozen tools object. Missing, ambiguous or unsupported declarations stop
+the build. This follows upstream's OPNsense override without substituting another
+package identity when the authenticated feed lacks the selected recipe.
 
 The sealed controller resolves both records once. To inspect that resolution
 separately when diagnosing the selected profile:

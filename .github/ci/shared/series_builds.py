@@ -184,7 +184,8 @@ def select_builds(repository, component, event, refs, changed, distribution, *, 
             targets_directory.mkdir()
             profile_path = targets_directory / 'upstream.json'
             profile_path.write_text(json.dumps(profile))
-            resolve_targets(profile_path, candidate['series'], 'x86_64', targets_directory)
+            resolve_targets(profile_path, candidate['series'], 'x86_64', targets_directory,
+                            tools_repository=tools_repository)
             targets = {role: json.loads((targets_directory / f'{role}-target.json').read_text())
                        for role in ('creator', 'reader')}
             inputs = build_inputs(repository, component, candidate['series'], source,

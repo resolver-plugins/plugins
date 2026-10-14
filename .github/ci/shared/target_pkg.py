@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metadata_profile
 
 PORTS_REPOSITORY = 'https://github.com/opnsense/ports.git'
+TOOLS_REPOSITORY = 'https://github.com/opnsense/tools.git'
 RECIPE_PATHS = ('opnsense/pkg', 'ports-mgmt/pkg')
 IDENTITY_FIELDS = {'name', 'version', 'origin', 'abi'}
 VERSION_PATTERN = re.compile(r'[0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?(?:,[0-9]+)?')
@@ -149,7 +150,8 @@ def recipe_version(recipe: str) -> str:
     return versions[0] + (f'_{revision}' if revision else '') + (f',{epoch}' if epoch else '')
 
 
-def resolve_targets(upstream: Path, series: str, architecture: str, output: Path) -> None:
+def resolve_targets(upstream: Path, series: str, architecture: str, output: Path,
+                    *, tools_repository: Path | None = None) -> None:
     profile = metadata_profile.load_profile(upstream, series)
     if architecture != 'x86_64':
         raise TargetPackageError('unsupported series/architecture for pkg resolution')
@@ -168,9 +170,38 @@ def resolve_targets(upstream: Path, series: str, architecture: str, output: Path
                 commit = run([*command, 'rev-parse', 'FETCH_HEAD^{commit}']).stdout.strip()
                 entries = run([*command, 'ls-tree', commit, '--', *RECIPE_PATHS]).stdout.splitlines()
                 paths = [entry.split('\t', 1)[1] for entry in entries]
-                if len(paths) != 1 or paths[0] not in RECIPE_PATHS:
+                if not paths or any(path not in RECIPE_PATHS for path in paths):
                     raise TargetPackageError(f'{release}: missing or ambiguous pkg recipe')
-                path = paths[0]
+                if len(paths) == 1:
+                    path = paths[0]
+                else:
+                    # OPNsense can retain the standard port beside its own override.
+                    # Follow the literal build list at this role's matching tools tag.
+                    tools_commit = None
+                    if tools_repository is not None:
+                        if role == 'creator':
+                            proof = metadata_profile.verify_tools_profile(profile, tools_repository)
+                            tools_commit = proof['tools_commit']
+                        else:
+                            result = subprocess.run([git, '-C', str(tools_repository), 'rev-parse',
+                                '--verify', f'refs/tags/{release}^{{commit}}'], capture_output=True, text=True)
+                            if result.returncode == 0:
+                                tools_commit = result.stdout.strip()
+                        tools_command = [git, '-C', str(tools_repository)]
+                    if tools_commit is None:
+                        tools = Path(directory) / f'tools-{release}.git'
+                        run([git, 'init', '--bare', str(tools)])
+                        tools_command = [git, '-C', str(tools)]
+                        run([*tools_command, 'fetch', '--depth=1', '--filter=blob:none', '--no-tags',
+                             os.environ.get('OPNSENSE_TOOLS_REPOSITORY', TOOLS_REPOSITORY), f'refs/tags/{release}'])
+                        tools_commit = run([*tools_command, 'rev-parse', 'FETCH_HEAD^{commit}']).stdout.strip()
+                    if metadata_profile.COMMIT_PATTERN.fullmatch(tools_commit) is None:
+                        raise TargetPackageError('pkg origin requires an immutable tools commit')
+                    build_list = run([*tools_command, 'show', f'{tools_commit}:config/{series}/ports.conf']).stdout
+                    declared = {line.split('#', 1)[0].strip() for line in build_list.splitlines()} & set(RECIPE_PATHS)
+                    if len(declared) != 1 or not declared.issubset(paths):
+                        raise TargetPackageError(f'{release}: missing or ambiguous pkg origin in official tools build list')
+                    path = declared.pop()
                 version = recipe_version(run([*command, 'show', f'{commit}:{path}/Makefile']).stdout)
                 resolved[release] = commit, path, version
             commit, path, version = resolved[release]
@@ -268,6 +299,7 @@ def main() -> int:
     resolve.add_argument('--series', required=True)
     resolve.add_argument('--architecture', required=True)
     resolve.add_argument('--output-directory', required=True, type=Path)
+    resolve.add_argument('--tools-repository', type=Path)
     for name in ('install', 'verify', 'field'):
         command = commands.add_parser(name)
         command.add_argument('metadata', type=Path)
@@ -283,7 +315,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == 'resolve':
-            resolve_targets(args.upstream, args.series, args.architecture, args.output_directory)
+            resolve_targets(args.upstream, args.series, args.architecture, args.output_directory,
+                            tools_repository=args.tools_repository)
         else:
             target = load_target(args.metadata, args.series, upstream=args.upstream, role=args.role)
             if args.command == 'install':
