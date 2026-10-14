@@ -68,8 +68,8 @@ while True:
         [sys.executable, supervisor, pidfile, events, name, "yes" if ignore_term else "no"]
     )
     for _ in range(100):
-        if pidfile.exists():
-            return process, int(pidfile.read_text()), pidfile, events
+        if pidfile.exists() and (pid := pidfile.read_text().strip()):
+            return process, int(pid), pidfile, events
         time.sleep(0.01)
     process.kill()
     raise AssertionError("test named process did not start")
