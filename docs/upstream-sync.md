@@ -11,6 +11,50 @@ This workflow tracks OPNsense plugin source and numeric tools environment
 changes. Runtime approval remains the separate pair of RP_BIND fields in
 `dns/bind/Makefile`; synchronization does not advance that approval.
 
+## Synchronization app setup
+
+Review publication and interrupted-publication recovery authenticate with a
+private GitHub App installed only on `resolver-plugins/plugins`. Use a separate
+app from the [package publisher](package-repository.md), whose approved scope is
+`Contents: write` on `resolver-plugins/repository`. The synchronization app needs
+these repository permissions:
+
+| Permission | Access |
+| --- | --- |
+| Contents | Read and write |
+| Pull requests | Read and write |
+| Workflows | Read and write |
+| Metadata | Read-only, granted automatically |
+
+An organization owner or authorized app manager completes registration:
+
+1. Open the [prefilled registration form](https://github.com/organizations/resolver-plugins/settings/apps/new?name=Resolver%20Plugins%20Upstream%20Sync&description=Create%20reviewed%20upstream%20synchronization%20proposals%20for%20resolver-plugins%2Fplugins&url=https%3A%2F%2Fgithub.com%2Fresolver-plugins%2Fplugins&public=false&webhook_active=false&request_oauth_on_install=false&contents=write&pull_requests=write&workflows=write).
+   Check the permissions above, keep webhooks inactive, and select installation
+   access only for the app owner. Create the app; user OAuth authorization and
+   callback URLs are unnecessary for this installation-token workflow.
+2. Select **Install App**, choose `resolver-plugins`, and select **Only select
+   repositories** with `plugins` as the sole repository.
+3. In the app's **General** settings, copy its **Client ID** into the repository
+   Actions variable `RP_SYNC_APP_CLIENT_ID`. Open **Credentials** → **Key pairs**
+   → **New key**, then store the complete downloaded PEM contents in the
+   repository Actions secret `RP_SYNC_APP_PRIVATE_KEY`. Keep the private key out
+   of source and logs. GitHub's [private-key guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)
+   describes the current key-generation interface.
+
+`RP_SYNC_REVIEWER` remains the login assigned to generated review PRs.
+`actions/create-github-app-token@v3` requests the three write permissions above
+for the executing repository and revokes its short-lived token at job cleanup.
+Only the recovery and publication commands receive that token. Checkout uses a
+read-only `GITHUB_TOKEN` with credential persistence disabled.
+
+The Workflows permission is required because proposals include the generated
+`.github/workflows/bind-tests.yml` caller. It is unavailable through the
+`GITHUB_TOKEN` workflow `permissions` key. App authentication also allows PR
+creation independently of the repository's **Allow GitHub Actions to create
+and approve pull requests** setting. See GitHub's
+[token action](https://github.com/actions/create-github-app-token) and
+[app registration guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).
+
 ## Synchronizer outcomes
 
 | Planner action | Meaning | Automation result |
