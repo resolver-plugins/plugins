@@ -30,6 +30,10 @@ all: check
 
 .include "defaults.mk"
 
+.if defined(PLUGIN_MANIFEST_DEPENDS)
+SED_REPLACE+=	-e 's=%%PLUGIN_MANIFEST_DEPENDS%%=${PLUGIN_MANIFEST_DEPENDS}=g'
+.endif
+
 .if defined(PLUGIN_DEPEND_FORMULA)
 SED_REPLACE+=	-e 's|%%PLUGIN_DEPEND_FORMULA%%|${PLUGIN_DEPEND_FORMULA}|g'
 .endif
@@ -141,8 +145,9 @@ manifest: check
 	@echo "arch: \"${OSABIPREFIX:tl}:*:*\""
 	@echo "abi: \"${OSABIPREFIX}:*:*\""
 .endif
-.if defined(PLUGIN_DEPENDS)
+.if defined(PLUGIN_DEPENDS) || defined(PLUGIN_MANIFEST_DEPENDS)
 	@echo "deps: {"
+.if defined(PLUGIN_DEPENDS)
 	@for PLUGIN_DEPEND in ${PLUGIN_DEPENDS}; do \
 		case " ${PLUGIN_DEPEND_FORMULA_DEPENDS} " in \
 		*" $${PLUGIN_DEPEND} "*) continue;; \
@@ -153,6 +158,10 @@ manifest: check
 			exit 1; \
 		fi; \
 	done
+.endif
+.if defined(PLUGIN_MANIFEST_DEPENDS)
+	@echo '  ${PLUGIN_MANIFEST_DEPENDS}'
+.endif
 	@echo "}"
 .endif
 .if defined(PLUGIN_DEPEND_FORMULA)
