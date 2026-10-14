@@ -11,6 +11,7 @@ from shared.release_channel import (
     asset_order, run_gh, snapshot_matches_directory, snapshot_release,
     upload_release_assets,
 )
+from shared import series_builds
 
 
 def publish(repository: str, directory: Path, series: str, source_commit: str) -> None:
@@ -25,9 +26,19 @@ def publish(repository: str, directory: Path, series: str, source_commit: str) -
         raise ValueError("build metadata does not match the selected source and series")
     expected = {f"os-dhcp-interface-ha-{version}.pkg", "build-metadata.txt",
                 "upstream.json", "SHA256SUMS"}
+    suffix = ""
+    if "build_fingerprint" in metadata:
+        expected.add(series_builds.INPUT_FILE)
+        import json
+        record = json.loads((directory / series_builds.INPUT_FILE).read_text())
+        digest = series_builds.fingerprint(record)
+        if (digest != metadata['build_fingerprint'] or record['series'] != series
+                or record['component'] != 'dhcp_interface_ha'):
+            raise ValueError('source release inputs differ from build metadata')
+        suffix = '-' + digest
     if {path.name for path in directory.iterdir()} != expected:
         raise ValueError("unexpected release assets")
-    tag = f"os-dhcp-interface-ha-{series}-{version}"
+    tag = f"os-dhcp-interface-ha-{series}-{version}{suffix}"
     title = f"os-dhcp-interface-ha {series} {version}"
     with tempfile.TemporaryDirectory() as temporary:
         existing = snapshot_release(repository, tag, Path(temporary))

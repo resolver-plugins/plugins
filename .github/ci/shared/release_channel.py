@@ -104,7 +104,7 @@ def validate_bind_provenance(
     """Accept only the BIND pair implied by trusted control-plane metadata."""
     if (not isinstance(provenance, dict)
             or type(provenance.get("schema")) is not int
-            or provenance["schema"] != bind920_profile.PROVENANCE_SCHEMA):
+            or provenance["schema"] not in (bind920_profile.PROVENANCE_SCHEMA, 5)):
         raise ValueError("BIND provenance is invalid")
     try:
         expected = bind920_profile.build_provenance(
@@ -115,6 +115,7 @@ def validate_bind_provenance(
             package_creator,
             provenance["packages"],
             recipe_sha256=provenance["build_recipe_sha256"],
+            build_inputs_sha256=provenance.get("build_inputs_sha256"),
         )
     except (KeyError, ValueError) as error:
         raise ValueError("BIND provenance is invalid") from error

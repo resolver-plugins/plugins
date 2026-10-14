@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read and validate immutable os-bind-rp upstream build metadata."""
+"""Read and validate upstream inputs frozen in a build's trusted artifacts."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def validate_tools_record(record: object, profile: dict[str, str]) -> dict:
 
 
 def verify_tools_profile(profile: dict[str, str], tools_repository: Path) -> dict:
-    """Bind a source profile to the exact numeric tools tag and build.conf blob."""
+    """Bind generated provenance to the exact numeric tools tag and build.conf blob."""
     profile = validate_profile(profile, profile['series'])
     path = f"config/{profile['series']}/build.conf"
     try:
@@ -86,7 +86,7 @@ def verify_tools_profile(profile: dict[str, str], tools_repository: Path) -> dic
     if COMMIT_PATTERN.fullmatch(commit) is None:
         raise ValueError('tools tag does not resolve to an immutable commit')
     if freebsd_release != profile['freebsd_release']:
-        raise ValueError('tools OS assignment does not match source FreeBSD release')
+        raise ValueError('tools OS assignment does not match selected FreeBSD release')
     return {
         'schema': 1,
         'series': profile['series'],

@@ -36,7 +36,7 @@ def component_packages(directory, component, series):
     if component in bind.KINDS:
         data = bind.validate_component(directory, component, series)
         return [directory / name for name in data["packages"]]
-    if component != "dhcp" or series != "26.7":
+    if component != "dhcp":
         raise ValueError("unsupported HA component")
     data = dhcp.validate(directory)
     if data["series"] != series:
@@ -49,9 +49,9 @@ def receipt(directory, component, series):
         return bind.component_receipt(directory, component, series)
     packages = component_packages(directory, component, series)
     data = dhcp.validate(directory)
-    current, snapshot = dhcp.tags(series, data["plugin_version"])
+    current, snapshot = dhcp.tags(series, data["plugin_version"], data.get("build_fingerprint"))
     return dict(schema=1, component="dhcp", series=series, package_abi=data["package_creator"]["abi"],
-                current_tag=current, snapshot_tag=snapshot, fingerprint=None,
+                current_tag=current, snapshot_tag=snapshot, fingerprint=data.get("build_fingerprint"),
                 assets=bind._files(directory), packages={path.name:releases.sha256(path) for path in packages})
 
 
@@ -64,8 +64,6 @@ def fetch(repository, component, series, output):
         return bind.fetch_component(repository, component, series, output)
     if component != "dhcp":
         raise ValueError("invalid component")
-    if series != "26.7":
-        return None
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         current = releases.snapshot_release(repository, tag(component,series), root)
@@ -232,7 +230,6 @@ def validate(directory):
             or not isinstance(data["components"],dict)
             or set(data["components"]) not in ({"bind_runtime","bind_plugin"},{"bind_runtime","bind_plugin","dhcp"})
             or data["kind"] == "bind-stack" and "dhcp" in data["components"]
-            or "dhcp" in data["components"] and data["series"] != "26.7"
             or (directory / "resolver-plugins.pub").read_bytes() != PUBLIC_KEY.read_bytes()):
         raise ValueError("invalid composed catalogue identity")
     releases.validate_package_abi(data["package_abi"])
@@ -264,6 +261,8 @@ def validate(directory):
         channel = json.loads((directory / f"{component}-channel.json").read_text())
         if component in bind.KINDS:
             names = bind.RUNTIME_SIDECARS if component == "bind_runtime" else bind.PLUGIN_SIDECARS
+            if "series-build-inputs.json" in channel["assets"]:
+                names = names | {"series-build-inputs.json"}
             sidecars = {name:(directory / f"{component}-{name}").read_text() if name.endswith((".txt", ".mk"))
                         else json.loads((directory / f"{component}-{name}").read_text()) for name in names}
             bind.validate_component_record(channel,sidecars,packages,component,data["series"])
@@ -273,8 +272,9 @@ def validate(directory):
         else:
             build = dhcp.read_metadata(directory / "dhcp-build-metadata.txt")
             original = metadata_profile.validate_profile(json.loads((directory / "dhcp-upstream.json").read_text()),data["series"])
-            component_creator = dhcp.validate_component(channel,build,original)
-            tags = dhcp.tags(data["series"],channel["plugin_version"])
+            inputs = json.loads((directory / "dhcp-series-build-inputs.json").read_text()) if channel.get("schema") == 3 else None
+            component_creator = dhcp.validate_component(channel,build,original,inputs)
+            tags = dhcp.tags(data["series"],channel["plugin_version"],channel.get("build_fingerprint"))
             if set(packages) != {f"{dhcp.NAME}-{channel['plugin_version']}.pkg"}:
                 raise ValueError("unexpected composed HA package set")
         if (record["current_tag"],record["snapshot_tag"]) != tags or component_creator["abi"] != data["package_abi"]:

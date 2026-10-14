@@ -1,20 +1,42 @@
 name: Publish HA DHCP Interface package release
 
 on:
+  schedule:
+    - cron: '50 5 * * *'
   push:
     branches: [master]
-    paths: ['net/dhcp-interface-ha/Makefile']
+    paths:
+      - '.github/ci/ha_dhcp/**'
+      - '.github/ci/bind/shared/**'
+      - '.github/ci/shared/**'
+      - '.github/workflows/ha-dhcp-interface-release.yml'
+      - 'docs/package-repository/resolver-plugins.pub'
+      - 'net/dhcp-interface-ha/**'
+      - '!net/dhcp-interface-ha/tests/**'
+      - '!net/dhcp-interface-ha/README.md'
+      - 'Mk/**'
+      - 'Scripts/**'
+      - 'Templates/**'
+  pull_request_target:
+    types: [closed]
+    branches: ['release/dhcp-interface-ha/**']
+    paths:
+      - 'net/dhcp-interface-ha/**'
+      - '!net/dhcp-interface-ha/tests/**'
+      - '!net/dhcp-interface-ha/README.md'
+      - 'Mk/**'
+      - 'Scripts/**'
+      - 'Templates/**'
   workflow_dispatch:
     inputs:
       series:
-        description: OPNsense series with an existing reviewed release profile
-        type: choice
-        options: ['26.7']
-        default: '26.7'
+        description: OPNsense series with an existing reviewed release source
+        type: string
         required: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: package-release
@@ -22,17 +44,66 @@ concurrency:
   queue: max
 
 jobs:
+  select:
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    outputs:
+      release: ${{ steps.select.outputs.release }}
+      series: ${{ steps.select.outputs.series }}
+      source_ref: ${{ steps.select.outputs.source_ref }}
+      control_ref: ${{ steps.select.outputs.control_ref }}
+      discovery_sha256: ${{ steps.select.outputs.discovery_sha256 }}
+      discovery_artifact_id: ${{ steps.discovered.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/release/dhcp-interface-ha/" > "$RUNNER_TEMP/refs-pages.json"
+          jq '[.[][] | .ref]' "$RUNNER_TEMP/refs-pages.json" > "$RUNNER_TEMP/refs.json"
+          python3 -I .github/ci/shared/series_builds.py select-event \
+            --component dhcp_interface_ha --event-file "$GITHUB_EVENT_PATH" --refs-file "$RUNNER_TEMP/refs.json" \
+            --directory artifacts/discovered --dispatch \
+            --output "$RUNNER_TEMP/event-selection.json" --github-output "$GITHUB_OUTPUT"
+      - id: discovered
+        if: steps.select.outputs.release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ha-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/discovered
+          if-no-files-found: error
+          retention-days: 7
+
   test:
     needs: profile
     if: needs.profile.outputs.release == 'true'
     uses: ./.github/workflows/ha-dhcp-interface-tests.yml
+    with:
+      series: ${{ needs.profile.outputs.series }}
+      source_commit: ${{ needs.profile.outputs.source_commit }}
 
   profile:
+    needs: select
+    if: needs.select.outputs.release == 'true'
     runs-on: ubuntu-24.04
     outputs:
-      release: ${{ steps.select.outputs.release }}
-      series: ${{ steps.select.outputs.series }}
-      source_commit: ${{ steps.select.outputs.source_commit }}
+      release: ${{ needs.select.outputs.release }}
+      series: ${{ needs.select.outputs.series }}
+      source_commit: ${{ steps.profile.outputs.source_commit }}
+      control_commit: ${{ steps.profile.outputs.control_commit }}
+      selection_sha256: ${{ steps.profile.outputs.selection_sha256 }}
+      package_abi: ${{ steps.profile.outputs.package_abi }}
       profile_commit: ${{ steps.profile.outputs.profile_commit }}
       freebsd_release: ${{ steps.profile.outputs.freebsd_release }}
       target_artifact_id: ${{ steps.pkg-targets.outputs.artifact-id }}
@@ -42,41 +113,48 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.select.outputs.control_ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Select new version or manual retry
-        id: select
-        env:
-          SERIES: ${{ inputs.series || '26.7' }}
-        run: python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py select --series "$SERIES" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.select.outputs.discovery_artifact_id }}
+          path: ${{ runner.temp }}/discovered
+          merge-multiple: true
       - id: profile
-        if: steps.select.outputs.release == 'true'
         env:
-          SERIES: ${{ steps.select.outputs.series }}
+          SERIES: ${{ needs.select.outputs.series }}
+          SOURCE_REF: ${{ needs.select.outputs.source_ref }}
         run: |
           set -eu
-          test "$GITHUB_REF" = refs/heads/master
-          test "$SERIES" = 26.7
-          git fetch --no-tags origin "refs/heads/release/bind-rp/$SERIES:refs/remotes/origin/ha-build-profile"
-          profile_commit=$(git rev-parse refs/remotes/origin/ha-build-profile)
-          git show "$profile_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
-          freebsd_release=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release)
-          printf 'profile_commit=%s\nfreebsd_release=%s\n' "$profile_commit" "$freebsd_release" >> "$GITHUB_OUTPUT"
-
-          python3 .github/ci/shared/target_pkg.py resolve --upstream "$RUNNER_TEMP/upstream.json" --series "$SERIES" --architecture x86_64 --output-directory artifacts/trusted
-          tools_tag=$(python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" tools_tag)
-          git init --bare "$RUNNER_TEMP/opnsense-tools"
-          git -C "$RUNNER_TEMP/opnsense-tools" fetch --depth=1 https://github.com/opnsense/tools.git "refs/tags/$tools_tag:refs/tags/$tools_tag"
+          control_commit=$(git rev-parse HEAD)
+          test "$control_commit" = '${{ github.workflow_sha }}'
+          git fetch --no-tags origin "$SOURCE_REF"
+          source_commit=$(git rev-parse 'FETCH_HEAD^{commit}')
+          python3 -I .github/ci/shared/series_builds.py materialize-discovery \
+            --component dhcp_interface_ha --directory "$RUNNER_TEMP/discovered" \
+            --sha256 '${{ needs.select.outputs.discovery_sha256 }}' \
+            --source-commit "$source_commit" --control-commit "$control_commit" --series "$SERIES" \
+            --tools-repository "$RUNNER_TEMP/opnsense-tools" --output "$RUNNER_TEMP/upstream.json"
+          selection_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py source-inputs \
+            --series "$SERIES" --directory artifacts/trusted --source-commit "$source_commit" --control-commit "$control_commit" \
+            --upstream "$RUNNER_TEMP/upstream.json" \
+            --series-build-inputs "$RUNNER_TEMP/discovered/series-build-inputs.json" \
+            --tools-profile "$RUNNER_TEMP/discovered/tools-profile.json")
+          freebsd_release=$(python3 .github/ci/shared/metadata_profile.py artifacts/trusted/upstream.json "$SERIES" freebsd_release)
+          printf 'source_commit=%s\nprofile_commit=%s\ncontrol_commit=%s\nselection_sha256=%s\nfreebsd_release=%s\n' \
+            "$source_commit" "$source_commit" "$control_commit" "$selection_sha256" "$freebsd_release" >> "$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/discovered/creator-target.json" "$RUNNER_TEMP/discovered/reader-target.json" artifacts/trusted/
+          printf 'package_abi=%s\n' "$(python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" abi)" >> "$GITHUB_OUTPUT"
           bind_inputs_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py bind-inputs \
-            --series "$SERIES" --directory artifacts/trusted --upstream "$RUNNER_TEMP/upstream.json" \
+            --series "$SERIES" --directory artifacts/trusted --upstream "artifacts/trusted/upstream.json" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" --control-commit "$(git rev-parse HEAD)")
           printf 'bind_inputs_sha256=%s\n' "$bind_inputs_sha256" >> "$GITHUB_OUTPUT"
           printf 'creator_target_sha256=%s\nreader_target_sha256=%s\n' "$(sha256sum artifacts/trusted/creator-target.json | cut -d ' ' -f1)" "$(sha256sum artifacts/trusted/reader-target.json | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - id: pkg-targets
         uses: actions/upload-artifact@v4
-        if: steps.select.outputs.release == 'true'
         with:
-          name: pkg-targets-dhcp-${{ steps.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: pkg-targets-dhcp-${{ needs.select.outputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/trusted
           if-no-files-found: error
           retention-days: 7
@@ -88,21 +166,17 @@ jobs:
     outputs:
       producer_artifact_id: ${{ steps.producer.outputs.artifact-id }}
     env:
+      RP_TRUSTED_DIRECTORY: artifacts/trusted
+      RP_SELECTION_SHA256: ${{ needs.profile.outputs.selection_sha256 }}
+      CONTROL_COMMIT: ${{ needs.profile.outputs.control_commit }}
       RP_TARGET_PKG_METADATA: artifacts/trusted/creator-target.json
       RP_READER_PKG_METADATA: artifacts/trusted/reader-target.json
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          fetch-depth: 0
+          ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
-      - name: Materialize pinned compatibility profile
-        env:
-          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$PROFILE_COMMIT"
-          mkdir -p artifacts/profile
-          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/profile/upstream.json
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
@@ -117,11 +191,16 @@ jobs:
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
-          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role creator
-          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/profile/upstream.json --role reader
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
+          python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
           python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-bind-inputs \
-            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/profile/upstream.json \
+            --series "$SERIES" --directory artifacts/trusted --upstream artifacts/trusted/upstream.json \
             --control-commit '${{ github.workflow_sha }}' --sha256 '${{ needs.profile.outputs.bind_inputs_sha256 }}'
       - name: Build and verify in FreeBSD
         uses: vmactions/freebsd-vm@v1
@@ -132,7 +211,7 @@ jobs:
         with:
           release: ${{ needs.profile.outputs.freebsd_release }}
           arch: x86_64
-          envs: SERIES SOURCE_COMMIT PROFILE_COMMIT RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
+          envs: SERIES SOURCE_COMMIT PROFILE_COMMIT CONTROL_COMMIT RP_TRUSTED_DIRECTORY RP_SELECTION_SHA256 RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
           usesh: true
           disable-cache: true
           copyback: true
@@ -142,7 +221,7 @@ jobs:
             pkg update -f
             pkg install -y python3 git
             git config --global --add safe.directory "$PWD"
-            RP_UPSTREAM_METADATA=artifacts/profile/upstream.json .github/ci/ha_dhcp/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
+            RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/ha_dhcp/build-dhcp-interface-ha.sh "$SERIES" "artifacts/$SERIES"
       - id: producer
         uses: actions/upload-artifact@v4
         with:
@@ -153,7 +232,13 @@ jobs:
 
   sign:
     needs: [profile, build]
-    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: >-
+      needs.profile.outputs.release == 'true' &&
+      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
+        github.workflow_ref == format('{0}/.github/workflows/ha-dhcp-interface-release.yml@refs/heads/master', github.repository)))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     outputs:
@@ -165,6 +250,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Require producer artifact
@@ -174,14 +260,6 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.producer_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}
-      - name: Materialize trusted profile
-        env:
-          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$PROFILE_COMMIT"
-          mkdir -p artifacts/trusted
-          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
@@ -196,6 +274,11 @@ jobs:
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
@@ -208,7 +291,6 @@ jobs:
           RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
         run: |
           set -eu
-          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
           test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
       - name: Reuse immutable signed snapshot
         id: reuse
@@ -222,7 +304,8 @@ jobs:
           (cd "artifacts/$SERIES" && sha256sum --check SHA256SUMS)
           reused=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py reuse \
             --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
-            --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" --trusted-upstream artifacts/trusted/upstream.json --target-pkg-metadata "$RP_TARGET_PKG_METADATA")
+            --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" --trusted-upstream artifacts/trusted/upstream.json --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --package-definition artifacts/trusted/plugin-package.mk \
+            --series-build-inputs artifacts/trusted/series-build-inputs.json --control-commit '${{ github.workflow_sha }}')
           printf 'reused=%s\n' "$reused" >> "$GITHUB_OUTPUT"
       - name: Fetch published BIND runtime and plugin components
         env:
@@ -254,8 +337,7 @@ jobs:
             pkg update -f
             pkg install -y python3 git gh
             git config --global --add safe.directory "$PWD"
-            RP_OPNSENSE_SNAPSHOT=$(python3 .github/ci/ha_dhcp/dhcp_interface_ha_release.py snapshot --series "$SERIES")
-            export RP_OPNSENSE_SNAPSHOT
+            unset RP_OPNSENSE_SNAPSHOT
             python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py authenticate-peers \
               --series "$SERIES" --runtime-channel "artifacts/$SERIES/bind-runtime" --plugin-channel "artifacts/$SERIES/bind-plugin" \
               --upstream artifacts/trusted/upstream.json --reader-target "$RP_READER_PKG_METADATA" --creator-target "$RP_TARGET_PKG_METADATA" \
@@ -268,7 +350,8 @@ jobs:
               python3 .github/ci/ha_dhcp/dhcp_interface_ha_channel.py stage \
                 --directory "artifacts/$SERIES" --output "artifacts/$SERIES/repository/current" \
                 --series "$SERIES" --source-commit "$SOURCE_COMMIT" --profile-commit "$PROFILE_COMMIT" \
-                --trusted-upstream artifacts/trusted/upstream.json --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA"
+                --trusted-upstream artifacts/trusted/upstream.json --key "$key" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --package-definition artifacts/trusted/plugin-package.mk \
+                --series-build-inputs artifacts/trusted/series-build-inputs.json --control-commit '${{ github.workflow_sha }}'
             fi
             python3 .github/ci/shared/package_catalogue.py stage \
               --runtime-channel "artifacts/$SERIES/bind-runtime" --plugin-channel "artifacts/$SERIES/bind-plugin" \
@@ -306,7 +389,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          fetch-depth: 0
+          ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
@@ -315,14 +399,6 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
-      - name: Materialize trusted profile
-        env:
-          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$PROFILE_COMMIT"
-          mkdir -p artifacts/trusted
-          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
@@ -337,6 +413,11 @@ jobs:
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
@@ -365,7 +446,13 @@ jobs:
 
   publish:
     needs: [profile, sign, verify]
-    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: >-
+      needs.profile.outputs.release == 'true' &&
+      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
+        github.workflow_ref == format('{0}/.github/workflows/ha-dhcp-interface-release.yml@refs/heads/master', github.repository)))
     runs-on: ubuntu-24.04
     env:
       RP_COMPOSITION_SHA256: ${{ needs.sign.outputs.composition_sha256 }}
@@ -382,6 +469,11 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
       - name: Validate trusted source and sealed composition before publication
         env:
           SERIES: ${{ needs.profile.outputs.series }}
@@ -390,7 +482,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
           python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
             --component dhcp --series "$SERIES" --composition-sha256 "$RP_COMPOSITION_SHA256"
@@ -440,7 +536,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.profile.outputs.source_commit }}
+          fetch-depth: 0
+          ref: ${{ needs.profile.outputs.control_commit }}
           persist-credentials: false
       - name: Require sealed repository artifact
         run: test -n '${{ needs.sign.outputs.repository_artifact_id }}' && test -n "$RP_COMPOSITION_SHA256"
@@ -449,14 +546,6 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
-      - name: Materialize trusted profile
-        env:
-          PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$PROFILE_COMMIT"
-          mkdir -p artifacts/trusted
-          git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json" > artifacts/trusted/upstream.json
       - name: Require resolved pkg target artifact
         run: test -n '${{ needs.profile.outputs.target_artifact_id }}'
       - name: Download resolved pkg targets
@@ -471,6 +560,11 @@ jobs:
           SERIES: ${{ needs.profile.outputs.series }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           printf '%s  %s\n' '${{ needs.profile.outputs.creator_target_sha256 }}' artifacts/trusted/creator-target.json '${{ needs.profile.outputs.reader_target_sha256 }}' artifacts/trusted/reader-target.json | sha256sum --check --strict
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
@@ -495,11 +589,17 @@ jobs:
             expected="artifacts/$SERIES/repository/current"
             combined="artifacts/$SERIES/repository/combined"
             RP_UPSTREAM_METADATA=artifacts/trusted/upstream.json .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
-              "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/$SERIES/latest" "$combined"
+              "$SERIES" "$expected" "https://resolver-plugins.github.io/repository/pkg/${{ needs.profile.outputs.package_abi }}/$SERIES/latest" "$combined"
 
   source-release:
     needs: [profile, sign, verify-published]
-    if: needs.profile.outputs.release == 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: >-
+      needs.profile.outputs.release == 'true' &&
+      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.base.ref, 'release/dhcp-interface-ha/') &&
+        github.workflow_ref == format('{0}/.github/workflows/ha-dhcp-interface-release.yml@refs/heads/master', github.repository)))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -508,6 +608,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Require sealed repository artifact
@@ -517,6 +618,11 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
           merge-multiple: true
           path: artifacts/${{ needs.profile.outputs.series }}/repository
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.profile.outputs.target_artifact_id }}
+          merge-multiple: true
+          path: artifacts/trusted
       - name: Validate trusted source and sealed composition before source release
         env:
           SERIES: ${{ needs.profile.outputs.series }}
@@ -524,7 +630,11 @@ jobs:
           RP_EXPECTED_CONTROL_COMMIT: ${{ github.workflow_sha }}
         run: |
           set -eu
-          test "$SOURCE_COMMIT" = "$RP_EXPECTED_CONTROL_COMMIT"
+          git fetch --no-tags origin '${{ needs.profile.outputs.source_commit }}'
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py validate-source \
+            --series "$SERIES" --directory artifacts/trusted --repository-root "$PWD" \
+            --source-commit '${{ needs.profile.outputs.source_commit }}' --control-commit '${{ github.workflow_sha }}' \
+            --sha256 '${{ needs.profile.outputs.selection_sha256 }}'
           test "$(git rev-parse HEAD)" = "$RP_EXPECTED_CONTROL_COMMIT"
           python3 -I .github/ci/shared/package_catalogue.py validate --repository-root "artifacts/$SERIES/repository" \
             --component dhcp --series "$SERIES" --composition-sha256 "$RP_COMPOSITION_SHA256"
@@ -537,8 +647,8 @@ jobs:
           set -eu
           source_output="$RUNNER_TEMP/dhcpha-source"
           mkdir "$source_output"
-          cp "artifacts/$SERIES/repository/current/"os-dhcp-interface-ha-*.pkg "artifacts/$SERIES/repository/current/build-metadata.txt" "artifacts/$SERIES/repository/current/upstream.json" "$source_output/"
-          (cd "$source_output" && sha256sum ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)
+          cp "artifacts/$SERIES/repository/current/"os-dhcp-interface-ha-*.pkg "artifacts/$SERIES/repository/current/build-metadata.txt" "artifacts/$SERIES/repository/current/upstream.json" "artifacts/$SERIES/repository/current/series-build-inputs.json" "$source_output/"
+          (cd "$source_output" && sha256sum ./*.pkg build-metadata.txt upstream.json series-build-inputs.json > SHA256SUMS)
           python3 .github/ci/ha_dhcp/publish-dhcp-interface-ha.py \
             --repository "$GITHUB_REPOSITORY" --directory "$source_output" \
             --series "$SERIES" --source-commit "$SOURCE_COMMIT"

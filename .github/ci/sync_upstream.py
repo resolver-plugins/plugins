@@ -14,25 +14,24 @@ from typing import Any
 from shared.metadata_profile import (
     COMMIT_PATTERN,
     FREEBSD_RELEASE_PATTERN,
-    freebsd_from_build_conf,
     verify_tools_profile,
     tools_tag_matches_series,
     validate_core_archive,
     validate_profile,
 )
+from shared.upstream_inputs import source_baseline, tools_release_profile
 
 
 SERIES_PATTERN = re.compile(r'^stable/(\d+)\.(\d+)$')
 RELEASE_PATTERN = re.compile(r'^(\d+)\.(\d+)$')
-METADATA_PATH = '.resolver-plugins/upstream.json'
-AUDIT_PATH = '.resolver-plugins/sync-plan.json'
+AUDIT_TRAILER = 'Resolver-Sync-Plan: '
 CALLER_PATH = '.github/workflows/bind-tests.yml'
 OVERLAY_PATHS = ('dns/bind', 'Mk/plugins.mk', ':(exclude)dns/bind/tests')
 DISCOVERY_FIELDS = {
     'action', 'series', 'upstream_ref', 'upstream_commit', 'source_release',
     'target_release', 'tools_tag', 'freebsd_release', 'bind_changed', 'reason',
     'control_commit', 'source_commit', 'upstream_head', 'tools_commit',
-    'environment_changed',
+    'source_upstream_commit',
 }
 PLAN_FIELDS = DISCOVERY_FIELDS | {
     'schema', 'sync_branch', 'core_commit', 'core_archive_url', 'core_archive_sha256',
@@ -45,7 +44,6 @@ on:
     paths:
       - 'dns/bind/**'
       - 'Mk/plugins.mk'
-      - '.resolver-plugins/upstream.json'
       - '.github/workflows/bind-tests.yml'
 
 permissions:
@@ -117,56 +115,13 @@ def release_refs(repository: Path, release_prefix: str) -> dict[str, str]:
     return releases
 
 
-def load_metadata(
-    repository: Path,
-    release: str,
-    metadata_path: str,
-    source_series: str,
-    upstream: str,
-) -> dict:
-    try:
-        metadata = json.loads(run_git(repository, 'show', f'{release}:{metadata_path}'))
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
-        raise ValueError('missing or invalid source metadata') from None
-    expected_branch = f'stable/{source_series}'
-    try:
-        profile = validate_profile(metadata, source_series)
-    except ValueError:
-        raise ValueError('missing or invalid source metadata')
-    run_git(
-        repository,
-        'merge-base',
-        '--is-ancestor',
-        profile['upstream_commit'],
-        f'{upstream}/{expected_branch}',
-    )
-    return profile
-
-
 def bind_tree(repository: Path, revision: str) -> str:
     return run_git(repository, 'rev-parse', f'{revision}:dns/bind')
 
 
-def tools_release_profile(tools_repository: Path, series: str) -> tuple[str, str, str]:
-    tags = run_git(tools_repository, 'tag', '--list').splitlines()
-    candidates = []
-    pattern = re.compile(rf'{re.escape(series)}(?:\.(0|[1-9]\d*))?')
-    for tag in tags:
-        match = pattern.fullmatch(tag)
-        if match:
-            patch = int(match.group(1)) if match.group(1) is not None else -1
-            candidates.append((patch, tag))
-    if not candidates:
-        raise ValueError(f'missing numeric tools tag for {series}')
-    tools_tag = max(candidates)[1]
-    tools_commit = run_git(tools_repository, 'rev-parse', f'refs/tags/{tools_tag}^{{commit}}')
-    build_conf = run_git(tools_repository, 'show', f'{tools_commit}:config/{series}/build.conf')
-    return tools_tag, tools_commit, freebsd_from_build_conf(build_conf)
-
-
 def decision(action: str, reason: str, **values) -> dict:
     result = dict.fromkeys(DISCOVERY_FIELDS)
-    result.update(action=action, reason=reason, bind_changed=False, environment_changed=False)
+    result.update(action=action, reason=reason, bind_changed=False)
     result.update(values)
     return result
 
@@ -192,31 +147,26 @@ def discover(arguments: argparse.Namespace) -> dict:
                   series=latest_release, upstream_head=observed_head,
                   upstream_ref=f'{arguments.upstream}/stable/{latest_release}')
     try:
-        metadata = load_metadata(repository, source_commit, arguments.metadata_path,
-                                 latest_release, arguments.upstream)
-        verify_tools_profile(metadata, Path(arguments.tools_repository))
-        source_bind_tree = bind_tree(repository, metadata['upstream_commit'])
+        baseline = source_baseline(repository, source_commit,
+                                   f'{arguments.upstream}/stable/{latest_release}')
+        source_bind_tree = bind_tree(repository, baseline)
         tools_tag, tools_commit, freebsd_release = tools_release_profile(
             Path(arguments.tools_repository), latest_release)
         if observed_head is None:
             raise ValueError('missing upstream release ref')
         current_bind_tree = bind_tree(repository, observed_head)
     except (ValueError, subprocess.CalledProcessError):
-        return decision('blocked', 'missing or invalid source/tools release profile', **values)
-    values.update(upstream_commit=metadata['upstream_commit'], tools_tag=tools_tag,
-                  tools_commit=tools_commit, freebsd_release=freebsd_release,
-                  environment_changed=(tools_tag != metadata['tools_tag']
-                                       or freebsd_release != metadata['freebsd_release']))
+        return decision('blocked', 'missing source ancestry or upstream tools release', **values)
+    values.update(upstream_commit=baseline, source_upstream_commit=baseline, tools_tag=tools_tag,
+                  tools_commit=tools_commit, freebsd_release=freebsd_release)
     if source_bind_tree != current_bind_tree:
         values.update(upstream_commit=observed_head, bind_changed=True)
         return decision('update-review', 'upstream BIND tree changed', **values)
-    if values['environment_changed']:
-        return decision('update-review', 'upstream tools/build environment changed', **values)
 
     target_series = next((series for series in available
                           if series_key(series) > series_key(latest_release)), None)
     if target_series is None:
-        return decision('noop', 'upstream BIND tree and build environment are unchanged', **values)
+        return decision('noop', 'upstream BIND tree is unchanged; build inputs are discovered per run', **values)
     values.update(series=target_series, target_release=f'{arguments.release_prefix}{target_series}',
                   upstream_ref=f'{arguments.upstream}/stable/{target_series}',
                   upstream_head=stable[target_series], upstream_commit=stable[target_series])
@@ -227,9 +177,7 @@ def discover(arguments: argparse.Namespace) -> dict:
     except (ValueError, subprocess.CalledProcessError):
         return decision('blocked', 'missing or invalid target release profile', **values)
     values.update(tools_tag=tools_tag, tools_commit=tools_commit, freebsd_release=freebsd_release,
-                  bind_changed=bind_changed,
-                  environment_changed=(tools_tag != metadata['tools_tag']
-                                       or freebsd_release != metadata['freebsd_release']))
+                  bind_changed=bind_changed)
     reason = ('new series has an upstream BIND change' if bind_changed
               else 'new series has an unchanged BIND tree')
     return decision('bootstrap-review', reason, **values)
@@ -246,14 +194,15 @@ def sync_branch_for(plan_data: dict[str, Any]) -> str | None:
 
 
 def validate_plan(plan_data: dict[str, Any]) -> tuple[str, str, str, str | None]:
-    if not isinstance(plan_data, dict) or set(plan_data) != PLAN_FIELDS or plan_data['schema'] != 2:
+    if not isinstance(plan_data, dict) or set(plan_data) != PLAN_FIELDS or plan_data['schema'] != 3:
         raise ValueError('missing or invalid sealed plan')
     action = plan_data['action']
     series = plan_data['series']
     if (action not in {'bootstrap-build', 'bootstrap-review', 'update-review'}
             or not isinstance(series, str) or RELEASE_PATTERN.fullmatch(series) is None):
         raise ValueError('missing or invalid sealed plan')
-    for field in ('control_commit', 'source_commit', 'upstream_head', 'upstream_commit', 'tools_commit'):
+    for field in ('control_commit', 'source_commit', 'upstream_head', 'upstream_commit', 'tools_commit',
+                  'source_upstream_commit'):
         if not isinstance(plan_data[field], str) or COMMIT_PATTERN.fullmatch(plan_data[field]) is None:
             raise ValueError('missing or invalid sealed plan')
     if (plan_data['upstream_ref'] != f'upstream/stable/{series}'
@@ -262,7 +211,6 @@ def validate_plan(plan_data: dict[str, Any]) -> tuple[str, str, str, str | None]
             or re.fullmatch(r'release/bind-rp/\d+\.\d+', plan_data['source_release']) is None
             or not isinstance(plan_data['reason'], str) or not plan_data['reason']
             or not isinstance(plan_data['bind_changed'], bool)
-            or not isinstance(plan_data['environment_changed'], bool)
             or not isinstance(plan_data['tools_tag'], str)
             or not tools_tag_matches_series(plan_data['tools_tag'], series)
             or not isinstance(plan_data['freebsd_release'], str)
@@ -270,7 +218,7 @@ def validate_plan(plan_data: dict[str, Any]) -> tuple[str, str, str, str | None]
         raise ValueError('missing or invalid sealed plan')
     if action == 'update-review':
         if (plan_data['source_release'] != plan_data['target_release']
-                or not (plan_data['bind_changed'] or plan_data['environment_changed'])):
+                or not plan_data['bind_changed']):
             raise ValueError('missing or invalid sealed plan')
     elif series_key(plan_data['source_release'].rsplit('/', 1)[-1]) >= series_key(series):
         raise ValueError('missing or invalid sealed plan')
@@ -287,7 +235,7 @@ def seal_plan(discovery: dict, core_commit: str, core_archive_url: str,
               core_archive_sha256: str) -> dict:
     if not isinstance(discovery, dict) or set(discovery) != DISCOVERY_FIELDS:
         raise ValueError('missing or invalid discovery')
-    plan_data = dict(discovery, schema=2, core_commit=core_commit,
+    plan_data = dict(discovery, schema=3, core_commit=core_commit,
                      core_archive_url=core_archive_url, core_archive_sha256=core_archive_sha256)
     plan_data['sync_branch'] = sync_branch_for(plan_data)
     validate_plan(plan_data)
@@ -343,14 +291,6 @@ def read_apply_plan(plan_path: str) -> dict[str, Any]:
     return plan_data
 
 
-def source_metadata(repository: Path, revision: str) -> dict[str, str]:
-    try:
-        metadata = json.loads(require_git(repository, 'show', f'{revision}:{METADATA_PATH}'))
-        return validate_profile(metadata, metadata['series'])
-    except (ValueError, json.JSONDecodeError, KeyError, TypeError):
-        raise ValueError('missing or invalid source metadata') from None
-
-
 def metadata_for(plan_data: dict[str, Any]) -> dict[str, str]:
     profile = {field: plan_data[field] for field in
                ('series', 'upstream_commit', 'tools_tag', 'freebsd_release', 'core_commit',
@@ -369,54 +309,44 @@ def validate_frozen_inputs(repository: Path, plan_data: dict[str, Any],
         raise ValueError('source release ref does not match sealed plan')
     if require_git(repository, 'rev-parse', f"{plan_data['upstream_ref']}^{{commit}}") != plan_data['upstream_head']:
         raise ValueError('upstream ref does not match sealed plan')
-    metadata = source_metadata(repository, plan_data['source_commit'])
-    if metadata['series'] != plan_data['source_release'].rsplit('/', 1)[-1]:
-        raise ValueError('source metadata does not match the frozen release series')
-    verify_tools_profile(metadata, tools_repository)
-    source_upstream_ref = f"upstream/{metadata['upstream_branch']}"
-    if git_result(repository, 'merge-base', '--is-ancestor', metadata['upstream_commit'], source_upstream_ref).returncode:
-        raise ValueError('missing or invalid source metadata')
-    source_tree = bind_tree(repository, metadata['upstream_commit'])
+    source_series = plan_data['source_release'].rsplit('/', 1)[-1]
+    baseline = source_baseline(repository, plan_data['source_commit'], f'upstream/stable/{source_series}')
+    if baseline != plan_data['source_upstream_commit']:
+        raise ValueError('source upstream ancestry does not match sealed plan')
+    source_tree = bind_tree(repository, baseline)
     observed_tree = bind_tree(repository, plan_data['upstream_head'])
     if (source_tree != observed_tree) != plan_data['bind_changed']:
         raise ValueError('BIND tree decision does not match sealed inputs')
-    environment_changed = (metadata['tools_tag'] != plan_data['tools_tag']
-                           or metadata['freebsd_release'] != plan_data['freebsd_release'])
-    if environment_changed != plan_data['environment_changed']:
-        raise ValueError('environment decision does not match sealed inputs')
     expected_baseline = (plan_data['upstream_head']
                          if plan_data['bind_changed'] or plan_data['action'].startswith('bootstrap')
-                         else metadata['upstream_commit'])
+                         else baseline)
     if plan_data['upstream_commit'] != expected_baseline:
         raise ValueError('upstream baseline does not match sealed inputs')
     proof = verify_tools_profile(metadata_for(plan_data), tools_repository)
     if proof['tools_commit'] != plan_data['tools_commit']:
         raise ValueError('tools tag does not match sealed plan commit')
-    return metadata
+    return {'upstream_commit': baseline}
 
 
-def commit_clone(clone: Path, paths: list[str], metadata: dict,
-                 message: str, plan_data: dict | None = None) -> None:
+def commit_clone(clone: Path, paths: list[str], message: str,
+                 plan_data: dict | None = None) -> None:
     conflicts = unmerged_paths(clone)
     if conflicts:
         raise ValueError(f'overlay patch conflicts: {", ".join(conflicts)}')
-    profile_path = clone / METADATA_PATH
-    profile_path.parent.mkdir(parents=True, exist_ok=True)
-    profile_path.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
-    generated = [METADATA_PATH]
+    generated = []
     if plan_data is not None:
-        (clone / AUDIT_PATH).write_text(json.dumps(plan_data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
         caller_path = clone / CALLER_PATH
         caller_path.parent.mkdir(parents=True, exist_ok=True)
         caller_path.write_text(THIN_CALLER, encoding='utf-8')
-        generated.extend((AUDIT_PATH, CALLER_PATH))
-    require_git(clone, 'add', '--all', '--', *generated, *paths)
-    if git_result(clone, 'diff', '--cached', '--quiet').returncode:
-        parent_timestamp = require_git(clone, 'show', '-s', '--format=%ct', 'HEAD')
-        environment = os.environ.copy()
-        environment.update(GIT_AUTHOR_DATE=f'@{parent_timestamp} +0000',
-                           GIT_COMMITTER_DATE=f'@{parent_timestamp} +0000')
-        require_git(clone, 'commit', '-m', message, environment=environment)
+        generated.append(CALLER_PATH)
+        message += '\n\n' + AUDIT_TRAILER + json.dumps(plan_data, sort_keys=True, separators=(',', ':'))
+    if generated or paths:
+        require_git(clone, 'add', '--all', '--', *generated, *paths)
+    parent_timestamp = require_git(clone, 'show', '-s', '--format=%ct', 'HEAD')
+    environment = os.environ.copy()
+    environment.update(GIT_AUTHOR_DATE=f'@{parent_timestamp} +0000',
+                       GIT_COMMITTER_DATE=f'@{parent_timestamp} +0000')
+    require_git(clone, 'commit', '--allow-empty', '-m', message, environment=environment)
 
 
 def with_clone(repository: Path, revision: str, callback) -> Any:
@@ -471,33 +401,26 @@ def apply(arguments: argparse.Namespace) -> None:
     tools_repository = Path(arguments.tools_repository)
     metadata = validate_frozen_inputs(repository, plan_data, tools_repository)
     action, _, target, sync_branch = validate_plan(plan_data)
-    environment_only = action == 'update-review' and not plan_data['bind_changed']
-    patch = b''
-    if not environment_only:
-        result = git_result(repository, 'diff', '--binary',
-                            f"{metadata['upstream_commit']}..{plan_data['source_commit']}",
-                            '--', *OVERLAY_PATHS)
-        if result.returncode:
-            raise ValueError('unable to create overlay patch')
-        patch = result.stdout
-    base = plan_data['source_commit'] if environment_only else plan_data['upstream_commit']
-    new_metadata = metadata_for(plan_data)
+    result = git_result(repository, 'diff', '--binary',
+                        f"{metadata['upstream_commit']}..{plan_data['source_commit']}",
+                        '--', *OVERLAY_PATHS)
+    if result.returncode:
+        raise ValueError('unable to create overlay patch')
+    patch = result.stdout
+    base = plan_data['upstream_commit']
 
     def build_commits(clone: Path):
         if action == 'bootstrap-review':
-            commit_clone(clone, [], new_metadata, 'bootstrap resolver plugin release')
+            commit_clone(clone, [], 'bootstrap resolver plugin release')
             target_commit = require_git(clone, 'rev-parse', 'HEAD')
             if patch:
                 apply_overlay(clone, patch)
-            commit_clone(clone, list(OVERLAY_PATHS), new_metadata,
-                         'bootstrap resolver plugin overlay', plan_data)
+            commit_clone(clone, list(OVERLAY_PATHS), 'bootstrap resolver plugin overlay', plan_data)
             return target_commit, require_git(clone, 'rev-parse', 'HEAD')
         if patch:
             apply_overlay(clone, patch)
-        message = ('bootstrap resolver plugin release' if action == 'bootstrap-build'
-                   else 'review BIND build environment' if environment_only else 'sync BIND overlay')
-        commit_clone(clone, [] if environment_only else list(OVERLAY_PATHS),
-                     new_metadata, message, plan_data if sync_branch else None)
+        message = 'bootstrap resolver plugin release' if action == 'bootstrap-build' else 'sync BIND overlay'
+        commit_clone(clone, list(OVERLAY_PATHS), message, plan_data if sync_branch else None)
         return require_git(clone, 'rev-parse', 'HEAD')
 
     commits = with_clone(repository, base, build_commits)
@@ -517,7 +440,6 @@ def main() -> None:
     discover_parser.add_argument('--repository', required=True)
     discover_parser.add_argument('--upstream', required=True)
     discover_parser.add_argument('--release-prefix', required=True)
-    discover_parser.add_argument('--metadata-path', required=True)
     discover_parser.add_argument('--tools-repository', required=True)
     discover_parser.add_argument('--control-commit', required=True)
     outputs_parser = commands.add_parser('github-outputs')
@@ -529,6 +451,9 @@ def main() -> None:
     seal_parser.add_argument('--core-archive-url', required=True)
     seal_parser.add_argument('--core-archive-sha256', required=True)
     seal_parser.add_argument('--output', required=True)
+    profile_parser = commands.add_parser('profile')
+    profile_parser.add_argument('--plan', required=True)
+    profile_parser.add_argument('--output', required=True)
     apply_parser = commands.add_parser('apply')
     apply_parser.add_argument('--repository', required=True)
     apply_parser.add_argument('--plan', required=True)
@@ -551,6 +476,9 @@ def main() -> None:
             sealed = seal_plan(discovery, arguments.core_commit, arguments.core_archive_url,
                                arguments.core_archive_sha256)
             Path(arguments.output).write_text(json.dumps(sealed, indent=2, sort_keys=True) + '\n')
+        elif arguments.command == 'profile':
+            Path(arguments.output).write_text(json.dumps(metadata_for(read_apply_plan(arguments.plan)),
+                                                        indent=2, sort_keys=True) + '\n')
         else:
             apply(arguments)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

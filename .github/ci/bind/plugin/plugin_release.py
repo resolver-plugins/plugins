@@ -3,62 +3,18 @@
 import argparse
 import json
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bind.shared import components
 from shared import package_catalogue, package_checksums, target_pkg
+from shared.plugin_source import materialize_source, verify_package_source
 from shared import release_channel as releases
 
-SOURCE_PATHS = ("dns/bind", "Mk", "Scripts", "Templates")
-SOURCE_REQUIRED = ("dns/bind/Makefile", "Mk/plugins.mk", "Mk/defaults.mk", "Mk/common.mk")
 SOURCE_ASSETS = ("build-metadata.txt", "plugin-build-inputs.json", "upstream.json",
                  "creator-target.json", "plugin-package.mk", "channel.json")
-
-
-def materialize_source(repository, source_commit, upstream):
-    """Extract only exact source-owned paths, leaving control code/policy intact."""
-    if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
-        raise ValueError("plugin source must be a full immutable commit")
-    command = ["git", "-C", str(repository)]
-    resolved = subprocess.check_output([*command, "rev-parse", f"{source_commit}^{{commit}}"], text=True).strip()
-    if resolved != source_commit:
-        raise ValueError("plugin source object differs from selection")
-    original_upstream = subprocess.check_output([*command, "show", f"{source_commit}:.resolver-plugins/upstream.json"])
-    if original_upstream != upstream.read_bytes():
-        raise ValueError("source upstream bytes differ from trusted selection")
-    for path in SOURCE_REQUIRED:
-        if subprocess.check_output([*command, "cat-file", "-t", f"{source_commit}:{path}"], text=True).strip() != "blob":
-            raise ValueError(f"required plugin source input is missing: {path}")
-    present = []
-    for path in SOURCE_PATHS:
-        result = subprocess.run([*command, "cat-file", "-t", f"{source_commit}:{path}"], text=True, capture_output=True)
-        if result.returncode == 0:
-            if result.stdout.strip() != "tree":
-                raise ValueError(f"plugin source input is not a directory: {path}")
-            present.append(path)
-    with tempfile.TemporaryDirectory() as temporary:
-        extracted = Path(temporary)
-        archive = extracted / "source.tar"
-        with archive.open("wb") as stream:
-            subprocess.run([*command, "archive", source_commit, "--", *present], check=True, stdout=stream)
-        with tarfile.open(archive) as source:
-            source.extractall(extracted, filter="data")
-        # Prepare every source tree before replacing any checkout tree.
-        for path in SOURCE_PATHS:
-            destination = repository / path
-            if destination.is_symlink() or destination.is_file():
-                destination.unlink()
-            elif destination.exists():
-                shutil.rmtree(destination)
-            if path in present:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(extracted / path, destination, symlinks=True)
 
 
 def fetch_intake(repository, trusted, selection, output):
@@ -143,16 +99,7 @@ def validate_output(directory, selection, trusted, pkg_command):
         components.validate_plugin_archive(record, dependencies, requirement,
                                            built_runtime_version=built_version, development=True)
         components._validate_plugin_file_map(record, package_checksums.verify_archive(pkg_command, archive))
-    # FreeBSD tar understands the native pkg compression; target Python need not.
-    entries = subprocess.check_output(["tar", "-tf", str(archive)], text=True).splitlines()
-    names = {"usr/local/opnsense/version/bind-rp", "/usr/local/opnsense/version/bind-rp",
-             "./usr/local/opnsense/version/bind-rp"}
-    matches = [entry for entry in entries if entry in names]
-    if len(matches) != 1:
-        raise ValueError("fresh plugin archive lacks one packaged version file")
-    version = json.loads(subprocess.check_output(["tar", "-xOf", str(archive), matches[0]], text=True))
-    if not isinstance(version, dict) or version.get("product_hash") != selection["source_commit"]:
-        raise ValueError("fresh packaged version hash differs from selected source")
+    verify_package_source(archive, "bind-rp", selection["source_commit"])
 
 
 def prepare_source_assets(component, output, series, selection):
@@ -162,6 +109,8 @@ def prepare_source_assets(component, output, series, selection):
     output.mkdir(parents=True)
     for name in (*manifest["packages"], *SOURCE_ASSETS):
         shutil.copyfile(component / name, output / name)
+    if (component / "series-build-inputs.json").is_file():
+        shutil.copyfile(component / "series-build-inputs.json", output / "series-build-inputs.json")
     return f"os-bind-rp-{series}-{manifest['plugin_version']}-plugin-{manifest['build_fingerprint']}"
 
 
@@ -200,7 +149,7 @@ def main():
         if inputs["build_recipe_sha256"] != releases.sha256(args.repository_root / ".github/ci/bind/plugin/build-os-bind-rp.sh"):
             raise ValueError("plugin wrapper differs from trusted build input")
         components.validate_selected_git(selection, args.trusted_directory)
-        materialize_source(args.repository_root, args.source_commit, args.trusted_directory / "upstream.json")
+        materialize_source(args.repository_root, args.source_commit)
         definition = args.repository_root / "dns/bind/Makefile"
         trusted_definition = args.trusted_directory / "plugin-package.mk"
         if definition.read_bytes() != trusted_definition.read_bytes():

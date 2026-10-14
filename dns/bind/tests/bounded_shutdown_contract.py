@@ -1,4 +1,4 @@
-import json
+from .package_lifecycle_contract import current_release_series
 
 
 BOUNDED_SHUTDOWN_THRESHOLDS = {
@@ -8,8 +8,9 @@ BOUNDED_SHUTDOWN_THRESHOLDS = {
 
 
 def current_release_requires_bounded_shutdown(bind_root):
-    metadata = bind_root.parents[1] / ".resolver-plugins/upstream.json"
-    series = json.loads(metadata.read_text())["series"]
+    series = current_release_series(bind_root)
+    if tuple(int(part) for part in series.split('.')) > (26, 7):
+        return True
     try:
         threshold = BOUNDED_SHUTDOWN_THRESHOLDS[series]
     except KeyError as error:

@@ -13,9 +13,9 @@ the packages conflict and must never be installed together.
 
 `master` is the control plane. It contains documentation and CI code that
 discovers compatible upstream releases. Each `release/bind-rp/<series>` branch
-is a reviewed build source for one OPNsense series. The release branch records
-immutable plugin, tools, FreeBSD, core archive, and checksum provenance in
-`.resolver-plugins/upstream.json`.
+is a reviewed build source for one OPNsense series. Controllers discover upstream
+inputs when needed and freeze their immutable identities in each run's trusted
+artifacts; release branches do not require `.resolver-plugins` files.
 
 Automation is deliberately conservative. An upstream BIND change becomes a
 review PR; it does not silently advance a release branch. An unchanged BIND
@@ -27,9 +27,7 @@ self-contained current and rollback channels are generated in
 
 - `dns/bind/`: the `os-bind-rp` plugin package definition and fork-specific
   plugin changes.
-- `.resolver-plugins/`: release build metadata and the synchronization overlay
-  manifest.
-- `.github/ci/`: metadata validation, OPNsense repository setup, package build,
+- `.github/ci/`: upstream discovery and validation, OPNsense repository setup, package build,
   synchronization planning, and safe GitHub publication helpers.
 - `.github/workflows/`: the daily/manual synchronizer and signed package
   publication workflows.
@@ -47,12 +45,18 @@ self-contained current and rollback channels are generated in
   minimum needed for the BIND/DoT fix used by this fork.
 - Keep fork-specific plugin changes small and isolated under `dns/bind`.
   Do not take unrelated upstream plugin changes into this fork.
-- `master` contains the CI control plane. Per-release source and immutable
-  build metadata belong on `release/bind-rp/<series>` branches. Never rewrite
+- `master` contains the CI control plane. Reviewed per-release source belongs
+  on `release/bind-rp/<series>` branches. Preserve upstream ancestry when merging
+  generated source reviews so discovery can derive their baseline. Never rewrite
   those branches or generated `sync/bind/*` and `sync/bootstrap/*` refs.
-- Treat every field in `.resolver-plugins/upstream.json` as immutable build
-  provenance. A profile must use a matching `opnsense/tools` numeric tag and
-  the `OS?=` value from `config/<series>/build.conf`.
+- Discover upstream inputs once per controller run and seal the resolved commits
+  and recipe hashes before consumers run. A generated profile must use a matching
+  `opnsense/tools` numeric tag and the `OS?=` value from `config/<series>/build.conf`.
+  Consumers must use the sealed inputs without resolving moving refs again.
+- Compare build inputs independently for each plugin and registered OPNsense
+  series. Select only changed series; a change confined to one series must not
+  rebuild its peers. Preserve historical signed snapshots when publishing a new
+  build variant under an unchanged reviewed plugin version.
 - Do not weaken provenance checks, pin checks, package fingerprint checks, or
   the explicit `os-bind` conflict to make a build pass.
 - Keep durable CI helper and workflow regression tests in
@@ -60,46 +64,21 @@ self-contained current and rollback channels are generated in
   services. Keep the canonical BIND behavior suite in `dns/bind/tests/` on
   `master`; its PR workflow materializes and tests every active
   `release/bind-rp/<series>` source. Use the ignored `.github/ci-local/`
-  directory only for temporary CI discovery and investigation harnesses;
+  directory only for CI discovery reports and investigation harnesses;
   never stage or commit anything under it.
-- Keep agent-generated process documents under the ignored
-  `docs/superpowers/` directory local-only. Never force-add or commit designs,
-  specifications, implementation plans, or other process notes from that
-  directory, even when a skill requests committing them; this repository rule
-  takes precedence.
 - The signed package repository is an approved system. Do not alter its
   GitHub Release publication, signing boundary, tokens, secrets, or end-user
   installation contract without explicit maintainer authorization.
 - Verify CI changes with the focused local checks in
   [docs/building.md](docs/building.md), and run the affected workflow manually
   only when authorized. Report the workflow URL and its actual outcome.
-- If a written implementation plan is created, have an independent agent
-  review it before implementation. The plan must state the required behavior,
-  the minimal sufficient architecture, and the current requirement served by
-  every proposed abstraction, boundary, configuration option, retry, cache,
-  state store, dependency, and durable test. Remove proposals with no
-  demonstrated current requirement.
-- Treat correctness, security, data-loss, compatibility, provenance, and
-  public-contract findings as blocking regardless of the review tool's
-  severity vocabulary. Resolve blocking findings and repeat review before
-  implementation or merge.
-- Before declaring a PR ready, run an independent code review for changes to
-  executable code, tests, workflows, build or release behavior, provenance,
-  security boundaries, persisted state, or public contracts. Purely editorial
-  documentation changes may skip independent review only when they alter no
-  command, procedure, policy, generated content, link contract, or
-  machine-consumed content. Human PR review does not replace required agent
-  review.
-- Every code review must apply both the `code-simplifier` and
-  `test-suite-simplifier` as read-only passes. Review implementation and
-  architecture for unexplained accretion; review changed tests for distinct
-  regression value, duplication, implementation coupling, inappropriate test
-  level, and exploratory residue. Also perform a documentation-impact and
-  accuracy check; update documentation only when the change affects its
-  contract or accuracy.
 - Discovery and troubleshooting tests may remain temporary while investigating
-  uncertainty. Keep them outside the final diff, using a temporary directory
-  or `.github/ci-local/` for CI investigations. Promote a test into the
+  uncertainty. Keep them outside the final diff. Create temporary Git fixtures
+  and disposable clones under a unique `/tmp` directory with automatic cleanup
+  (`TemporaryDirectory` or a shell exit trap). Keep CI reports and harnesses in
+  `.github/ci-local/`, but do not retain generated repositories there. Remove
+  generated repositories before finishing; if failure evidence must remain,
+  report its path and cleanup command explicitly. Promote a test into the
   repository only when it protects a distinct observable behavior, invariant,
   known regression, security or compatibility risk, integration boundary, or
   machine-enforced contract.

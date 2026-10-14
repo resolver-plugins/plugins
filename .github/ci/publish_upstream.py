@@ -12,10 +12,9 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 
-from shared.metadata_profile import validate_profile
 from sync_upstream import (
-    AUDIT_PATH, CALLER_PATH, METADATA_PATH, SYNC_PATTERN, THIN_CALLER,
-    metadata_for, source_metadata, validate_frozen_inputs, validate_plan,
+    AUDIT_TRAILER, CALLER_PATH, SYNC_PATTERN, THIN_CALLER,
+    validate_frozen_inputs, validate_plan,
 )
 
 
@@ -41,36 +40,14 @@ def local_commit(repository: Path, branch: str) -> str:
     return commit
 
 
-def metadata_at(repository: Path, revision: str) -> dict[str, str]:
-    try:
-        metadata = json.loads(local_git(repository, 'show', f'{revision}:{METADATA_PATH}'))
-    except (ValueError, json.JSONDecodeError):
-        raise ValueError(f'missing synchronization metadata at {revision}') from None
-    if not isinstance(metadata, dict):
-        raise ValueError(f'missing synchronization metadata at {revision}')
-    required = ('series', 'upstream_commit')
-    if any(not isinstance(metadata.get(field), str) or not metadata[field] for field in required):
-        raise ValueError(f'missing synchronization metadata at {revision}')
-    if not valid_release_metadata(
-        metadata,
-        metadata['series'],
-        metadata['upstream_commit'],
-    ):
-        raise ValueError(f'missing synchronization metadata at {revision}')
-    return metadata
-
-
-def valid_release_metadata(metadata: dict[str, str], series: str, upstream_commit: str) -> bool:
-    try:
-        profile = validate_profile(metadata, series)
-    except ValueError:
-        return False
-    return profile['upstream_commit'] == upstream_commit
-
-
 def audit_at(repository: Path, revision: str) -> dict:
     try:
-        plan = json.loads(local_git(repository, 'show', f'{revision}:{AUDIT_PATH}'))
+        message = local_git(repository, 'show', '-s', '--format=%B', revision)
+        audits = [line.removeprefix(AUDIT_TRAILER) for line in message.splitlines()
+                  if line.startswith(AUDIT_TRAILER)]
+        if len(audits) != 1:
+            raise ValueError('missing or ambiguous synchronization audit')
+        plan = json.loads(audits[0])
     except (ValueError, json.JSONDecodeError):
         raise ValueError(f'missing synchronization audit at {revision}') from None
     validate_plan(plan)
@@ -79,16 +56,12 @@ def audit_at(repository: Path, revision: str) -> dict:
 
 def validate_generated_state(repository: Path, plan: dict, target_commit: str | None,
                              sync_commit: str | None) -> None:
-    expected_metadata = metadata_for(plan)
-    for commit in (target_commit, sync_commit):
-        if commit and metadata_at(repository, commit) != expected_metadata:
-            raise ValueError('generated metadata does not match sealed publication plan')
     if target_commit and plan['action'] == 'bootstrap-review':
         if local_git(repository, 'rev-list', '--parents', '-n', '1', target_commit).split() != [target_commit, plan['upstream_commit']]:
             raise ValueError('bootstrap release does not parent the selected upstream commit')
         changed = local_git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r',
                             plan['upstream_commit'], target_commit).splitlines()
-        if changed != [METADATA_PATH]:
+        if changed:
             raise ValueError('bootstrap base is not pristine')
     if sync_commit is None:
         return
@@ -97,18 +70,17 @@ def validate_generated_state(repository: Path, plan: dict, target_commit: str | 
     caller = local_git(repository, 'show', f'{sync_commit}:{CALLER_PATH}', binary=True)
     if caller != THIN_CALLER.encode():
         raise ValueError('generated review caller does not match the trusted template')
-    environment_only = plan['action'] == 'update-review' and not plan['bind_changed']
     parent = (target_commit if plan['action'] == 'bootstrap-review'
-              else plan['source_commit'] if environment_only else plan['upstream_commit'])
+              else plan['upstream_commit'])
     if local_git(repository, 'rev-list', '--parents', '-n', '1', sync_commit).split() != [sync_commit, parent]:
         raise ValueError('review commit parent does not match sealed publication plan')
     changed = local_git(repository, 'diff-tree', '--no-commit-id', '--name-only', '-r',
                         parent, sync_commit).splitlines()
-    generated = {METADATA_PATH, AUDIT_PATH, CALLER_PATH}
+    generated = {CALLER_PATH}
     for path in changed:
         overlay = (path == 'Mk/plugins.mk' or path.startswith('dns/bind/'))
         tests = path == 'dns/bind/tests' or path.startswith('dns/bind/tests/')
-        if path not in generated and (environment_only or not overlay or tests):
+        if path not in generated and (not overlay or tests):
             raise ValueError('review includes changes outside the bounded fork overlay')
 
 
@@ -363,11 +335,9 @@ def review_text(plan: dict, source_profile: dict) -> tuple[str, str]:
     comparison = ('https://github.com/opnsense/plugins/compare/'
                   f"{source_profile['upstream_commit']}...{plan['upstream_commit']}")
     source = 'BIND source changed' if plan['bind_changed'] else 'BIND source unchanged'
-    environment = ('Build environment changed' if plan['environment_changed']
-                   else 'Build environment unchanged')
-    body = (f'{source}; {environment.lower()}. Review before merging.\n\n'
-            f"Tools: `{source_profile['tools_tag']}` -> `{plan['tools_tag']}`; "
-            f"FreeBSD: `{source_profile['freebsd_release']}` -> `{plan['freebsd_release']}`.\n"
+    body = (f'{source}. Review before merging.\n\n'
+            f"Discovery observed tools `{plan['tools_tag']}` and FreeBSD `{plan['freebsd_release']}`. "
+            'Builds discover and seal their own inputs.\n'
             f"Pinned core: `{plan['core_commit']}`.\n"
             f'Upstream comparison: {comparison}')
     return f'Review upstream BIND synchronization for {series}', body

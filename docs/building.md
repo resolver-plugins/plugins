@@ -2,13 +2,16 @@
 
 ## Build inputs
 
-Build a release branch in the FreeBSD release declared by that branch's
-`.resolver-plugins/upstream.json`. Release profiles live only on release branches;
-builds using the `master` control plane extract the selected release commit's
-profile before validation. The profile contains exactly these immutable inputs:
+The controller generates a build profile when a run selects its reviewed release
+source. `.github/ci/shared/upstream_inputs.py` derives the plugins baseline from
+Git ancestry, selects the newest matching numeric `opnsense/tools` tag, reads
+FreeBSD from its `build.conf`, and resolves the series' core stable commit. No file
+under `.resolver-plugins` is required or read, including historical copies on
+release branches. The generated profile contains exactly these immutable inputs:
 
 - `series` and `upstream_branch`: the OPNsense stable series being built.
-- `upstream_commit`: the OPNsense plugins source commit.
+- `upstream_commit`: the OPNsense plugins baseline shared by the reviewed source
+  and the fetched stable branch. Full Git history is required.
 - `tools_tag`: the matching numeric `opnsense/tools` release tag.
 - `freebsd_release`: the value of `OS?=` in
   `config/<series>/build.conf` at that `tools_tag`.
@@ -16,11 +19,14 @@ profile before validation. The profile contains exactly these immutable inputs:
   package repository. The build checks out and verifies this commit directly;
   it does not trust the bytes of a GitHub-generated archive.
 - `core_archive_url` and `core_archive_sha256`: legacy provenance fields kept
-  in existing release profiles. They are not the build-time trust anchor.
+  in generated build artifacts and existing published receipts. They are not the
+  build-time trust anchor.
 
-Do not substitute a moving branch, a current tools checkout, or an unverified
-core commit for these values. `.github/ci/shared/metadata_profile.py` rejects profiles
-that do not meet the required schema and provenance checks.
+Discovery resolves moving refs only at the controller boundary. It seals the
+generated profile, exact tools evidence and other inputs in the trusted bundle.
+Builders and signers consume that selection without rediscovery;
+`.github/ci/shared/metadata_profile.py` retains its schema and provenance checks.
+Published receipts keep the identities actually used by their original run.
 
 The control commit's `dns/bind/Makefile` approves the runtime with
 `RP_BIND_VERSION` and `RP_BIND_PORTS_COMMIT`. The controller fetches that exact
@@ -31,10 +37,11 @@ not rewrite PORTREVISION. Matching master and tools revision declarations are
 supported; conflicting revisions stop input selection. Each plugin's release-source Makefile independently
 owns its BIND minimum, official-plugin conflict and OPNsense floor.
 
-The controller also verifies the source profile against its exact numeric tools
+The controller also verifies the generated profile against its exact numeric tools
 tag and records the resolved commit and build.conf hash in `tools-profile.json`.
 There is no maintained OPNsense/FreeBSD compatibility map. A tools environment
-change requires a reviewed source-profile update; builds never substitute latest.
+change is discovered by the next build; it needs no metadata-refresh commit or PR.
+Once a run is sealed, its consumers never substitute newer inputs.
 
 GitHub Actions implementations use floating major release tags, such as
 `actions/checkout@v6`, so compatible action updates can arrive automatically.
@@ -57,17 +64,28 @@ replaces the selected source commit's entire `dns/bind`, `Mk`, `Scripts` and
 legacy release branches, which intentionally do not carry control-plane code,
 and prevents a leftover development marker from changing the production name.
 
-Automatic runtime production starts only when the approved
-`RP_BIND_VERSION` / `RP_BIND_PORTS_COMMIT` approval changes on `master`. It selects the newest
-numeric `release/bind-rp/<series>` branch. Plugin source, its helpers and the
-`Mk`, `Scripts` and `Templates` framework trigger only the plugin workflow.
-Shared BIND helpers, catalogue, package-manager, installer and
-key changes can also trigger the plugin workflow; they do not start runtime
-production. Release helpers are grouped in `.github/ci/bind/`,
+Each producer discovers its registered numeric release branches. Relevant master
+pushes and daily schedules compare each series with its published
+`series-build-inputs.json`. The comparison covers the plugin/framework source
+trees, actual build helpers, that series' tools commit and build configuration,
+core commit, and resolved creator/reader recipes. Runtime inputs also cover the
+reviewed `RP_BIND_VERSION` / `RP_BIND_PORTS_COMMIT` approval. A tools or core change
+in 26.7 selects 26.7 alone. Shared build changes can select several series when
+their inputs change; documentation, tests and unrelated plugin paths are excluded.
+An unchanged published input record skips the build, including production manual
+dispatch. Existing receipts without the new input record receive one migration
+build. Release helpers are grouped in `.github/ci/bind/`,
 `.github/ci/ha_dhcp/`, and `.github/ci/shared/`; regression tests remain in
 `.github/ci/ci-tests/`. PR tests retain broader validation filters, including
 runtime helpers and workflow changes. HA-only changes, test-only edits and
-documentation do not trigger BIND publication.
+documentation do not change BIND build inputs.
+
+When several series need the same producer, its selection job builds one and
+dispatches that same workflow for the other changed series. Only selection has
+`Actions: write`; signing and publication credentials retain their existing job
+boundaries. The selected discovery bundle freezes upstream and package-manager
+inputs once; the profile job validates its external seal and fetches the exact
+tools object instead of looking up moving refs again.
 
 Merging a plugin-affecting pull request into a release-source branch automatically
 runs plugin production for that series, pinned to the merge commit. It does not
@@ -77,8 +95,7 @@ not build a release. Manual dispatch remains available for an explicit series
 or development build; use it to publish the approved runtime for another series.
 
 For a local unsigned build, start in a disposable clone of `master` and fetch
-the selected source once. Preserve its upstream profile separately from the
-control checkout:
+the selected source once. Generate its profile separately from the control checkout:
 
 ```sh
 series=26.7
@@ -87,12 +104,11 @@ release_ref="refs/heads/release/bind-rp/$series"
 git fetch --no-tags origin "$release_ref:refs/remotes/origin/build-source"
 source_commit=$(git rev-parse refs/remotes/origin/build-source)
 mkdir -p artifacts
-git show "$source_commit:.resolver-plugins/upstream.json" > artifacts/source-upstream.json
+python3 -I .github/ci/shared/upstream_inputs.py \
+  --repository . --source-commit "$source_commit" --series "$series" \
+  --tools-repository artifacts/tools --output artifacts/source-upstream.json
 git show "$control_commit:dns/bind/Makefile" > artifacts/runtime-approval.mk
 git show "$source_commit:dns/bind/Makefile" > artifacts/plugin-package.mk
-tools_tag=$(python3 .github/ci/shared/metadata_profile.py artifacts/source-upstream.json "$series" tools_tag)
-git init --bare artifacts/tools
-git -C artifacts/tools fetch --depth=1 https://github.com/opnsense/tools.git "refs/tags/$tools_tag:refs/tags/$tools_tag"
 ```
 
 The controller resolves creator and minimum-reader roles once and seals the
@@ -180,7 +196,8 @@ any OPNsense package repository configuration is used.
 
 The selected immutable upstream profile's numeric `tools_tag` selects the
 creator recipe from that exact official `opnsense/ports` tag. One resolution
-also selects the minimum reader recipe: `26.1.11` for 26.1, and `26.7` for 26.7.
+also selects the minimum reader recipe: `26.1.11` for 26.1, and the base
+`<series>` release for later series.
 Both use the profile's FreeBSD major and `amd64` ABI. The resolver accepts the
 literal version, revision and epoch from either `opnsense/pkg` or
 `ports-mgmt/pkg`; ambiguous or unsupported recipes stop the build.
@@ -197,8 +214,10 @@ export RP_READER_PKG_METADATA=artifacts/trusted/reader-target.json
 ```
 
 BIND CI transfers these records within the sealed controller bundle, alongside
-its exact build and source inputs. HA keeps its separate immutable role artifact
-and checks its external role and shared BIND input seals. Consumers use artifact IDs and
+its exact build and source inputs. HA's trusted artifact also carries its selected
+source Makefile, upstream profile and externally sealed `selection.json`, binding
+the source/profile commit to the executing master control. It retains the external
+role and shared BIND input seals. Consumers use artifact IDs and
 external seals before metadata helpers or VM execution. Builder output cannot
 select signing policy. These digests protect our control records; they do not
 pin upstream creator archive or binary bytes.
@@ -211,8 +230,8 @@ configuration lives under `repos/target-pkg` and is loaded only by explicit
 `pkg -R` selection commands. This lets older pkg versions refresh its database
 without adding the archive to ordinary dependency installation. Update,
 query and fetch errors stop selection; there is no raw-download or latest-version
-fallback. The ordinary dependency snapshot remains independent, including HA's
-reviewed `26.7.4` snapshot.
+fallback. Ordinary dependencies remain independent of that creator feed. Both
+plugins use the selected series' authenticated latest feed.
 
 The selector force-installs and locks the exact name/version/origin/ABI, even
 when an upstream reissue keeps that identity while changing bytes. It verifies
@@ -268,18 +287,23 @@ The runtime canary uses its own RNDC client configuration and key. An installed
 plugin's default `rndc.conf` therefore cannot change the probe's control key;
 installed and customer configuration files remain untouched by that probe.
 
-New BIND provenance uses schema 4, independent runtime/plugin component channels
+New BIND runtime provenance uses schema 5 and plugin producer inputs use schema 2,
+binding the per-series input digest. Independent runtime/plugin component channels
 use schema 1, full BIND stack channels use schema 6, and combined catalogues use
-schema 2. HA channels retain schema 2. `package_creator` contains name, full
+schema 2. New HA channels use schema 3 and record the build fingerprint and control
+commit; historical runtime schema 4, plugin inputs schema 1 and HA schema 2 remain
+readable with their original validation. `package_creator` contains name, full
 version, origin and ABI.
 `creator_source` records the numeric release, official repository, commit and
 recipe path for audit. Flat build metadata records `pkg_creator`,
 `creator_release`, `creator_ports_commit` and `creator_recipe_path`.
 Runtime fingerprints cover its pin, compatibility tuple, creator identity and
-runtime wrapper bytes. Plugin fingerprints cover the full plugin/framework
-source SHA, tuple, creator identity and plugin wrapper bytes; runtime
+runtime wrapper bytes and resolved per-series inputs. Plugin fingerprints cover
+the full plugin/framework source SHA, tuple, creator identity, plugin wrapper
+bytes and resolved per-series inputs; runtime
 identity is excluded. Source/control audit SHAs are excluded from runtime
-identity. Current CI accepts the formats above and stops on other component
+identity. The preliminary build comparison uses actual source trees so a
+documentation-only source commit does not force a rebuild. Current CI accepts the formats above and stops on other component
 formats. Plugin reuse preserves every original byte, including earlier
 creator audit references and the plugin's original build-time runtime.
 Qualification records current reader authentication separately. Composed
@@ -366,7 +390,9 @@ The control-plane `master` tree intentionally lacks `dns/bind/src`, so a raw
 checkout, follow the workflow's `Materialize canonical tests and release BIND
 source` step for each active release branch, retaining the tests from the
 selected control commit, then run `python3 -m pytest -q dns/bind/tests` against
-that exact source. Report each series and immutable source commit checked.
+that exact source with `RP_TEST_SERIES="$series"`. The series comes from branch
+discovery; the behavior tests do not read release JSON. Report each series and
+immutable source commit checked.
 
 The workflow requires `dns/bind/pkg-descr` to change with publishable
 plugin runtime, package-hook, or PLUGIN metadata changes. Runtime approval-only
@@ -406,13 +432,40 @@ suite when CI, workflow, package, framework, or installer inputs change. It uses
 read-only repository permissions and local Git and command fixtures. Package
 build and publication triggers are unchanged.
 
-The `HA DHCP Interface tests` workflow runs `Plugin tests and lint` on relevant
-pull requests and manual dispatches. A newer PR update cancels its superseded
-HA test run. The HA release workflow calls the same suite against the merged
-release source before building; each release or manual run has its own
-concurrency group and is never canceled by a PR update.
+The `HA DHCP Interface tests` workflow discovers registered
+`release/dhcp-interface-ha/<series>` branches and runs `Plugin tests and lint`
+against their exact package sources using canonical master tests. Release-source
+PRs call the master workflow and test their proposed source. A newer PR update
+cancels its superseded HA test run. The release workflow supplies its frozen
+source SHA and series to the same suite before building; each release or manual
+run has its own concurrency group and is never canceled by a PR update.
 
-Use the profile extracted in the local build steps above to check metadata
+For a local HA check, use a disposable clone (no worktree), keep the canonical
+tests from master, and materialize the release source as CI does:
+
+```sh
+series=26.7
+git fetch --no-tags origin "refs/heads/release/dhcp-interface-ha/$series"
+source_commit=$(git rev-parse 'FETCH_HEAD^{commit}')
+control_commit=$(git rev-parse HEAD)
+selection_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py source-inputs \
+  --series "$series" --directory artifacts/trusted \
+  --source-commit "$source_commit" --control-commit "$control_commit")
+python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py materialize \
+  --series "$series" --directory artifacts/trusted --repository-root "$PWD" \
+  --source-commit "$source_commit" --control-commit "$control_commit" --sha256 "$selection_sha256"
+python3 -m unittest discover -s net/dhcp-interface-ha/tests -v
+node net/dhcp-interface-ha/tests/ui/test_configure_lagg.js
+node net/dhcp-interface-ha/tests/ui/test_log.js
+```
+
+The native HA builder additionally requires `CONTROL_COMMIT`, `SOURCE_COMMIT`,
+`PROFILE_COMMIT` (equal to source), `RP_TRUSTED_DIRECTORY`,
+`RP_SELECTION_SHA256`, `RP_UPSTREAM_METADATA` and the resolved creator/reader
+metadata. Its shell wrapper calls the same source materializer before repository
+setup or package creation; it does not execute release-owned CI helpers.
+
+Use the profile generated in the local build steps above to check metadata
 before running a full VM build:
 
 ```sh
@@ -422,7 +475,12 @@ sh -n .github/ci/bind/runtime/build-bind920.sh .github/ci/bind/plugin/build-os-b
   .github/ci/bind/shared/verify-bind-release.sh .github/ci/ha_dhcp/verify-dhcp-interface-ha.sh \
   .github/ci/shared/setup-opnsense-repository.sh
 python3 -m compileall -q .github/ci
-pytest -q .github/ci/ci-tests
+(
+  test_tmp=$(mktemp -d /tmp/resolver-ci.XXXXXX)
+  trap 'rm -rf "$test_tmp"' 0
+  trap 'exit 1' HUP INT TERM
+  TMPDIR="$test_tmp" python3 -m pytest --basetemp "$test_tmp/pytest" -q .github/ci/ci-tests
+)
 git diff --check
 ```
 

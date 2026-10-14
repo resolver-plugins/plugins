@@ -18,6 +18,7 @@ except ImportError:
         ("26.7", (26, 7), 0, False),
         ("26.7", (26, 7), 1, True),
         ("26.1", (1, 37), 0, True),
+        ("27.1", (27, 1), 1, True),
     ],
 )
 def test_lifecycle_activation_thresholds(series, version, revision, required):

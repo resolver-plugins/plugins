@@ -76,3 +76,50 @@ def test_tools_evidence_uses_selected_historical_tag_and_exact_blob(tmp_path):
     git(tools, 'tag', '26.1.12')
     with pytest.raises(ValueError, match='OS assignment'):
         module.verify_tools_profile(dict(profile, tools_tag='26.1.12', freebsd_release='14.3'), tools)
+
+
+def test_build_inputs_are_discovered_without_source_json_and_frozen_per_run(tmp_path, monkeypatch):
+    inputs = load_module('upstream_inputs', 'shared/upstream_inputs.py')
+    fixture = bind_sync_repositories(tmp_path)
+    repository, tools = fixture['repository'], fixture['tools']
+    git(repository, 'branch', 'stable/26.1', fixture['initial'])
+    core = init_repository(tmp_path / 'core')
+    core_commit = commit(core, {'README': 'core source\n'}, 'official core')
+    git(core, 'branch', 'stable/26.1', core_commit)
+    archives = []
+    def archive_hash(url):
+        archives.append(url)
+        return 'a' * 64
+    monkeypatch.setattr(inputs, 'core_archive_sha256', archive_hash)
+    selected = []
+    for patch, release in ((12, '14.4'), (13, '14.5')):
+        tag = f'26.1.{patch}'
+        tools_commit = commit(tools, {'config/26.1/build.conf': f'OS?= {release}\n'}, tag)
+        git(tools, 'tag', tag)
+        git(core, 'branch', '-f', 'stable/26.1', core_commit)
+        resolved_tools = tmp_path / f'resolved-tools-{patch}'
+        profile = inputs.discover_inputs(repository, fixture['source_commit'], '26.1', resolved_tools,
+            plugins_url=str(repository), tools_url=str(tools), core_url=str(core))
+        assert profile == upstream_profile('26.1', fixture['initial'], core_commit=core_commit,
+                                          tools_tag=tag, freebsd_release=release)
+        proof = inputs.metadata_profile.verify_tools_profile(profile, resolved_tools)
+        assert proof['tools_commit'] == tools_commit
+        selected.append((profile, proof))
+        core_commit = commit(core, {'README': f'new core {patch}\n'}, 'later official core')
+    assert selected[0][0]['core_commit'] != selected[1][0]['core_commit']
+    assert selected[0][1]['freebsd_release'] == '14.4'
+    assert inputs.validate_source_profile(selected[0][0], fixture['source_commit'], repository) == selected[0][0]
+    assert archives == [profile['core_archive_url'] for profile, _proof in selected]
+    assert git(repository, 'ls-tree', fixture['source_commit'], '--', '.resolver-plugins') == ''
+
+
+def test_environment_variants_reject_older_core_and_tools_inputs(tmp_path):
+    inputs = load_module('variant_upstream_inputs', 'shared/upstream_inputs.py')
+    core = init_repository(tmp_path / 'core')
+    old_commit = commit(core, {'README': 'old\n'}, 'old core')
+    new_commit = commit(core, {'README': 'new\n'}, 'new core')
+    old = upstream_profile(core_commit=old_commit)
+    new = upstream_profile(core_commit=new_commit)
+    assert inputs.environment_can_advance(old, new, core_url=str(core))
+    assert not inputs.environment_can_advance(new, old, core_url=str(core))
+    assert not inputs.environment_can_advance(dict(old, tools_tag='26.1.12'), old, core_url=str(core))

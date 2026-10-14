@@ -47,7 +47,10 @@ The shared `channel.json` uses `kind=combined`, schema 2, and records the compon
 tags, original asset hashes, selected package hashes and aggregate asset hashes.
 Component metadata is preserved as `bind_runtime-*`, `bind_plugin-*` and
 `dhcp-*` sidecars. BIND component manifests use schema 1; complete BIND stack
-manifests use schema 6. HA retains its schema-2 manifest and existing tags.
+manifests use schema 6. New HA manifests use schema 3 with a build fingerprint;
+historical schema-2 manifests and their existing snapshot tags remain readable.
+Each producer records automatically generated per-series build inputs as a
+sidecar, without requiring repository-tracked release JSON.
 The external `composition-inputs.json` seal lives beside the catalogues in the
 signer artifact and its SHA-256 travels as a job output. It is not a catalogue
 asset. See [HA DHCP Interface](#ha-dhcp-interface) for its publication workflow.
@@ -341,17 +344,17 @@ its isolated pair before a plugin exists; it cannot expose an incomplete
 combined feed. Once a complete feed exists, every writer retains all registered
 peers or fails.
 
-Automatic runtime production starts only when the approved `RP_BIND_VERSION` / `RP_BIND_PORTS_COMMIT` pair
-changes on `master`, targeting the newest numeric `release/bind-rp/<series>`
-branch. Plugin source, its helpers and workflow, and the `Mk`, `Scripts` and
-`Templates` framework trigger only the plugin workflow. Shared BIND helpers, installer and committed key can
-also trigger the plugin, without starting runtime production. Relevant merges
-into a release-source branch start only the plugin workflow for that series.
-Runtime helper and workflow changes run PR tests without starting a runtime
-release. HA-only helpers, tests, documentation and discovery tooling do not
-trigger BIND publication. `workflow_dispatch` remains available for development
-builds and explicit production series selection; use the runtime
-workflow directly to publish the approved pair for another series. A production
+Relevant master pushes and daily schedules discover every registered series for
+the owning producer. The shared selector compares source/build-helper trees and
+that series' resolved tools, core and pkg recipes with the published input record.
+Only changed series build; a 26.7 environment change leaves 26.1's inputs and
+archives alone. The runtime always uses the reviewed `RP_BIND_VERSION` /
+`RP_BIND_PORTS_COMMIT` approval. A changed approval selects each affected runtime
+series, while plugin-only source changes do not select runtime builds.
+Relevant merges into a release-source branch select only that plugin and series.
+Unchanged inputs skip production, including a manual dispatch. Existing channels
+without an input record receive one migration build. `workflow_dispatch` remains
+available for development builds and explicit production series selection. A production
 dispatch from any ref other than `master` is rejected. Release branches supply
 immutable build inputs only and never run publication helpers. Publication runs
 share one global lock so automatic and manual promotions cannot replace or
@@ -360,8 +363,8 @@ restore the same current channel concurrently.
 The `Propose bind920 candidate` workflow may open PRs that update only the
 two runtime approval fields in the plugin package Makefile. Those PRs provide review evidence and CI status and do not
 alter a stable package channel while open. Merging a package-affecting candidate
-to `master` starts runtime production for the newest numeric release branch;
-maintainers can still dispatch another series explicitly.
+to `master` selects runtime production for each registered series whose inputs
+change; maintainers can still select a series explicitly.
 
 The `RP_PKG_SIGNING_KEY` GitHub Actions secret contains the base64-encoded
 private key. It is decoded only in the disposable FreeBSD VM, used by `pkg
@@ -504,16 +507,37 @@ Existing Resolver Plugins clients keep the same
 feed URL and public key.
 
 The [HA DHCP release workflow](../.github/workflows/ha-dhcp-interface-release.yml)
-runs automatically when the plugin's package version increases on `master`;
-manual dispatch from `master` supports recovery. It publishes experimental
-`os-dhcp-interface-ha` packages for 26.7 / amd64 after staged and public
-installation checks. Publication does not deploy to appliances.
+runs automatically after a package-affecting PR merges into a registered
+`release/dhcp-interface-ha/<series>` branch, or after relevant CI/framework
+changes merge into `master`. Manual dispatch from `master` supports recovery.
+It follows the BIND plugin's per-series release model: the source branch owns
+the package version (`26.7_1` initially); trusted master CI discovers upstream
+inputs and owns build and publication code. HA uses the same discovery and
+per-series comparison as BIND, without a tracked upstream profile or BIND release
+branch as its compatibility source.
+Publication follows staged and public native installation checks and does not
+deploy to appliances.
+
+Bump `PLUGIN_REVISION` for new HA package behavior. Environment-only rebuilds keep
+the reviewed plugin version and get a distinct immutable snapshot keyed by their
+build fingerprint. Retries reuse that exact variant and never overwrite another
+snapshot. Older tools or core inputs cannot replace a newer current channel.
+Test-only and documentation changes do not start package publication. As with
+BIND, ordinary dependencies come from the selected series' authenticated latest
+feed; the exact numeric tools tag still selects and verifies the package creator.
 
 Source release titles use `os-dhcp-interface-ha <series> <plugin_version>`,
-and new source tags use `os-dhcp-interface-ha-<series>-<plugin_version>`.
+and new source tags use `os-dhcp-interface-ha-<series>-<plugin_version>-<build_fingerprint>`.
 Existing source tags retain their original names because published source
 releases are immutable. Distribution titles use the same package name, with
 `latest` for the current channel. The distribution lookup tags remain
 `pkg-dhcp-interface-ha-<series>` and
-`pkg-dhcp-interface-ha-<series>-<plugin_version>`; signed component receipts
-and publication retries use these existing identities.
+`pkg-dhcp-interface-ha-<series>-<plugin_version>-<build_fingerprint>` for new snapshots.
+Legacy snapshots retain the series/version form. The current feed lookup tag and
+end-user package names stay the same.
+
+For the initial cutover, register the prepared `release/dhcp-interface-ha/26.7`
+source before merging the control-plane change. This lets the PR test matrix
+exercise it and the master publication select it. Existing `0.2_*` source
+releases, signed snapshots and current-channel receipts remain readable and are
+not rewritten. `26.7_1` advances the existing package identity through `pkg`.

@@ -17,13 +17,19 @@ import metadata_profile
 
 PORTS_REPOSITORY = 'https://github.com/opnsense/ports.git'
 RECIPE_PATHS = ('opnsense/pkg', 'ports-mgmt/pkg')
-READER_RELEASES = {'26.1': '26.1.11', '26.7': '26.7'}
 IDENTITY_FIELDS = {'name', 'version', 'origin', 'abi'}
 VERSION_PATTERN = re.compile(r'[0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?(?:,[0-9]+)?')
 
 
 class TargetPackageError(ValueError):
     """The release-derived package cannot be selected or verified."""
+
+
+def reader_release(series):
+    if (not isinstance(series, str) or metadata_profile.SERIES_PATTERN.fullmatch(series) is None
+            or tuple(map(int, series.split('.'))) < (26, 1)):
+        raise TargetPackageError('series predates the supported OPNsense floor')
+    return '26.1.11' if series == '26.1' else series
 
 
 @dataclass(frozen=True)
@@ -85,7 +91,7 @@ def validate_target_profile(target: TargetPackage, upstream: Path, role: str | N
     profile = metadata_profile.load_profile(upstream, target.series)
     expected_role = role or target.role
     expected_release = (profile['tools_tag'] if expected_role == 'creator'
-                        else READER_RELEASES.get(target.series))
+                        else reader_release(target.series))
     if (target.role != expected_role or expected_release is None
             or target.release != expected_release
             or target.identity.abi != f"FreeBSD:{profile['freebsd_release'].split('.')[0]}:amd64"):
@@ -98,7 +104,7 @@ def load_target(metadata: Path, series: str, *, upstream: Path | None = None,
     if (not isinstance(document, dict)
             or set(document) != {'schema', 'role', 'series', 'release', 'recipe', 'package_creator'}
             or type(document['schema']) is not int or document['schema'] != 1
-            or document['series'] != series or series not in READER_RELEASES
+            or document['series'] != series
             or document['role'] not in ('creator', 'reader')
             or not isinstance(document['recipe'], dict)
             or set(document['recipe']) != {'repository', 'commit', 'path'}):
@@ -145,7 +151,7 @@ def recipe_version(recipe: str) -> str:
 
 def resolve_targets(upstream: Path, series: str, architecture: str, output: Path) -> None:
     profile = metadata_profile.load_profile(upstream, series)
-    if architecture != 'x86_64' or series not in READER_RELEASES:
+    if architecture != 'x86_64':
         raise TargetPackageError('unsupported series/architecture for pkg resolution')
     git = os.environ.get('GIT_COMMAND', 'git')
     with tempfile.TemporaryDirectory() as directory:
@@ -156,7 +162,7 @@ def resolve_targets(upstream: Path, series: str, architecture: str, output: Path
         run([*command, 'config', 'remote.ports.promisor', 'true'])
         run([*command, 'config', 'remote.ports.partialclonefilter', 'blob:none'])
         resolved, targets = {}, []
-        for role, release in [('creator', profile['tools_tag']), ('reader', READER_RELEASES[series])]:
+        for role, release in [('creator', profile['tools_tag']), ('reader', reader_release(series))]:
             if release not in resolved:
                 run([*command, 'fetch', '--depth=1', '--filter=blob:none', '--no-tags', 'ports', f'refs/tags/{release}'])
                 commit = run([*command, 'rev-parse', 'FETCH_HEAD^{commit}']).stdout.strip()

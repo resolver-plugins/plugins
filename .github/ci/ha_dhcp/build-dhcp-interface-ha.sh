@@ -8,6 +8,9 @@ output=$2
 : "${RP_UPSTREAM_METADATA:?immutable upstream metadata is required}"
 : "${SOURCE_COMMIT:?plugin source commit is required}"
 : "${PROFILE_COMMIT:?compatibility profile commit is required}"
+: "${RP_TRUSTED_DIRECTORY:?trusted source inputs are required}"
+: "${RP_SELECTION_SHA256:?external source selection seal is required}"
+: "${CONTROL_COMMIT:?trusted control commit is required}"
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 ci="$root/.github/ci"
 plugin="$root/net/dhcp-interface-ha"
@@ -17,9 +20,12 @@ make_command=${MAKE_COMMAND:-make}
 : "${RP_TARGET_PKG_METADATA:?creator target metadata is required}"
 target_metadata=$RP_TARGET_PKG_METADATA
 
+python3 -I "$ci/ha_dhcp/dhcp_interface_ha_release.py" materialize --series "$series" \
+    --directory "$RP_TRUSTED_DIRECTORY" --sha256 "$RP_SELECTION_SHA256" --repository-root "$root" \
+    --source-commit "$SOURCE_COMMIT" --control-commit "$CONTROL_COMMIT"
+[ "$SOURCE_COMMIT" = "$PROFILE_COMMIT" ]
 freebsd_release=$(python3 "$ci/shared/metadata_profile.py" "$RP_UPSTREAM_METADATA" "$series" freebsd_release)
-RP_OPNSENSE_SNAPSHOT=$(python3 "$ci/ha_dhcp/dhcp_interface_ha_release.py" snapshot --series "$series")
-export RP_OPNSENSE_SNAPSHOT
+unset RP_OPNSENSE_SNAPSHOT
 python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 core_commit=$("$ci/shared/setup-opnsense-repository.sh" "$series")
 "$pkg_command" update -f
@@ -41,6 +47,7 @@ fi
 package=$1
 [ "$("$pkg_static" query -F "$package" '%n|%o')" = 'os-dhcp-interface-ha|opnsense/os-dhcp-interface-ha' ]
 python3 "$ci/shared/package_checksums.py" --pkg-command "$pkg_static" "$package"
+python3 -I "$ci/ha_dhcp/dhcp_interface_ha_release.py" verify-package --package "$package" --source-commit "$SOURCE_COMMIT"
 
 # Verify installation in the disposable VM, with no configured HA interface.
 kldload -n carp
@@ -55,11 +62,14 @@ python3 "$ci/shared/target_pkg.py" verify "$target_metadata" "$series" --upstrea
 mkdir -p "$output"
 cp "$package" "$output/"
 cp "$RP_UPSTREAM_METADATA" "$output/upstream.json"
+if [ -f "$RP_TRUSTED_DIRECTORY/series-build-inputs.json" ]; then
+    cp "$RP_TRUSTED_DIRECTORY/series-build-inputs.json" "$output/"
+fi
 {
     printf 'series=%s\n' "$series"
     printf 'source_commit=%s\n' "$SOURCE_COMMIT"
     printf 'profile_commit=%s\n' "$PROFILE_COMMIT"
-    printf 'repository_snapshot=%s\n' "$RP_OPNSENSE_SNAPSHOT"
+    printf 'repository_snapshot=latest\n'
     printf 'freebsd_release=%s\n' "$freebsd_release"
     printf 'core_commit=%s\n' "$core_commit"
     printf 'uname=%s\n' "$(uname -a)"
@@ -70,5 +80,13 @@ cp "$RP_UPSTREAM_METADATA" "$output/upstream.json"
     printf 'creator_release=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" release)"
     printf 'creator_ports_commit=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" ports_commit)"
     printf 'creator_recipe_path=%s\n' "$(python3 "$ci/shared/target_pkg.py" field "$target_metadata" "$series" recipe_path)"
+    if [ -f "$output/series-build-inputs.json" ]; then
+        printf 'control_commit=%s\n' "$CONTROL_COMMIT"
+        printf 'build_fingerprint=%s\n' "$(python3 -I "$ci/shared/series_builds.py" fingerprint --component dhcp_interface_ha --directory "$output")"
+    fi
 } > "$output/build-metadata.txt"
-(cd "$output" && sha256 -r ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)
+if [ -f "$output/series-build-inputs.json" ]; then
+    (cd "$output" && sha256 -r ./*.pkg build-metadata.txt upstream.json series-build-inputs.json > SHA256SUMS)
+else
+    (cd "$output" && sha256 -r ./*.pkg build-metadata.txt upstream.json > SHA256SUMS)
+fi

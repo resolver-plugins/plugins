@@ -173,16 +173,15 @@ jobs:
             git fetch --no-tags origin \
               'refs/heads/master:refs/remotes/origin/canonical-tests'
             git checkout refs/remotes/origin/canonical-tests -- \
-              .github/ci/shared/metadata_profile.py dns/bind/tests
+              dns/bind/tests
           fi
           test -d dns/bind/tests
-          test -f .github/ci/shared/metadata_profile.py
           source_commit=$(git rev-parse HEAD)
           if [[ "$PR_BASE" != "release/bind-rp/$SERIES" ]]; then
             source_ref="refs/heads/release/bind-rp/$SERIES"
             git fetch --no-tags origin "$source_ref:refs/remotes/origin/bind-under-test"
             source_commit=$(git rev-parse refs/remotes/origin/bind-under-test)
-            git checkout "$source_commit" -- .resolver-plugins/upstream.json dns/bind/Makefile dns/bind/src
+            git checkout "$source_commit" -- dns/bind/Makefile dns/bind/src
             for fragment in +POST_INSTALL.pre +POST_INSTALL.post; do
               if git cat-file -e "$source_commit:dns/bind/$fragment"; then
                 git show "$source_commit:dns/bind/$fragment" > "dns/bind/$fragment"
@@ -191,7 +190,7 @@ jobs:
               fi
             done
           fi
-          git show "$source_commit:.resolver-plugins/upstream.json" > "$RUNNER_TEMP/upstream.json"
-          python3 .github/ci/shared/metadata_profile.py "$RUNNER_TEMP/upstream.json" "$SERIES" freebsd_release > /dev/null
       - name: Run canonical BIND tests
+        env:
+          RP_TEST_SERIES: ${{ matrix.series }}
         run: python3 -m pytest -q dns/bind/tests
