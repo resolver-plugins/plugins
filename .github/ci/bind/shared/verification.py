@@ -42,6 +42,8 @@ def plugin_requirement(directory, trusted, *, unsigned=False):
 def plugin_built_runtime_version(directory, trusted, *, unsigned=False):
     """Read P's authenticated original build version, never the paired R version."""
     if unsigned:
+        if bind._json(trusted / "selection.json")["schema"] == 2:
+            return bind._metadata((directory / "build-metadata.txt").read_text())["bind920"]
         upstream = bind._json(trusted / "upstream.json")
         runtime = bind.validate_receipt(bind._json(trusted / "runtime-selection.json"),
                                         "bind_runtime", upstream["series"])
@@ -53,7 +55,8 @@ def plugin_built_runtime_version(directory, trusted, *, unsigned=False):
         original = bind._json(directory / (prefix + "channel.json"))
         if original.get("kind") != "bind-plugin":
             raise ValueError("original plugin component manifest is absent")
-        version = bind._runtime_reference(original["built_against_runtime"], original["series"])["version"]
+        version = (original["build_runtime"]["version"] if original["schema"] == 2 else
+                   bind._runtime_reference(original["built_against_runtime"], original["series"])["version"])
         metadata = bind._metadata((directory / (prefix + "build-metadata.txt")).read_text())
     if metadata["bind920"] != version:
         raise ValueError("original plugin build runtime metadata differs")
@@ -140,15 +143,21 @@ def native_package(name, *, inventory=None):
 def preview_packages(root, selection, trusted):
     directory = root / "preview"
     actual = bind._files(directory)
-    profile = bind._json(trusted / "bind920-profile.json")
-    version = bind.bind920_profile.package_version(profile)
-    runtime = {f"{name}-{version}.pkg" for name in ("bind-tools", "bind920")}
-    if selection["component"] == "bind_runtime":
+    runtime = set()
+    if selection["component"] in bind.RUNTIME_KINDS or selection["schema"] == 1:
+        profile = bind._json(trusted / "bind920-profile.json")
+        version = bind.bind920_profile.package_version(profile)
+        runtime = {f"{name}-{version}.pkg" for name in
+                   (("bind-tools", "bind920") if selection["component"] in bind.LEGACY_KINDS else (bind._kind(selection["component"]),))}
+    if selection["component"] in bind.RUNTIME_KINDS:
         owned = runtime | {"bind920-provenance.json"}
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
             for name in owned:
                 shutil.copyfile(directory / name, raw / name)
+            if selection["component"] == "bind920":
+                for path in (root / "native-dependencies").glob("*.pkg"):
+                    shutil.copyfile(path, raw / path.name)
             bind.validate_candidate(raw, selection, trusted, pkg_command=None)
         packages = runtime
     else:
@@ -165,9 +174,10 @@ def preview_packages(root, selection, trusted):
         bind.component_tags("bind_plugin", selection["series"], version, selection["expected_fingerprint"])
         plugin = {f"os-bind-rp-devel-{version}.pkg"}
         owned = plugin | {"plugin-build-inputs.json", "build-metadata.txt"}
-        frozen = bind._json(trusted / "runtime-selection.json")
-        if set(frozen["packages"]) != runtime or any(actual.get(name) != digest for name, digest in frozen["packages"].items()):
-            raise ValueError("preview runtime differs from frozen receipt")
+        if selection["schema"] == 1:
+            frozen = bind._json(trusted / "runtime-selection.json")
+            if set(frozen["packages"]) != runtime or any(actual.get(name) != digest for name, digest in frozen["packages"].items()):
+                raise ValueError("preview runtime differs from frozen receipt")
         packages = runtime | plugin
     if (set(actual) - bind.CATALOGUE_ASSETS != owned | packages
             or "meta.conf" not in actual or not bind.CATALOGUE_FILES.intersection(actual)):
@@ -196,7 +206,7 @@ def preflight(root, trusted, component, series, mode):
             directory = root / "component" / name
             entries.append(dict(directory=str(directory.resolve()),
                 packages=[str((directory / name).resolve()) for name in sorted(owned["packages"])], unsigned=False, tag=tag))
-        if composition["components"]["bind_plugin"] is not None:
+        if composition["schema"] == 1 and composition["components"]["bind_plugin"] is not None:
             plugin = composition["components"]["bind_plugin"]
             version = next(name.removeprefix("os-bind-rp-").removesuffix(".pkg") for name in plugin["packages"])
             current, snapshot = bind.stack_tags(series, version, composition["components"]["bind_runtime"]["fingerprint"], plugin["fingerprint"])
@@ -211,7 +221,9 @@ def preflight(root, trusted, component, series, mode):
             if mode == "public" and entry["tag"] else
             "https://resolver-plugins.github.io/repository/" + releases.series_abi_path(abi, series)
             if mode == "public" else Path(entry["directory"]).as_uri())
-    return dict(selection=selection, composition=composition, repositories=entries)
+    native_directory = root / "native-dependencies"
+    dependencies = [str(path.resolve()) for path in native_directory.glob("*.pkg")] if native_directory.is_dir() else []
+    return dict(selection=selection, composition=composition, repositories=entries, native_dependencies=dependencies)
 
 
 def save_evidence(directory, name, value):
@@ -224,6 +236,12 @@ def authenticate(plan, trusted, evidence, mode):
     target = target_pkg.load_target(trusted / "reader-target.json", series, upstream=trusted / "upstream.json", role="reader")
     target_pkg.verify_target_pkg(target, PKG, pkg_static_path=Path(PKG))
     observations, dependencies = [], set()
+    for path in plan.get("native_dependencies", []):
+        archive = Path(path)
+        profile = bind._json(trusted / "bind920-profile.json")
+        if releases.query_package(archive, PKG)[0] != ("bind-tools", bind._json(trusted / "producer-inputs.json")["tools_version"], "dns/bind-tools", target.identity.abi):
+            raise ValueError("internal native dependency differs from approved runtime")
+        package_checksums.verify_archive(PKG, archive)
     for entry in plan["repositories"]:
         directory = Path(entry["directory"])
         packages = [Path(path) for path in entry["packages"]]
@@ -258,11 +276,18 @@ def authenticate(plan, trusted, evidence, mode):
                 bind._validate_plugin_file_map(record, checksums)
             identities.append(dict(archive=archive.name, sha256=releases.sha256(archive), identity=identity, files=checksums))
             dependencies.update(edge[0] for edge in edges)
-        if runtime_edges is not None and ("bind-tools", "dns/bind-tools", runtime_edges[0]) not in runtime_edges[1]:
+        expected_tools = bind._json(trusted / "producer-inputs.json").get("tools_version", runtime_edges[0] if runtime_edges else None)
+        if runtime_edges is not None and ("bind-tools", "dns/bind-tools", expected_tools) not in runtime_edges[1]:
             raise ValueError("archive runtime pair dependency differs")
         catalogue.verify_repository(packages, entry["url"], pkg_command=PKG, unsigned=entry["unsigned"])
         observations.append(dict(directory=entry["directory"], url=entry["url"], unsigned=entry["unsigned"], archives=identities))
-    dependencies -= {"pkg", "opnsense", "bind-tools", "bind920", "os-bind", "os-bind-rp", "os-bind-rp-devel", "os-dhcp-interface-ha"}
+    if plan["selection"]["schema"] == 2:
+        owned = {releases.query_package(Path(path), PKG)[0][0] for entry in plan["repositories"] for path in entry["packages"]}
+        dependencies -= owned | {"pkg", "opnsense"}
+        if plan["selection"]["component"] == "bind920":
+            dependencies.discard("bind-tools")
+    else:
+        dependencies -= {"pkg", "opnsense", "bind-tools", "bind920", "os-bind", "os-bind-rp", "os-bind-rp-devel", "os-dhcp-interface-ha"}
     if any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_+.-]*", name) is None for name in dependencies):
         raise ValueError("unsafe external package dependency")
     save_evidence(evidence, "catalogues", dict(reader=target.record(), repositories=observations))
@@ -628,6 +653,7 @@ def prepare_feeds(plan, root):
         (repos / "qualification.conf").write_text('qualification: {\n'
             f' url: {json.dumps(entry["url"])}, mirror_type: "none", signature_type: "{signature}",\n'
             f' pubkey: {json.dumps(key)}, enabled: yes\n}}\n')
+        (directory / "native-dependencies.txt").write_text("".join(path + "\n" for path in plan.get("native_dependencies", [])))
         (directory / "archives.txt").write_text("".join(path + "\n" for path in entry["packages"]))
         (directory / "directory.txt").write_text(entry["directory"] + "\n")
         (directory / "complete.txt").write_text(str(any(Path(path).name.startswith("os-bind-rp") for path in entry["packages"])))

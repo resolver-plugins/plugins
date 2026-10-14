@@ -175,6 +175,23 @@ def stage(directory, output, series, source, profile, trusted_upstream, key, tar
     validate(output)
 
 
+def authenticate(directory, series, source, profile, trusted_upstream, target_metadata, package_definition,
+                 *, trusted_inputs=None, control_commit=None):
+    """Authenticate only HA producer bytes before decoding the signing key."""
+    from bind.shared import components
+    from shared.plugin_source import verify_package_source
+    build, target = validate_incoming(directory, series, source, profile, trusted_upstream, target_metadata,
+                                      package_definition, trusted_inputs=trusted_inputs, control_commit=control_commit)
+    reader = target_metadata.parent / "reader-target.json"
+    components.select_role(trusted_upstream, reader, series, "reader", PKG)
+    package = directory / f"{NAME}-{build['plugin_version']}.pkg"
+    if releases.query_package(package, PKG)[0] != (NAME, build["plugin_version"], f"opnsense/{NAME}", target.identity.abi):
+        raise ValueError("HA archive identity differs from sealed producer selection")
+    package_checksums.verify_archive(PKG, package)
+    verify_package_source(package, "dhcp-interface-ha", source)
+    components.select_role(trusted_upstream, target_metadata, series, "creator", PKG)
+
+
 def reuse(repository, directory, output, series, source, profile, trusted_upstream, target_metadata, package_definition,
           *, trusted_inputs=None, control_commit=None):
     build, target = validate_incoming(directory, series, source, profile, trusted_upstream, target_metadata, package_definition,
@@ -233,7 +250,7 @@ def promote(repository, directory, recovery):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["stage", "reuse", "promote", "validate"])
+    parser.add_argument("command", choices=["stage", "reuse", "promote", "validate", "authenticate"])
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--series")
@@ -248,7 +265,11 @@ if __name__ == "__main__":
     parser.add_argument("--repository", default="resolver-plugins/repository")
     parser.add_argument("--recovery", type=Path)
     args = parser.parse_args()
-    if args.command == "stage":
+    if args.command == "authenticate":
+        authenticate(args.directory, args.series, args.source_commit, args.profile_commit,
+                     args.trusted_upstream, args.target_pkg_metadata, args.package_definition,
+                     trusted_inputs=args.series_build_inputs, control_commit=args.control_commit)
+    elif args.command == "stage":
         stage(args.directory, args.output, args.series, args.source_commit, args.profile_commit,
               args.trusted_upstream, args.key, args.target_pkg_metadata, args.package_definition,
               trusted_inputs=args.series_build_inputs, control_commit=args.control_commit)

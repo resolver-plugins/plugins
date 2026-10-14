@@ -6,6 +6,7 @@ on:
       - '.github/ci/**'
       - '.github/workflows/**'
       - 'dns/bind/**'
+      - 'packages/**'
       - 'net/dhcp-interface-ha/**'
       - 'Mk/**'
       - 'Scripts/**'

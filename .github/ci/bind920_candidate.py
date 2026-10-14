@@ -71,7 +71,9 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def parse_bind920_makefile(text: str) -> tuple[str, int]:
+def parse_bind920_makefile(text: str, package=None) -> tuple[str, int]:
+    if package is not None:
+        return bind920_profile.recipe_version(text, package)
     distversion_match = DISTVERSION_PATTERN.search(text)
     if distversion_match is None:
         raise ValueError("bind920 Makefile does not declare DISTVERSION")
@@ -105,8 +107,9 @@ def candidate_from_files(
     makefile: Path,
     distinfo: Path,
     source_ref: str,
+    package=None,
 ) -> CandidateProfile:
-    distversion, portrevision = parse_bind920_makefile(makefile.read_text(encoding="utf-8"))
+    distversion, portrevision = parse_bind920_makefile(makefile.read_text(encoding="utf-8"), package)
     distinfo_version = _parse_distinfo(distinfo.read_text(encoding="utf-8"))
     if distinfo_version != distversion:
         raise ValueError("distinfo BIND version does not match Makefile DISTVERSION")
@@ -121,9 +124,11 @@ def candidate_from_files(
     )
 
 
-def current_from_approval(makefile: Path, ports_repository: Path) -> Bind920Profile:
+def current_from_approval(makefile: Path, ports_repository: Path, package=None) -> Bind920Profile:
     approval = bind920_profile.approval_from_makefile(makefile.read_text(encoding="utf-8"))
-    return Bind920Profile(**bind920_profile.resolve_profile(approval, repository=ports_repository))
+    profile = (bind920_profile.resolve_profile(approval, repository=ports_repository) if package is None else
+               bind920_profile.resolve_profile(approval, repository=ports_repository, package=package))
+    return Bind920Profile(**profile)
 
 
 def render_updated_approval(text: str, version: str, ports_commit: str) -> str:
@@ -285,6 +290,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     evaluate_parser = subparsers.add_parser("evaluate")
+    evaluate_parser.add_argument("--package", choices=("bind920", "bind-tools"))
     evaluate_parser.add_argument("--makefile", type=Path, required=True)
     evaluate_parser.add_argument("--ports-directory", type=Path, required=True)
     evaluate_parser.add_argument("--ports-repository", required=True)
@@ -312,11 +318,11 @@ def main() -> None:
     render_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.command == "evaluate":
-        current = current_from_approval(arguments.makefile, arguments.ports_directory)
+        current = current_from_approval(arguments.makefile, arguments.ports_directory, arguments.package)
         candidate = candidate_from_files(
             arguments.ports_repository, arguments.ports_commit,
             arguments.ports_directory / "dns/bind920/Makefile",
-            arguments.ports_directory / "dns/bind920/distinfo", arguments.ports_commit)
+            arguments.ports_directory / "dns/bind920/distinfo", arguments.ports_commit, arguments.package)
         old_version = current.distversion + (f"_{current.portrevision}" if current.portrevision else "")
         package_version = candidate.distversion + (f"_{candidate.portrevision}" if candidate.portrevision else "")
         outputs = dict(newer=str(candidate_is_newer(current, candidate)).lower(),

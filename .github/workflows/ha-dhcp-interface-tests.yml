@@ -11,7 +11,6 @@ on:
       - 'net/dhcp-interface-ha/**'
       - '.github/workflows/ha-dhcp-interface-tests.yml'
       - '.github/workflows/ha-dhcp-interface-release.yml'
-      - '.github/workflows/bind-runtime-release.yml'
       - '.github/workflows/bind-plugin-release.yml'
   workflow_dispatch:
   workflow_call:

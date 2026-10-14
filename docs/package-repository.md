@@ -4,8 +4,8 @@
 backed by verified, signed channel bytes from `resolver-plugins/repository`.
 The same feed also offers experimental HA DHCP Interface on OPNsense 26.7 after
 its first publication. The distribution repository retains independent signed
-component Releases for the BIND runtime, BIND plugin and HA DHCP, plus complete
-BIND stack rollback snapshots;
+component Releases for `bind-tools`, `bind920`, BIND plugin and HA DHCP. Historical
+paired runtime and complete BIND rollback snapshots remain available;
 source releases contain the plugin archive and build metadata.
 Distribution snapshots use byte-identity checks to prohibit replacing a published
 archive. They use the shared snapshot publisher for BIND and HA; repository-wide
@@ -26,34 +26,27 @@ For example, OPNsense 26.7 on FreeBSD 15 uses:
 https://resolver-plugins.github.io/repository/pkg/FreeBSD:15:amd64/26.7/latest
 ```
 
-Every current feed includes `meta.conf`, signed catalogue data, `resolver-plugins.pub`,
-the pinned `bind-tools`/`bind920` package pair, and the current `os-bind-rp-*.pkg`.
-After HA DHCP publication, the 26.7 feed also contains `os-dhcp-interface-ha`.
-OPNsense 26.1 continues to offer BIND only. Existing client URLs and trust keys stay
-the same; the additional plugin is installed only when explicitly selected.
+Every current feed includes `meta.conf`, signed catalogue data,
+`resolver-plugins.pub`, and the packages currently published for that series.
+The index can contain HA DHCP or a plugin without requiring other RP package
+releases. Native installation still resolves each package's ordinary dependencies.
 
-The runtime, plugin and HA production workflows assemble the feed through the
-shared catalogue helpers. Each writer retains its peers' exact published
-archives, verifies input catalogue signatures, package identities, ABI,
-provenance and checksums with the selected minimum reader, then signs one
-combined catalogue. All three share the `package-release` concurrency group
-with cancellation disabled and the full native queue enabled. Queue order is
-not a dependency guarantee. They recheck sealed component receipts before
-publication and the atomic `gh-pages` update.
-Once a component is present, a missing Release cannot silently remove it from
-the feed. A stale staged aggregate must be rebuilt against current components.
+Package workflows build, qualify and publish only their own channel. Their
+concurrency groups include the package and selected series. The separate
+[repository-index workflow](../.github/workflows/repository-index.yml) runs after
+successful owned releases, or by an authorized manual refresh. It authenticates
+existing immutable package receipts, archives, original catalogues, native file
+checksums and ABI before signing the shared catalogue. It never builds a package
+or changes a package Release. Only index writers share the Pages publication lock.
 
-The shared `channel.json` uses `kind=combined`, schema 2, and records the component
-tags, original asset hashes, selected package hashes and aggregate asset hashes.
-Component metadata is preserved as `bind_runtime-*`, `bind_plugin-*` and
-`dhcp-*` sidecars. BIND component manifests use schema 1; complete BIND stack
-manifests use schema 6. New HA manifests use schema 3 with a build fingerprint;
-historical schema-2 manifests and their existing snapshot tags remain readable.
-Each producer records automatically generated per-series build inputs as a
-sidecar, without requiring repository-tracked release JSON.
-The external `composition-inputs.json` seal lives beside the catalogues in the
-signer artifact and its SHA-256 travels as a job output. It is not a catalogue
-asset. See [HA DHCP Interface](#ha-dhcp-interface) for its publication workflow.
+New shared `channel.json` records use `kind=combined`, schema 3. They preserve
+original component tags and asset hashes, and record the subset selected into the
+index. A standalone tools or daemon release supersedes only its corresponding
+archive from a historical runtime pair. No package bytes or original receipts
+are rewritten. New BIND component manifests use schema 2; historical component
+schema 1 and complete-stack schema 6 remain readable. New HA manifests retain
+schema 3. Generated controller and signer seals travel in immutable Actions
+artifacts; release-source `.resolver-plugins` files remain unnecessary.
 
 `pkg` expands `${ABI}` to select `FreeBSD:14:amd64` for OPNsense 26.1 or
 `FreeBSD:15:amd64` for OPNsense 26.7. The explicit series segment prevents a
@@ -64,35 +57,22 @@ Releases per supported OPNsense series:
 
 | Purpose | Release tag | Use |
 | --- | --- | --- |
-| Runtime current | `pkg-<series>-bind-runtime` | producer intake; signed pair only |
-| Runtime snapshot | `pkg-<series>-bind-runtime-<bind_version>-<runtime_fingerprint>` | immutable runtime identity |
-| Plugin current | `pkg-<series>-bind-plugin` | producer intake; signed plugin only |
-| Plugin snapshot | `pkg-<series>-bind-plugin-<plugin_version>-<plugin_fingerprint>` | immutable plugin identity |
-| Complete BIND current | `pkg-<series>` | existing transition clients |
-| Complete BIND rollback | `pkg-<series>-os-bind-rp-<plugin_version>-bind-<runtime_fingerprint>-plugin-<plugin_fingerprint>` | explicit self-contained rollback |
+| Tools current | `pkg-<series>-bind-tools` | signed `bind-tools` only |
+| Tools snapshot | `pkg-<series>-bind-tools-<version>-<fingerprint>` | immutable tools variant |
+| Daemon current | `pkg-<series>-bind920` | signed `bind920` only |
+| Daemon snapshot | `pkg-<series>-bind920-<version>-<fingerprint>` | immutable daemon variant |
+| Plugin current | `pkg-<series>-bind-plugin` | signed `os-bind-rp` only |
+| Plugin snapshot | `pkg-<series>-bind-plugin-<version>-<fingerprint>` | immutable plugin variant |
+| HA current | `pkg-dhcp-interface-ha-<series>` | signed HA plugin only |
+| HA snapshot | `pkg-dhcp-interface-ha-<series>-<version>-<fingerprint>` | immutable HA variant |
 
-Display titles are concise labels only. GitHub requires one repository-wide
-`Latest` release, so publication assigns that badge to the transition channel
-for the highest numeric OPNsense series. Archive releases never receive it.
-These series-specific Release URLs are not used by new client configuration.
-
-The complete BIND current channel and every new BIND rollback snapshot contain exactly one
-series-versioned plugin package such as `os-bind-rp-26.1_1` or
-`os-bind-rp-26.7_1`, the matching `bind920`/`bind-tools` pair, BIND
-provenance, `channel.json`, and the signed catalogue. `pkg` catalogues expose
-one selected version per package name, so rollback temporarily selects a
-retained snapshot URL from the same distribution repository. Runtime-only and
-plugin-only component snapshots are CI inputs, not complete plugin rollback
-repositories. Reusing a component preserves its archives, metadata and original
-creator audit bytes; composition records the new catalogue writer separately.
-
-Retention keeps the five newest complete BIND stack snapshots, including
-historical opaque snapshots, and protects the current pair and every component
-referenced by a retained stack. It then keeps five additional unreferenced
-plugin snapshots and protects every original `built_against_runtime` snapshot
-referenced by a retained plugin, followed by five additional unreferenced
-runtime snapshots. BIND pruning runs only after public verification, and for the
-plugin writer after source-release success.
+Historical `pkg-<series>-bind-runtime` pairs and `pkg-<series>` complete stacks,
+including their immutable rollback tags, remain readable and installable.
+Package publication no longer updates or prunes those shared histories. Owned
+immutable variants are retained; a package run cannot delete another package's
+history. Complete historical snapshots remain useful for coordinated rollback.
+New component snapshots roll back one package while preserving its ordinary
+native dependency requirements. The shared ABI URL remains the current client feed.
 
 BIND packages keep upstream versions, for example `bind920-9.20.26_1` and
 `bind-tools-9.20.26_1`; only `os-bind-rp` uses the OPNsense series as its
@@ -322,50 +302,36 @@ pkg install -f -r resolver-plugins os-bind-rp
 The rollback snapshot is not a separate product feed; leave it disabled
 outside an explicit rollback to keep ordinary upgrades on the ABI-aware URL.
 
-Development builds use pre-release tags such as `pr-123-26.7-bind-runtime` and
-`pr-123-26.7-bind-plugin`. They are for
-review testing only and are neither signed nor promoted into a stable channel.
-Every development release and its Git tag are removed when the pull request
-closes, whether it is merged or not. An in-flight development publisher checks
-the pull request before and after upload so closure cannot leave a stale build.
+Runtime version PRs build unsigned Actions artifacts for every registered
+compatibility series. They receive no signing or publication credentials.
+Plugin manual development builds retain their unsigned `pr-<number>-<series>-bind-plugin`
+Release previews and closure cleanup; they never enter the stable repository.
 
 ## Publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) builds
-a fresh approved runtime pair on every selected run. The
-[plugin workflow](../.github/workflows/bind-plugin-release.yml) builds or reuses
-only `os-bind-rp` from the selected `release/bind-rp/<series>` source. Its
-controller requires an already published runtime matching the approved pin and
-source package's minimum, freezes the complete receipt, and authenticates that
-pair before building. It never builds or dispatches the runtime workflow.
-For a new series or pin, publish the runtime first and retry the plugin if it
-was selected before that publication completed. A runtime bootstrap can publish
-its isolated pair before a plugin exists; it cannot expose an incomplete
-combined feed. Once a complete feed exists, every writer retains all registered
-peers or fails.
+The [tools](../.github/workflows/bind-tools-release.yml) and
+[daemon](../.github/workflows/bind920-release.yml) workflows each own their version
+approval under `packages/<name>/Makefile`. Shared runtime job code is an invoked
+helper, with no autonomous trigger. Each package's PR builds unsigned native
+previews; merging its newer version approval selects only that package's changed
+series. Neither runtime has a daily schedule. Initial approval-file creation and
+missing new standalone tags do not cause migration rebuilds: selection can read
+the historical pair's original approval.
 
-Plugin producers select only their own reviewed code changes, independently for
-each registered series. Environment, framework, CI, metadata and other package
-changes alone do not rebuild them. Published source commits support legacy
-channels without requiring a new input-record migration build. An eligible build
-then discovers and seals its complete tools, core, framework and pkg provenance.
-The runtime has no daily schedule and uses the reviewed `RP_BIND_VERSION` /
-`RP_BIND_PORTS_COMMIT` approval. A changed approval selects each affected runtime
-series, while plugin-only source changes do not select runtime builds.
-Relevant merges into a release-source branch select only that plugin and series.
-Unchanged plugin code or runtime approvals skip production, including manual dispatch.
-`workflow_dispatch` remains
-available for development builds and explicit production series selection. A production
-dispatch from any ref other than `master` is rejected. Release branches supply
-immutable build inputs only and never run publication helpers. Publication runs
-share one global lock so automatic and manual promotions cannot replace or
-restore the same current channel concurrently.
+The [BIND plugin](../.github/workflows/bind-plugin-release.yml) and
+[HA DHCP](../.github/workflows/ha-dhcp-interface-release.yml) workflows select only
+their own reviewed code changes, separately for each series. CI, metadata,
+framework, environment, runtime approvals and other package changes alone do not
+rebuild either plugin. Unchanged production inputs skip, including manual runs.
+Eligible runs then discover and seal the complete current build environment.
 
-The `Propose bind920 candidate` workflow may open PRs that update only the
-two runtime approval fields in the plugin package Makefile. Those PRs provide review evidence and CI status and do not
-alter a stable package channel while open. Merging a package-affecting candidate
-to `master` selects runtime production for each registered series whose inputs
-change; maintainers can still select a series explicitly.
+BIND plugin controllers freeze `bind-build-dependency.json` from the official
+OPNsense Ports object already selected for the creator's numeric tools tag.
+The builder installs that exact ordinary BIND identity from the authenticated
+OPNsense feed; signer metadata and archive dependency checks bind it to the sealed
+controller record. It does not fetch RP runtime releases or approvals. HA builds
+and publishes without fetching any BIND packages. Daemon builds create their
+native tools prerequisite internally for qualification and never publish it.
 
 The `RP_PKG_SIGNING_KEY` GitHub Actions secret contains the base64-encoded
 private key. It is decoded only in the disposable FreeBSD VM, used by `pkg
@@ -395,17 +361,19 @@ credential with a broad source-repository or session credential.
 
 Production privileged jobs check out the literal trusted workflow commit and
 bind the controller's selected control identity to it before using keys or App
-credentials. Producer artifacts contain only their owned raw archives and
-original build records. The signer independently fetches reused components and
-the plugin's frozen runtime, authenticates them with the sealed reader role,
-and checks their exact receipts before decoding the signing key. Composition
-separately authenticates retained peers and checks approved compatibility before
-generating its signed catalogues. It preserves original provenance, stages the
-owned component and complete BIND stack, and seals all retained composition
-inputs outside the catalogues. Each catalogue is generated once for its current
-and immutable publication paths.
-The derived public key must match the key committed in this repository before
-either path can proceed.
+credentials. Producer artifacts contain their owned archives and original build records.
+The daemon also carries an explicitly named internal tools archive for native
+qualification; the signed owned channel excludes it. Its digest is sealed in the
+signer artifact. Signers authenticate the selected reader and every owned native
+checksum before decoding the key, then generate the owned catalogue with the
+selected creator. A key must derive the committed public key.
+
+The repository index has its own controller, isolated signing VM, native reader
+qualification and App-authenticated publisher. Its frozen receipt map permits
+missing unrelated packages and protects all selected originals. It rechecks that
+map before a compare-and-advance Pages write. If an owned package advances while
+the index is qualifying, refresh the index against the newer receipts; package
+publication itself remains complete.
 
 Before replacing mutable Release assets, publication downloads every prior
 asset—packages, catalogues, metadata, provenance, and public key—to local
@@ -418,10 +386,9 @@ Immutable snapshots already completed by an interrupted attempt are retained;
 a retry reuses only a fully published, byte-validated snapshot. A matching
 immutable snapshot can safely advance an older mutable current channel.
 Partially populated drafts remain a distinct recoverable transaction state,
-not a valid cache hit. Stale selected peers fail before promotion and must be
-recomposed. If the Pages update fails, the previous feed remains intact while
-completed Release snapshots remain available. Recover using the exact original
-owned signed component and then-current peer receipts; a new build is not a
+not a valid cache hit. Stale owned package selections fail before promotion. If the Pages update fails, the previous feed remains intact while
+completed Release snapshots remain available. Recover an owned release using its exact original
+signed component; a new build is not a
 publication retry. Recovery artifacts preserve prior mutable bytes.
 Historical complete snapshots remain unchanged and installable through `pkg`.
 
@@ -430,87 +397,47 @@ GitHub's 30-day rerun window. Runtime controller, producer, signed repository an
 recovery artifacts retain those original immutable IDs and external seals for
 30 days. Rerunning failed jobs uses the original qualified signed tree; a whole
 build rerun or same-pin manual dispatch can produce different bytes and is not
-this recovery operation. Expired artifacts or changed peers stop promotion.
+this recovery operation. Expired artifacts or an advanced owned current channel stop stale promotion.
 Never overwrite an immutable snapshot to make a rebuilt package fit.
 
-After promotion, a fresh FreeBSD VM configures the selected OPNsense core and
-minimum pkg reader, then runs repository setup and native
-`pkg install -y os-bind-rp` with all three BIND/plugin packages initially absent. Dependencies
-are not preinstalled for this checkpoint. It records the native dry run,
-transaction, providers and file maps, compares the plugin with the qualified
-archive, checks source-defined floors/conflicts, and runs the existing named,
-rndc and DNS canaries. Separate clean cases exercise the retained migration
-installer with an eligible upstream pair or a runtime upgrade, and ordinary
-below-minimum runtime/core refusal with no official plugin installed.
-The public `channel.json` must match the qualified bytes. The
-immutable source release is created only by the plugin workflow, after this
-verified public-channel installation succeeds. Its tag is
-`os-bind-rp-<series>-<plugin_version>-plugin-<plugin_fingerprint>` and its narrow
-asset set contains the original plugin archive and
-build/provenance records, including the raw source `plugin-package.mk`, from the
-signed component. Its display title is `os-bind-rp <series> <plugin_version>`;
-the build fingerprint remains in the tag. A runtime-only publication
-does not mint a source release. Retrying a source release with the exact same
-assets is a no-op; an existing tag with different bytes is rejected.
+Before promotion, a clean FreeBSD VM qualifies the owned signed current and
+snapshot catalogues with the selected minimum reader. It authenticates fetched
+archive bytes, installs native dependencies, checks the exact owned identity,
+file maps, ownership and `pkg check -s`, and checks the plugin's source binding
+or BIND daemon canary. Tools qualification exercises the installed native clients.
+After promotion the same checks use the package's public Release URLs, without
+requiring the shared index to finish first. Plugin source releases follow the
+successful public owned-channel check and preserve the original archive and build
+records. Their immutable tags include the full build fingerprint. Runtime package
+publication never creates a plugin source release.
 
 Do not publish a stable channel manually from a workstation. A successful
 workflow run is the release record and source of the signed catalogue.
 
 ## Verification
 
-Before production publication, the shared BIND verifier uses a disposable FreeBSD VM with
-the matching official OPNsense core package to add the staged signed current
-and snapshot repositories, install all three current packages, and
-force-install the complete plugin/runtime pair through the snapshot path. A
-runtime bootstrap verifies only its owned signed pair. Before publishing a new
-complete stack, native qualification checks and installs the staged current and
-its exact paired snapshot. After publication, a fresh public gate authenticates
-those published repositories against the qualified bytes, runs the ordinary native
-installation checkpoint against the current feed, and checks installed identities and file
-checksums. Historical snapshots remain available for explicit administrator rollback.
+Run the focused checks in [Building](building.md) before changing release code.
+The unprivileged helper suite protects ownership isolation, sealed provenance,
+minimum-reader compatibility, immutable snapshots, source-only series selection,
+and publication authority. Native package workflows require staged and public
+owned-channel installation checks before their success can refresh the index.
+The index separately verifies the signed aggregate through the minimum reader.
 
-Development, staged, and published installation gates all finish by checking a
-minimal isolated BIND configuration, starting and restarting BIND through its
-managed service script, and querying an authoritative canary name. This catches
-broken executables, linked libraries, service integration, and basic DNS
-response failures before promotion.
-
-The published installation gate also checks the installer's mode-0700 durable
-state directory and the configuration backup's original bytes and mode. It keeps
-the caller-owned temporary archives, compares their recorded hashes with both
-the fetched and staged packages, and observes the isolated repository dry run
-before the installer's live transaction. Archive ownership checks cover packages
-installed from those archives. Retained BIND packages must keep their original
-identities, native records, owned paths and measured physical file maps. Own
-packages retain strict archive-to-installed checksum checks. These observations
-qualify only the selected series in a successful native run. Local migration
-protection tests remain alongside native qualification.
-These stock FreeBSD VM checks cover packages, catalogues and BIND runtime;
-appliance UI and PHP plugin migrations require separate appliance qualification.
-
-If a signing-key rotation is required, replace `RP_PKG_SIGNING_KEY`, commit
-the replacement public key, and republish every channel for every supported
-series. Announce the new fingerprint; existing clients must update their key
-before they can verify the replacement catalogues.
+These VM checks cover packages and catalogues. Appliance acceptance still needs
+real OPNsense service state, zone preservation, generated configuration and
+HA behavior. Retain the native evidence for a release and report its actual run
+outcome; local synthetic fixtures cannot establish native installation compatibility.
 
 ## HA DHCP Interface
 
 The experimental HA DHCP Interface plugin joins the shared 26.7 feed after its
 first publication. It uses the same signing key and publisher App, while retaining
 independent signed current and rollback Release channels in the distribution
-repository. Its signer fetches the published runtime and plugin separately and
-authenticates both with its selected minimum reader before creator or key use.
-It preserves HA's own producer, metadata, snapshot identity and source prerelease,
-and signs only the combined feed alongside its own channel. An externally sealed
-three-component composition is checked before native installation and before
-and after HA promotion; HA never promotes BIND component or stack tags.
-Existing Resolver Plugins clients keep the same
-feed URL and public key.
+repository. Its signer validates only its own producer, controller inputs,
+native checksums and public key. It publishes only the HA current and immutable
+snapshot channels. Its native checks install from those own channels; the shared
+index incorporates that publication independently.
 
-The [HA DHCP release workflow](../.github/workflows/ha-dhcp-interface-release.yml)
-runs automatically after a package-affecting PR merges into a registered
-`release/dhcp-interface-ha/<series>` branch, or after relevant CI/framework
-changes merge into `master`. Manual dispatch from `master` supports recovery.
 It follows the BIND plugin's per-series release model: the source branch owns
 the package version (`26.7_1` initially); trusted master CI discovers upstream
 inputs and owns build and publication code. HA uses the same discovery and

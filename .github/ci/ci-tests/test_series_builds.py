@@ -8,6 +8,17 @@ series_builds = load_module('series_builds', 'shared/series_builds.py')
 from ha_fixtures import make_ha_channel
 
 
+def test_legacy_runtime_approval_changes_do_not_change_plugin_source_identity(tmp_path):
+    repository = init_repository(tmp_path / 'source')
+    definition = 'PLUGIN_NAME= bind-rp\nRP_BIND_VERSION= 9.20.27\nRP_BIND_PORTS_COMMIT= ' + 'a' * 40 + '\n'
+    before = commit(repository, {'dns/bind/Makefile': definition}, 'original source')
+    after = commit(repository, {'dns/bind/Makefile': definition.replace('9.20.27', '9.20.29')}, 'runtime only')
+    removed = commit(repository, {'dns/bind/Makefile': 'PLUGIN_NAME= bind-rp\n'}, 'separate runtime approvals')
+    digest = series_builds.tree_digest(repository, before, ('dns/bind',))
+    assert series_builds.tree_digest(repository, after, ('dns/bind',)) == digest
+    assert series_builds.tree_digest(repository, removed, ('dns/bind',)) == digest
+
+
 @pytest.fixture
 def series_repository(tmp_path):
     repository = init_repository(tmp_path / 'repository')

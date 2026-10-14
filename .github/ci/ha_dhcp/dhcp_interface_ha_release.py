@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select HA DHCP releases and authenticate their reviewed BIND peers."""
+"""Select reviewed HA DHCP sources and validate frozen controller inputs."""
 import argparse
 import json
 import re

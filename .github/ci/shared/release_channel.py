@@ -104,7 +104,7 @@ def validate_bind_provenance(
     """Accept only the BIND pair implied by trusted control-plane metadata."""
     if (not isinstance(provenance, dict)
             or type(provenance.get("schema")) is not int
-            or provenance["schema"] not in (bind920_profile.PROVENANCE_SCHEMA, 5)):
+            or provenance["schema"] not in (bind920_profile.PROVENANCE_SCHEMA, 5, 6)):
         raise ValueError("BIND provenance is invalid")
     try:
         expected = bind920_profile.build_provenance(
@@ -116,6 +116,7 @@ def validate_bind_provenance(
             provenance["packages"],
             recipe_sha256=provenance["build_recipe_sha256"],
             build_inputs_sha256=provenance.get("build_inputs_sha256"),
+            package=provenance.get("package"), tools_version=provenance.get("tools_version"),
         )
     except (KeyError, ValueError) as error:
         raise ValueError("BIND provenance is invalid") from error
@@ -424,9 +425,12 @@ def validate_static_channel(directory: Path) -> None:
     if data.get("kind") in {"combined", "bind-stack"}:
         from shared import package_catalogue
         package_catalogue.validate(directory)
-    elif data.get("kind") in {"bind-runtime", "bind-plugin"}:
+    elif data.get("kind") in {"bind-runtime", "bind-plugin", "bind-tools", "bind920"}:
         from bind.shared import components
         components.validate_component(directory, data["kind"].replace("-", "_"), data["series"])
+    elif data.get("schema") in (2, 3) and "plugin_version" in data and "source_commit" in data:
+        from ha_dhcp import dhcp_interface_ha_channel
+        dhcp_interface_ha_channel.validate(directory)
     else:
         raise ValueError("unsupported static channel format")
 

@@ -202,7 +202,10 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
         assert candidate['packages'] == {name: digest for name, digest in original.items() if name.endswith('.pkg')}
 
 def release_workflow(component):
-    filename = {'bind_runtime': 'bind-runtime-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
+    if component in ('bind_runtime', 'bind_tools', 'bind920'):
+        return (REPOSITORY_ROOT / '.github/workflows/bind-runtime-package.yml').read_text().replace(
+            action_expression('inputs.component'), component)
+    filename = {'bind_plugin': 'bind-plugin-release.yml',
                 'dhcp_interface_ha': 'ha-dhcp-interface-release.yml'}[component]
     return (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
 
@@ -334,7 +337,9 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
 @pytest.mark.parametrize('path,push,merge', [
     ('.github/ci/bind/runtime/build-bind920.sh', (False, False), (False, False)),
     ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, False), (False, False)),
-    ('dns/bind/Makefile', (True, True), (False, True)),
+    ('dns/bind/Makefile', (False, True), (False, True)),
+    ('packages/bind920/Makefile', (True, False), (False, False)),
+    ('packages/bind-tools/Makefile', (False, False), (False, False)),
     ('dns/bind/src/etc/rc.d/named', (False, True), (False, True)),
     ('Mk/plugins.mk', (False, False), (False, False)),
     ('Scripts/version.sh', (False, False), (False, False)),
@@ -357,8 +362,8 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
 ])
 def test_actual_filters_route_independent_input_classes(path, push, merge):
     selection = load_module('independent_workflow_selection', 'bind/shared/selection.py')
-    for component, expected_push, expected_merge in zip(('bind_runtime', 'bind_plugin'), push, merge):
-        workflow = release_workflow(component)
+    for component, expected_push, expected_merge in zip(('bind920', 'bind_plugin'), push, merge):
+        workflow = (REPOSITORY_ROOT / '.github/workflows/bind920-release.yml').read_text() if component == 'bind920' else release_workflow(component)
         for event, expected in [('push', expected_push), ('pull_request_target', expected_merge)]:
             selected = False
             for pattern in trigger_paths(workflow, event):
@@ -371,7 +376,7 @@ def action_expression(value):
     return '$' + '{{ ' + value + ' }}'
 
 
-@pytest.mark.parametrize('filename', ['bind-runtime-release.yml', 'bind-plugin-release.yml', 'ha-dhcp-interface-release.yml'])
+@pytest.mark.parametrize('filename', ['bind-runtime-package.yml', 'bind-plugin-release.yml', 'ha-dhcp-interface-release.yml'])
 def test_release_authority_is_limited_to_reviewed_jobs(filename):
     workflow = (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
     profile_job = workflow_jobs(workflow)['profile']
@@ -384,7 +389,10 @@ def test_release_authority_is_limited_to_reviewed_jobs(filename):
     assert_permissions(workflow, {'contents': 'read', 'pull-requests': 'read'})
     concurrency = re.search(r'^concurrency:\n((?:  [^\n]*\n)*)', header, re.MULTILINE)[1]
     assert dict(line.strip().split(': ', 1) for line in concurrency.splitlines()) == {
-        'group': 'package-release', 'cancel-in-progress': 'false', 'queue': 'max'}
+        'group': {'bind-runtime-package.yml': 'runtime-${{ inputs.component }}-${{ inputs.series }}',
+                  'bind-plugin-release.yml': "bind-plugin-${{ inputs.series || github.event.pull_request.base.ref || 'discovery' }}",
+                  'ha-dhcp-interface-release.yml': "dhcp-interface-ha-${{ inputs.series || github.event.pull_request.base.ref || 'discovery' }}"}[filename],
+        'cancel-in-progress': 'false', 'queue': 'max'}
     assert_action_release_tags(workflow)
     for name, job in workflow_jobs(workflow).items():
         expected_secrets = {'RP_PKG_SIGNING_KEY'} if name == 'sign' else (
@@ -404,7 +412,9 @@ def test_release_authority_is_limited_to_reviewed_jobs(filename):
             permissions = {'contents': 'read'} if name in (
                 'producer', 'sign', 'verify', 'publish', 'verify-published', 'retention', 'verify-development') else None
         if name == 'select':
-            permissions = {'contents': 'read', 'pull-requests': 'read', 'actions': 'write'}
+            permissions = {'contents': 'read', 'pull-requests': 'read'}
+            if filename != 'bind-runtime-package.yml':
+                permissions['actions'] = 'write'
         assert_permissions(job, permissions, indent=4)
         if 'uses: actions/checkout@' in job:
             assert_checkout_credentials(job)
@@ -457,7 +467,7 @@ def test_privileged_event_guards_do_not_trust_selector_mode(component):
     ]
     jobs = workflow_jobs(release_workflow(component))
     privileged = ['sign', 'publish', 'source-release'] if ha else (
-        ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else []))
+        ['sign', 'publish'] + (['source-release'] if component == 'bind_plugin' else []))
     for name in privileged:
         for context, allowed in scenarios:
             assert condition_allows(jobs[name], context) is allowed, (component, name, context)
@@ -466,7 +476,7 @@ def test_privileged_event_guards_do_not_trust_selector_mode(component):
 @pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
 def test_privileged_jobs_bind_control_and_immutable_owner_artifacts(component):
     jobs = workflow_jobs(release_workflow(component))
-    privileged = ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else [])
+    privileged = ['sign', 'publish'] + (['source-release'] if component == 'bind_plugin' else [])
     for name, job in jobs.items():
         if component == 'bind_runtime':
             for step in workflow_steps(job):
@@ -537,12 +547,11 @@ def vm_body(job):
 def test_native_qualification_is_mandatory_and_authentication_precedes_key_decode(component):
     jobs = workflow_jobs(release_workflow(component))
     for job, prerequisite in [('producer', 'test'), ('verify', 'sign'), ('publish', 'verify'),
-                              ('verify-published', 'publish'), ('retention', 'verify-published'),
-                              ('publish-development', 'verify-development')]:
+                              ('verify-published', 'publish')]:
         assert prerequisite in needs_jobs(jobs[job]), (component, job)
     if component == 'bind_plugin':
         assert 'verify-published' in needs_jobs(jobs['source-release'])
-        assert 'source-release' in needs_jobs(jobs['retention'])
+        assert 'verify-development' in needs_jobs(jobs['publish-development'])
     for name in ('producer', 'sign', 'verify', 'verify-published', 'verify-development'):
         step, script = vm_body(jobs[name])
         assert re.search(r'^          release: ([^\n]+)$', step, re.MULTILINE)[1] == action_expression('needs.profile.outputs.freebsd_release')
@@ -565,9 +574,9 @@ def test_native_qualification_is_mandatory_and_authentication_precedes_key_decod
     assert signer.index('components.py authenticate') < signer.index('base64 -d')
 
 
-@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
-def test_pages_readiness_precedes_distribution_mutation(component):
-    steps = workflow_steps(job_text(release_workflow(component), 'publish'))
+def test_pages_readiness_precedes_index_mutation():
+    text = (REPOSITORY_ROOT / '.github/workflows/repository-index-series.yml').read_text()
+    steps = workflow_steps(job_text(text, 'publish'))
     health = [(index, step_run(step)) for index, step in enumerate(steps) if 'pages-health' in step_run(step)]
     assert len(health) == 1
     index, script = health[0]
@@ -577,7 +586,7 @@ def test_pages_readiness_precedes_distribution_mutation(component):
     assert index < mutation
 
 
-@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+@pytest.mark.parametrize('component', ['bind_plugin'])
 @pytest.mark.parametrize('before,after,existing', [('open', 'open', False), ('closed', 'closed', True), ('open', 'closed', False)])
 def test_preview_publication_preserves_other_tags_and_removes_closed_pr_output(tmp_path, component, before, after, existing):
     """Exercise the actual publisher shell; GH persistence and sealed intake are independent boundaries."""

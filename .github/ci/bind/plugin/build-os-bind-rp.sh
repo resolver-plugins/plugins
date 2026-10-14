@@ -11,7 +11,7 @@ fail() {
 series=$1
 artifact_directory=$2
 : "${RP_TRUSTED_DIRECTORY:?RP_TRUSTED_DIRECTORY is required}"
-: "${RP_RUNTIME_DIRECTORY:?RP_RUNTIME_DIRECTORY is required}"
+RP_RUNTIME_DIRECTORY=${RP_RUNTIME_DIRECTORY:-$RP_TRUSTED_DIRECTORY}
 : "${RP_SELECTION_SHA256:?RP_SELECTION_SHA256 is required}"
 : "${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
 
@@ -65,6 +65,16 @@ core_commit=$(metadata_field core_commit)
 tools_tag=$(metadata_field tools_tag)
 freebsd_release=$(metadata_field freebsd_release)
 
+selection_schema=$(selection_field schema)
+if [ "$selection_schema" = 2 ]; then
+    opnsense_core_commit=$("$script_directory/../../shared/setup-opnsense-repository.sh" "$series")
+    "$python_command" -I "$script_directory/../../shared/target_pkg.py" install \
+        "$RP_TARGET_PKG_METADATA" "$series" --upstream "$RP_UPSTREAM_METADATA" --role creator \
+        --pkg-command "$pkg_command" --pkg-static "$pkg_static" >/dev/null
+    dependency_version=$("$python_command" -I "$script_directory/../../shared/workflow_data.py" field "$trusted/bind-build-dependency.json" version)
+    "$pkg_static" install -y -r OPNsense opnsense "bind920-$dependency_version"
+    sh "$script_directory/../../shared/prepare-opnsense-vm.sh"
+else
 opnsense_core_commit=$(RP_TARGET_PKG_METADATA="$RP_READER_PKG_METADATA" \
     "$script_directory/../../shared/setup-opnsense-repository.sh" "$series")
 "$python_command" -I "$script_directory/../../shared/target_pkg.py" install \
@@ -91,6 +101,8 @@ then
     done
 fi
 "$pkg_static" add -f "$RP_RUNTIME_DIRECTORY"/bind-tools-*.pkg "$RP_RUNTIME_DIRECTORY"/bind920-*.pkg
+
+fi
 
 installed_runtime() {
     "$python_command" -I "$script_directory/plugin_release.py" installed-runtime \
@@ -159,7 +171,7 @@ cp "$trusted/producer-inputs.json" "$temporary_output/plugin-build-inputs.json"
     printf 'uname=%s\n' "$(uname -a)"
     printf 'pkg_abi=%s\n' "$("$pkg_static" config ABI)"
     printf 'bind920=%s\n' "$bind_version"
-    printf 'bind_source=resolver\n'
+    if [ "$selection_schema" = 2 ]; then printf 'bind_source=opnsense\n'; else printf 'bind_source=resolver\n'; fi
     printf 'opnsense=%s\n' "$opnsense_version"
     printf 'opnsense_core_commit=%s\n' "$opnsense_core_commit"
     printf 'upstream_commit=%s\n' "$upstream_commit"

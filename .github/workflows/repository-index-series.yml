@@ -1,0 +1,203 @@
+name: Signed repository index jobs
+
+on:
+  workflow_call:
+    inputs:
+      series:
+        required: true
+        type: string
+    secrets:
+      RP_PKG_SIGNING_KEY:
+        required: true
+      RP_DISTRIBUTION_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.select.outputs.changed }}
+      selection_sha256: ${{ steps.select.outputs.selection_sha256 }}
+      freebsd_release: ${{ steps.select.outputs.freebsd_release }}
+      input_artifact_id: ${{ steps.inputs.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES: ${{ inputs.series }}
+          CONTROL_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          set -eu
+          python3 -I .github/ci/shared/repository_index.py select --series "$SERIES" \
+            --control-commit "$CONTROL_COMMIT" --directory artifacts/index-inputs \
+            > "$RUNNER_TEMP/index-selection.json"
+          python3 -I .github/ci/shared/workflow_data.py outputs "$RUNNER_TEMP/index-selection.json" \
+            changed selection_sha256 freebsd_release >> "$GITHUB_OUTPUT"
+      - id: inputs
+        if: steps.select.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: index-inputs-${{ inputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/index-inputs
+          if-no-files-found: error
+          retention-days: 30
+
+  sign:
+    if: >-
+      needs.select.outputs.changed == 'true' && github.ref == 'refs/heads/master' &&
+      (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch')
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      repository_artifact_id: ${{ steps.repository.outputs.artifact-id }}
+    env:
+      RP_INDEX_SHA256: ${{ needs.select.outputs.selection_sha256 }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require immutable controller artifact
+        run: test -n '${{ needs.select.outputs.input_artifact_id }}'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.select.outputs.input_artifact_id }}
+          path: artifacts/index-inputs
+          merge-multiple: true
+      - name: Check the external controller seal before private-key use
+        run: |
+          python3 -I .github/ci/shared/repository_index.py validate --directory artifacts/index-inputs \
+            --sha256 "$RP_INDEX_SHA256" --control-commit '${{ github.workflow_sha }}'
+      - name: Authenticate existing packages and sign their index
+        uses: vmactions/freebsd-vm@v1
+        env:
+          RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+        with:
+          release: ${{ needs.select.outputs.freebsd_release }}
+          arch: x86_64
+          envs: RP_INDEX_SHA256 RP_PKG_SIGNING_KEY
+          usesh: true
+          disable-cache: true
+          copyback: true
+          prepare: |
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            git config --global --add safe.directory "$PWD"
+            python3 -I .github/ci/shared/repository_index.py authenticate --directory artifacts/index-inputs --sha256 "$RP_INDEX_SHA256"
+            umask 077
+            key=.rp-index-signing-key.pem
+            trap 'rm -f "$key"' EXIT HUP INT TERM
+            printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
+            python3 -I .github/ci/shared/repository_index.py stage --directory artifacts/index-inputs \
+              --sha256 "$RP_INDEX_SHA256" --key "$key" --output artifacts/index
+            rm -f "$key"
+      - id: repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-index-${{ inputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/index
+          if-no-files-found: error
+          retention-days: 30
+
+  verify:
+    needs: [select, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      RP_INDEX_SHA256: ${{ needs.select.outputs.selection_sha256 }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          path: artifacts/index
+          merge-multiple: true
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ needs.select.outputs.freebsd_release }}
+          arch: x86_64
+          envs: RP_INDEX_SHA256
+          usesh: true
+          disable-cache: true
+          prepare: |
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            python3 -I .github/ci/shared/repository_index.py verify --directory artifacts/index --sha256 "$RP_INDEX_SHA256"
+
+  publish:
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch')
+    needs: [select, sign, verify]
+    runs-on: ubuntu-24.04
+    env:
+      RP_INDEX_SHA256: ${{ needs.select.outputs.selection_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          path: artifacts/index
+          merge-multiple: true
+      - name: Check the signer artifact against the controller seal
+        run: |
+          python3 -I .github/ci/shared/repository_index.py validate --directory artifacts/index \
+            --sha256 "$RP_INDEX_SHA256" --control-commit '${{ github.workflow_sha }}'
+      - name: Check Pages deployment readiness
+        run: |
+          set -eu
+          attempt=1
+          while [ "$(curl --fail --silent --show-error https://resolver-plugins.github.io/repository/pages-health || true)" != resolver-plugins-pages-ok ]; do
+            test "$attempt" -lt 20
+            sleep 30
+            attempt=$((attempt + 1))
+          done
+      - id: distribution-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: repository
+          permission-contents: write
+      - name: Publish only the ABI-aware repository index
+        env:
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+        run: |
+          python3 -I .github/ci/shared/repository_index.py publish --directory artifacts/index \
+            --sha256 "$RP_INDEX_SHA256" --control-commit '${{ github.workflow_sha }}' --recovery "$RUNNER_TEMP/index-recovery"
+      - name: Save publication recovery evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: index-recovery-${{ inputs.series }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/index-recovery
+          if-no-files-found: ignore
+          retention-days: 30

@@ -20,14 +20,32 @@ SOURCE_ASSETS = ("build-metadata.txt", "plugin-build-inputs.json", "upstream.jso
 def fetch_intake(repository, trusted, selection, output):
     """Fetch only controller-frozen snapshots; current is never consulted here."""
     output.mkdir(parents=True, exist_ok=True)
-    receipt = json.loads((trusted / "runtime-selection.json").read_text())
-    components.fetch_frozen_component(repository, receipt, output / "bind_runtime")
+    if selection["schema"] == 1:
+        receipt = json.loads((trusted / "runtime-selection.json").read_text())
+        components.fetch_frozen_component(repository, receipt, output / "bind_runtime")
     if selection["producer_action"] == "reuse":
         cached = json.loads((trusted / "cached-component.json").read_text())
         components.fetch_frozen_component(repository, cached, output / "cached_component")
 
 
 def installed_runtime(directory, trusted, series, pkg_command):
+    if json.loads((trusted / "selection.json").read_text())["schema"] == 2:
+        requirement = components.plugin_requirement_from_makefile((trusted / "plugin-package.mk").read_text())
+        creator = json.loads((trusted / "creator-target.json").read_text())["package_creator"]
+        identities = {name: target_pkg.query_identity(pkg_command, ["query", "-e", f"%n = {name}"])
+                      for name in ("bind920", "bind-tools")}
+        dependency = json.loads((trusted / "bind-build-dependency.json").read_text())
+        if identities["bind920"].version != dependency["version"]:
+            raise ValueError("ordinary build dependency differs from sealed upstream version")
+        for name, identity in identities.items():
+            if (identity.name != name or identity.origin != f"dns/{name}" or identity.abi != creator["abi"]
+                    or components.compare_native_versions(pkg_command, identity.version, requirement["minimum_version"]) == "<"):
+                raise ValueError("ordinary OPNsense dependency differs from source minimum or target ABI")
+        edges = subprocess.check_output([pkg_command, "query", "-e", "%n = bind920", "%dn|%do|%dv"], text=True).splitlines()
+        if f'bind-tools|dns/bind-tools|{identities["bind-tools"].version}' not in edges:
+            raise ValueError("installed ordinary runtime dependency differs")
+        subprocess.run([pkg_command, "check", "-s", "bind920", "bind-tools"], check=True, stdout=sys.stderr)
+        return identities["bind920"].version
     receipt = components.component_receipt(directory, "bind_runtime", series)
     if receipt != json.loads((trusted / "runtime-selection.json").read_text()):
         raise ValueError("installed build input differs from frozen runtime receipt")
@@ -88,14 +106,18 @@ def validate_output(directory, selection, trusted, pkg_command):
         _, dependencies = releases.query_package(archive, pkg_command)
         record = releases.read_package_manifest(archive, pkg_command)
         requirement = components.plugin_requirement_from_makefile((trusted / "plugin-package.mk").read_text())
-        runtime = components.validate_receipt(json.loads((trusted / "runtime-selection.json").read_text()),
-                                              "bind_runtime", selection["series"])
-        built_version = next(name.removeprefix("bind920-").removesuffix(".pkg")
-                             for name in runtime["packages"] if name.startswith("bind920-"))
+        if selection["schema"] == 2:
+            built_version = components._metadata((directory / "build-metadata.txt").read_text())["bind920"]
+        else:
+            runtime = components.validate_receipt(json.loads((trusted / "runtime-selection.json").read_text()),
+                                                  "bind_runtime", selection["series"])
+            built_version = next(name.removeprefix("bind920-").removesuffix(".pkg")
+                                 for name in runtime["packages"] if name.startswith("bind920-"))
         upstream = json.loads((trusted / "upstream.json").read_text())
         _, source = components._role(json.loads((trusted / "creator-target.json").read_text()), upstream, "creator")
         components.validate_plugin_metadata(components._metadata((directory / "build-metadata.txt").read_text()),
-                                            upstream, inputs, source, built_version)
+                                            upstream, inputs, source, built_version,
+                                            "opnsense" if selection["schema"] == 2 else "resolver")
         components.validate_plugin_archive(record, dependencies, requirement,
                                            built_runtime_version=built_version, development=True)
         components._validate_plugin_file_map(record, package_checksums.verify_archive(pkg_command, archive))
@@ -109,6 +131,8 @@ def prepare_source_assets(component, output, series, selection):
     output.mkdir(parents=True)
     for name in (*manifest["packages"], *SOURCE_ASSETS):
         shutil.copyfile(component / name, output / name)
+    if (component / "bind-build-dependency.json").is_file():
+        shutil.copyfile(component / "bind-build-dependency.json", output / "bind-build-dependency.json")
     if (component / "series-build-inputs.json").is_file():
         shutil.copyfile(component / "series-build-inputs.json", output / "series-build-inputs.json")
     return f"os-bind-rp-{series}-{manifest['plugin_version']}-plugin-{manifest['build_fingerprint']}"

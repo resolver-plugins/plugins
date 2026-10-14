@@ -21,7 +21,11 @@ from shared import metadata_profile, package_checksums, release_channel as relea
 ROOT = Path(__file__).resolve().parents[4]
 PUBLIC_KEY = ROOT / "docs/package-repository/resolver-plugins.pub"
 REPOSITORY = "resolver-plugins/repository"
-KINDS = ("bind_runtime", "bind_plugin")
+LEGACY_KINDS = ("bind_runtime", "bind_plugin")
+KINDS = (*LEGACY_KINDS, "bind_tools", "bind920")
+RUNTIME_KINDS = ("bind_runtime", "bind_tools", "bind920")
+APPROVAL_PATHS = {"bind_runtime": "dns/bind/Makefile",
+                  "bind_tools": "packages/bind-tools/Makefile", "bind920": "packages/bind920/Makefile"}
 CATALOGUE_FILES = {"data.pkg", "packagesite.pkg"}
 CATALOGUE_ASSETS = {"meta", "meta.conf", "data.pkg", "data.tzst", "packagesite.pkg", "packagesite.tzst"}
 COMMON_FIELDS = {"schema", "kind", "series", "package_abi", "control_commit",
@@ -235,7 +239,7 @@ def component_tags(kind, series, version, fingerprint):
     releases.validate_bind_fingerprint(fingerprint)
     if not isinstance(version, str) or releases.PACKAGE_VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError("invalid component version")
-    if kind == "bind_runtime":
+    if kind in RUNTIME_KINDS:
         compare_runtime_versions(version, version)
     else:
         match = releases.SERIES_PLUGIN_VERSION_PATTERN.fullmatch(version)
@@ -257,8 +261,10 @@ def compare_runtime_versions(left, right):
 
 def validate_plugin_inputs(inputs):
     extra = {"build_inputs_sha256"} if isinstance(inputs, dict) and inputs.get("schema") == 2 else set()
+    if isinstance(inputs, dict) and inputs.get("schema") == 3:
+        extra = {"build_dependency_sha256"} | ({"build_inputs_sha256"} if "build_inputs_sha256" in inputs else set())
     if (not isinstance(inputs, dict) or set(inputs) != PLUGIN_INPUT_FIELDS | extra
-            or type(inputs["schema"]) is not int or inputs["schema"] not in (1, 2)):
+            or type(inputs["schema"]) is not int or inputs["schema"] not in (1, 2, 3)):
         raise ValueError("invalid plugin build inputs")
     _commit(inputs["source_commit"])
     releases.channel_tag(inputs["series"])
@@ -270,8 +276,8 @@ def validate_plugin_inputs(inputs):
             or creator["abi"] != f"FreeBSD:{inputs['freebsd_release'].split('.')[0]}:amd64"):
         raise ValueError("plugin build ABI differs from release")
     releases.validate_bind_fingerprint(inputs["build_recipe_sha256"])
-    if extra:
-        releases.validate_bind_fingerprint(inputs["build_inputs_sha256"])
+    for field in extra:
+        releases.validate_bind_fingerprint(inputs[field])
     return inputs
 
 
@@ -281,13 +287,17 @@ def plugin_build_fingerprint(inputs):
 
 
 def _runtime_inputs(inputs):
-    extra = {"build_inputs_sha256"} if isinstance(inputs, dict) and inputs.get("schema") == 5 else set()
+    extra = ({"build_inputs_sha256"} if isinstance(inputs, dict) and "build_inputs_sha256" in inputs else set())
+    if isinstance(inputs, dict) and inputs.get("schema") == 6:
+        extra |= {"package"}
+        if inputs.get("package") == "bind920":
+            extra |= {"tools_version"}
     if not isinstance(inputs, dict) or set(inputs) != RUNTIME_INPUT_FIELDS | extra:
         raise ValueError("invalid runtime producer inputs")
     canonical = bind920_profile.producer_inputs(
         inputs["bind_profile"], inputs["series"], inputs["freebsd_release"],
         inputs["architecture"], inputs["package_creator"], recipe_sha256=inputs["build_recipe_sha256"],
-        build_inputs_sha256=inputs.get("build_inputs_sha256"))
+        build_inputs_sha256=inputs.get("build_inputs_sha256"), package=inputs.get("package"), tools_version=inputs.get("tools_version"))
     if type(inputs["schema"]) is not int or inputs != canonical:
         raise ValueError("invalid runtime producer inputs")
     return inputs
@@ -301,7 +311,7 @@ def _fingerprint(kind, inputs):
     return bind920_profile.compatibility_fingerprint(
         inputs["bind_profile"], inputs["series"], inputs["freebsd_release"],
         inputs["architecture"], inputs["package_creator"], recipe_sha256=inputs["build_recipe_sha256"],
-        build_inputs_sha256=inputs.get("build_inputs_sha256"))
+        build_inputs_sha256=inputs.get("build_inputs_sha256"), package=inputs.get("package"), tools_version=inputs.get("tools_version"))
 
 
 def _metadata(text):
@@ -329,10 +339,10 @@ def _runtime_reference(record, series):
     return record
 
 
-def validate_plugin_metadata(metadata, upstream, inputs, creator_source, runtime_version):
+def validate_plugin_metadata(metadata, upstream, inputs, creator_source, runtime_version, runtime_source="resolver"):
     creator = inputs["package_creator"]
     expected = {field: upstream[field] for field in releases.TRUSTED_BUILD_FIELDS}
-    expected.update(source_commit=inputs["source_commit"], bind920=runtime_version, bind_source="resolver",
+    expected.update(source_commit=inputs["source_commit"], bind920=runtime_version, bind_source=runtime_source,
                     pkg_abi=creator["abi"], pkg_creator=creator["version"],
                     creator_release=creator_source["release"], creator_ports_commit=creator_source["commit"],
                     creator_recipe_path=creator_source["path"], opnsense_core_commit=upstream["core_commit"])
@@ -342,11 +352,15 @@ def validate_plugin_metadata(metadata, upstream, inputs, creator_source, runtime
 
 def validate_component_record(manifest, sidecars, package_hashes, kind, series):
     label = _kind(kind)
-    extra = {"profile_commit"} if kind == "bind_runtime" else {"source_commit", "plugin_version", "built_against_runtime"}
+    independent = manifest.get("schema") == 2
+    runtime_field = "build_runtime" if independent else "built_against_runtime"
+    extra = {"profile_commit"} if kind in RUNTIME_KINDS else {"source_commit", "plugin_version", runtime_field}
     if (not isinstance(manifest, dict) or set(manifest) != COMMON_FIELDS | extra
-            or type(manifest["schema"]) is not int or manifest["schema"] != 1
+            or type(manifest["schema"]) is not int or manifest["schema"] not in (1, 2)
             or manifest["kind"] != label or manifest["series"] != series):
         raise ValueError("invalid BIND component manifest")
+    if kind in ("bind_tools", "bind920") and not independent:
+        raise ValueError("standalone runtime requires independent provenance")
     releases.channel_tag(series)
     _commit(manifest["control_commit"])
     releases.validate_bind_fingerprint(manifest["build_fingerprint"])
@@ -355,8 +369,8 @@ def validate_component_record(manifest, sidecars, package_hashes, kind, series):
     if packages != _hashes(package_hashes) or any(manifest["assets"].get(name) != digest
                                                for name, digest in packages.items()):
         raise ValueError("component package hashes differ from original manifest")
-    names = RUNTIME_SIDECARS if kind == "bind_runtime" else PLUGIN_SIDECARS
-    original_inputs = sidecars["bind920-provenance.json" if kind == "bind_runtime" else "plugin-build-inputs.json"]
+    names = RUNTIME_SIDECARS if kind in RUNTIME_KINDS else PLUGIN_SIDECARS
+    original_inputs = sidecars["bind920-provenance.json" if kind in RUNTIME_KINDS else "plugin-build-inputs.json"]
     if original_inputs.get("build_inputs_sha256") is not None:
         from shared import series_builds
         names = names | {series_builds.INPUT_FILE}
@@ -365,6 +379,11 @@ def validate_component_record(manifest, sidecars, package_hashes, kind, series):
                 or record["component"] != kind or record["series"] != series):
             raise ValueError("component per-series inputs differ from original build")
         series_builds.validate_environment(record, sidecars["upstream.json"])
+    if kind == "bind_plugin" and independent:
+        names = names | {"bind-build-dependency.json"}
+        dependency = sidecars["bind-build-dependency.json"]
+        if manifest["assets"].get("bind-build-dependency.json") != original_inputs.get("build_dependency_sha256"):
+            raise ValueError("ordinary build dependency differs from plugin fingerprint")
     assets = set(manifest["assets"])
     if (not names <= assets
             or not assets <= names | {"resolver-plugins.pub"} | CATALOGUE_ASSETS | set(packages)):
@@ -374,19 +393,28 @@ def validate_component_record(manifest, sidecars, package_hashes, kind, series):
     if (manifest["package_creator"] != creator or manifest["creator_source"] != source
             or manifest["package_abi"] != creator["abi"]):
         raise ValueError("component original creator or ABI differs")
-    if kind == "bind_runtime":
+    if kind in RUNTIME_KINDS:
         _commit(manifest["profile_commit"])
         profile = bind920_profile.validate_profile(sidecars["bind920-profile.json"])
         provenance = sidecars["bind920-provenance.json"]
         records = releases.validate_bind_provenance(provenance, profile, series, upstream["freebsd_release"], creator)
         if (manifest["build_fingerprint"] != provenance["fingerprint"]
+                or provenance.get("package") != (label if kind != "bind_runtime" else None)
                 or set(packages) != {record["filename"] for record in records.values()}):
             raise ValueError("runtime component differs from original provenance")
     else:
         inputs = validate_plugin_inputs(sidecars["plugin-build-inputs.json"])
         metadata = _metadata(sidecars["build-metadata.txt"])
         requirement = plugin_requirement_from_makefile(sidecars["plugin-package.mk"])
-        historical = _runtime_reference(manifest["built_against_runtime"], series)
+        historical = manifest[runtime_field]
+        if independent:
+            from bind.plugin import build_dependency
+            selected = build_dependency.validate(dependency, upstream, sidecars["creator-target.json"])
+            if (not isinstance(historical, dict) or set(historical) != {"name", "version", "origin", "abi"}
+                    or historical != {field: selected[field] for field in ("name", "version", "origin", "abi")}):
+                raise ValueError("invalid original OPNsense build dependency")
+        else:
+            historical = _runtime_reference(historical, series)
         version = manifest["plugin_version"]
         component_tags(kind, series, version, manifest["build_fingerprint"])
         if (manifest["source_commit"] != _commit(inputs["source_commit"])
@@ -397,14 +425,17 @@ def validate_component_record(manifest, sidecars, package_hashes, kind, series):
                 or compare_runtime_versions(historical["version"], requirement["minimum_version"]) == "<"
                 or set(packages) != {f"os-bind-rp-{version}.pkg"}):
             raise ValueError("plugin component differs from original build inputs")
-        validate_plugin_metadata(metadata, upstream, inputs, source, historical["version"])
+        validate_plugin_metadata(metadata, upstream, inputs, source, historical["version"],
+                                 "opnsense" if independent else "resolver")
     return manifest
 
 
 def _sidecars(directory, kind):
-    names = RUNTIME_SIDECARS if kind == "bind_runtime" else PLUGIN_SIDECARS
+    names = RUNTIME_SIDECARS if kind in RUNTIME_KINDS else PLUGIN_SIDECARS
     if (directory / "series-build-inputs.json").is_file():
         names = names | {"series-build-inputs.json"}
+    if kind == "bind_plugin" and _json(directory / "channel.json").get("schema") == 2:
+        names = names | {"bind-build-dependency.json"}
     return {name: (directory / name).read_text(encoding="utf-8") if name.endswith((".txt", ".mk"))
             else _json(directory / name) for name in names}
 
@@ -453,7 +484,7 @@ def _validate_archives(directory, manifest, sidecars, pkg_command):
         path = directory / filename
         identity, edges = releases.query_package(path, pkg_command)
         name, version, origin, abi = identity
-        if manifest["kind"] == "bind-runtime":
+        if manifest["kind"] in {"bind-runtime", "bind-tools", "bind920"}:
             expected = sidecars["bind920-provenance.json"]["packages"].get(name)
             if expected is None or (name, version, origin, filename) != tuple(
                     expected[field] for field in ("name", "version", "origin", "filename")):
@@ -464,15 +495,15 @@ def _validate_archives(directory, manifest, sidecars, pkg_command):
             raise ValueError("archive ABI differs from component")
         identities[name], dependencies[name] = identity, edges
         files[name] = package_checksums.verify_archive(pkg_command, path)
-    if manifest["kind"] == "bind-runtime":
-        if ("bind-tools", "dns/bind-tools", identities["bind-tools"][1]) not in dependencies["bind920"]:
+    if manifest["kind"] in {"bind-runtime", "bind-tools", "bind920"}:
+        if "bind920" in identities and ("bind-tools", "dns/bind-tools", sidecars["bind920-provenance.json"].get("tools_version", identities["bind920"][1])) not in dependencies["bind920"]:
             raise ValueError("runtime archive pair dependency differs")
     else:
         requirement = plugin_requirement_from_makefile(sidecars["plugin-package.mk"])
         archive = directory / next(iter(manifest["packages"]))
         record = releases.read_package_manifest(archive, pkg_command)
         validate_plugin_archive(record, dependencies["os-bind-rp"], requirement,
-                                built_runtime_version=manifest["built_against_runtime"]["version"])
+                                built_runtime_version=manifest.get("build_runtime", manifest.get("built_against_runtime"))["version"])
         _validate_plugin_file_map(record, files["os-bind-rp"])
 
 
@@ -482,7 +513,7 @@ def validate_component(directory, kind, series, *, pkg_command=None):
     manifest = _json(directory / "channel.json")
     assets = dict(actual)
     assets.pop("channel.json")
-    sidecar_names = RUNTIME_SIDECARS if kind == "bind_runtime" else PLUGIN_SIDECARS
+    sidecar_names = RUNTIME_SIDECARS if kind in RUNTIME_KINDS else PLUGIN_SIDECARS
     if (manifest.get("assets") != assets
             or not sidecar_names | {"resolver-plugins.pub", "meta.conf"} <= set(assets)
             or not CATALOGUE_FILES.intersection(assets)
@@ -499,7 +530,7 @@ def validate_component(directory, kind, series, *, pkg_command=None):
 def component_receipt(directory, kind, series):
     manifest = validate_component(directory, kind, series)
     version = (bind920_profile.package_version(_json(directory / "bind920-profile.json"))
-               if kind == "bind_runtime" else manifest["plugin_version"])
+               if kind in RUNTIME_KINDS else manifest["plugin_version"])
     current, snapshot = component_tags(kind, series, version, manifest["build_fingerprint"])
     return dict(schema=1, component=kind, series=series, package_abi=manifest["package_abi"],
                 current_tag=current, snapshot_tag=snapshot, fingerprint=manifest["build_fingerprint"],
@@ -515,7 +546,7 @@ def validate_receipt(receipt, kind, series):
         raise ValueError("invalid component receipt")
     releases.validate_package_abi(receipt["package_abi"])
     assets, packages = _hashes(receipt["assets"]), _hashes(receipt["packages"])
-    prefix = "bind920-" if kind == "bind_runtime" else "os-bind-rp-"
+    prefix = ("bind-tools-" if kind == "bind_tools" else "bind920-") if kind in RUNTIME_KINDS else "os-bind-rp-"
     if kind == "dhcp":
         prefix = "os-dhcp-interface-ha-"
     versions = [name[len(prefix):-4] for name in packages if name.startswith(prefix) and name.endswith(".pkg")]
@@ -530,7 +561,8 @@ def validate_receipt(receipt, kind, series):
         names={f"os-dhcp-interface-ha-{version}.pkg"}
     else:
         current, snapshot = component_tags(kind, series, version, receipt["fingerprint"])
-        names = {f"{name}-{version}.pkg" for name in ("bind-tools", "bind920")} if kind == "bind_runtime" else {f"os-bind-rp-{version}.pkg"}
+        names = ({f"{name}-{version}.pkg" for name in ("bind-tools", "bind920")} if kind == "bind_runtime"
+                 else {f"{_kind(kind)}-{version}.pkg"} if kind in RUNTIME_KINDS else {f"os-bind-rp-{version}.pkg"})
     if (receipt["current_tag"] != current or receipt["snapshot_tag"] != snapshot
             or set(packages) != names or "channel.json" not in assets
             or any(assets.get(name) != digest for name, digest in packages.items())):
@@ -546,20 +578,24 @@ def load_selection(trusted_directory, *, component, series, selection_sha256):
         raise ValueError("trusted selection digest differs from controller")
     selection = _json(path)
     if (not isinstance(selection, dict) or set(selection) != SELECTION_FIELDS
-            or type(selection["schema"]) is not int or selection["schema"] != 1
+            or type(selection["schema"]) is not int or selection["schema"] not in (1, 2)
             or selection["component"] != component or selection["series"] != series
             or selection["mode"] not in ("production", "development")
             or selection["producer_action"] not in ("build", "reuse")):
         raise ValueError("invalid trusted selection")
     _commit(selection["control_commit"])
     _commit(selection["profile_commit"])
-    if component == "bind_runtime":
+    if component in RUNTIME_KINDS:
         if selection["source_commit"] is not None or selection["producer_action"] != "build":
             raise ValueError("runtime selection requires a fresh build without plugin source")
     elif (_commit(selection["source_commit"]) != selection["profile_commit"]
           or selection["mode"] == "development" and selection["producer_action"] != "build"):
         raise ValueError("plugin source/profile or preview action differs")
+    independent = selection["schema"] == 2
     required = TRUSTED_FILES | ({"plugin-package.mk", "runtime-selection.json"} if component == "bind_plugin" else set())
+    if independent and component == "bind_plugin":
+        required -= {"runtime-approval.mk", "bind920-profile.json", "runtime-selection.json"}
+        required |= {"bind-build-dependency.json"}
     inputs = _json(trusted_directory / "producer-inputs.json")
     if inputs.get("build_inputs_sha256") is not None:
         required |= {"series-build-inputs.json"}
@@ -572,10 +608,11 @@ def load_selection(trusted_directory, *, component, series, selection_sha256):
     upstream = metadata_profile.validate_profile(_json(trusted_directory / "upstream.json"), series)
     creator, _ = _role(_json(trusted_directory / "creator-target.json"), upstream, "creator")
     _role(_json(trusted_directory / "reader-target.json"), upstream, "reader")
-    profile = bind920_profile.load_profile(trusted_directory / "bind920-profile.json")
-    approval = bind920_profile.approval_from_makefile((trusted_directory / "runtime-approval.mk").read_text())
-    if profile["ports_commit"] != approval["ports_commit"] or bind920_profile.package_version(profile) != approval["version"]:
-        raise ValueError("trusted recipe differs from runtime approval")
+    if component in RUNTIME_KINDS or not independent:
+        profile = bind920_profile.load_profile(trusted_directory / "bind920-profile.json")
+        approval = bind920_profile.approval_from_makefile((trusted_directory / "runtime-approval.mk").read_text())
+        if profile["ports_commit"] != approval["ports_commit"] or bind920_profile.package_version(profile) != approval["version"]:
+            raise ValueError("trusted recipe differs from runtime approval")
     tools = metadata_profile.validate_tools_record(_json(trusted_directory / "tools-profile.json"), upstream)
     if inputs.get("build_inputs_sha256") is not None:
         from shared import series_builds
@@ -591,17 +628,26 @@ def load_selection(trusted_directory, *, component, series, selection_sha256):
             or inputs.get("package_creator") != creator
             or _fingerprint(component, inputs) != selection["expected_fingerprint"]):
         raise ValueError("producer inputs differ from trusted selection")
-    if component == "bind_runtime":
-        if inputs["bind_profile"] != profile or inputs["architecture"] != "x86_64":
+    if component in RUNTIME_KINDS:
+        if (inputs["bind_profile"] != profile or inputs["architecture"] != "x86_64"
+                or inputs.get("package") != (_kind(component) if component != "bind_runtime" else None)):
             raise ValueError("runtime inputs differ from trusted pin")
     else:
         requirement = plugin_requirement_from_makefile((trusted_directory / "plugin-package.mk").read_text())
+        if independent:
+            from bind.plugin import build_dependency
+            dependency = build_dependency.validate(_json(trusted_directory / "bind-build-dependency.json"), upstream,
+                                                   _json(trusted_directory / "creator-target.json"))
+            if (inputs.get("build_dependency_sha256") != releases.sha256(trusted_directory / "bind-build-dependency.json")
+                    or compare_runtime_versions(dependency["version"], requirement["minimum_version"]) == "<"):
+                raise ValueError("ordinary plugin dependency differs from sealed source minimum")
         if (inputs["source_commit"] != selection["source_commit"]
-                or compare_runtime_versions(approval["version"], requirement["minimum_version"]) == "<"):
+                or not independent and compare_runtime_versions(approval["version"], requirement["minimum_version"]) == "<"):
             raise ValueError("plugin inputs differ from trusted source or runtime minimum")
-        runtime = validate_receipt(_json(trusted_directory / "runtime-selection.json"), "bind_runtime", series)
-        if runtime["package_abi"] != creator["abi"]:
-            raise ValueError("frozen runtime ABI differs from selected plugin")
+        if not independent:
+            runtime = validate_receipt(_json(trusted_directory / "runtime-selection.json"), "bind_runtime", series)
+            if runtime["package_abi"] != creator["abi"]:
+                raise ValueError("frozen runtime ABI differs from selected plugin")
     if selection["producer_action"] == "reuse":
         cached = validate_receipt(_json(trusted_directory / "cached-component.json"), component, series)
         if cached["fingerprint"] != selection["expected_fingerprint"] or cached["package_abi"] != creator["abi"]:
@@ -686,7 +732,7 @@ def fetch_frozen_component(repository, receipt, output):
 def select_producer_action(kind, expected_inputs, candidate_directory):
     fingerprint = _fingerprint(kind, expected_inputs)
     cached = None
-    if kind == "bind_runtime":
+    if kind in RUNTIME_KINDS:
         if candidate_directory is not None:
             raise ValueError("runtime production cannot reuse a build cache")
         return dict(producer_action="build", expected_fingerprint=fingerprint, cached_component=None)
@@ -701,34 +747,42 @@ def select_producer_action(kind, expected_inputs, candidate_directory):
 def prepare_selection(trusted_directory, *, component, series, mode, control_commit,
                       source_commit, profile_commit, upstream, runtime_approval, tools_repository, recipe,
                       repository, intake_directory, package_definition=None, creator_target=None, reader_target=None,
-                      series_build_inputs=None):
+                      series_build_inputs=None, independent=False):
     """Read-only controller boundary shared by both producer workflows."""
     _kind(component)
     _commit(control_commit)
     _commit(profile_commit)
     if mode not in ("production", "development"):
         raise ValueError("invalid producer mode")
-    if (component == "bind_runtime" and source_commit is not None
+    if (component in RUNTIME_KINDS and source_commit is not None
             or component == "bind_plugin" and _commit(source_commit) != profile_commit):
         raise ValueError("invalid selected source/profile identity")
     if (component == "bind_plugin") != (package_definition is not None):
         raise ValueError("only plugin selection requires its source package definition")
     upstream_record = metadata_profile.validate_profile(_json(upstream), series)
-    approval = bind920_profile.approval_from_makefile(runtime_approval.read_text())
-    approved = bind920_profile.resolve_profile(approval)
+    if component in RUNTIME_KINDS or not independent:
+        approval = bind920_profile.approval_from_makefile(runtime_approval.read_text())
+        approved = (bind920_profile.resolve_profile(approval, package=_kind(component))
+                    if component in ("bind_tools", "bind920") else bind920_profile.resolve_profile(approval))
     tools = metadata_profile.verify_tools_profile(upstream_record, tools_repository)
     if component == "bind_plugin":
         requirement = plugin_requirement_from_makefile(package_definition.read_text())
-        if compare_runtime_versions(approval["version"], requirement["minimum_version"]) == "<":
+        if not independent and compare_runtime_versions(approval["version"], requirement["minimum_version"]) == "<":
             raise ValueError("approved runtime is below source dependency minimum")
     trusted_directory.mkdir(parents=True, exist_ok=True)
     if any(trusted_directory.iterdir()):
         raise ValueError("trusted controller output must be empty")
-    for source, name in ((upstream, "upstream.json"), (runtime_approval, "runtime-approval.mk")):
+    sources = [(upstream, "upstream.json")]
+    if component in RUNTIME_KINDS or not independent:
+        sources.append((runtime_approval, "runtime-approval.mk"))
+    for source, name in sources:
         shutil.copyfile(source, trusted_directory / name)
     if package_definition is not None:
         shutil.copyfile(package_definition, trusted_directory / "plugin-package.mk")
-    for name, record in (("bind920-profile.json", approved), ("tools-profile.json", tools)):
+    records = [("tools-profile.json", tools)]
+    if component in RUNTIME_KINDS or not independent:
+        records.append(("bind920-profile.json", approved))
+    for name, record in records:
         (trusted_directory / name).write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
     build_inputs_sha256 = None
     if series_build_inputs is not None:
@@ -749,10 +803,12 @@ def prepare_selection(trusted_directory, *, component, series, mode, control_com
     creator, _ = _role(_json(trusted_directory / "creator-target.json"), upstream_record, "creator")
     _role(_json(trusted_directory / "reader-target.json"), upstream_record, "reader")
     recipe_hash = releases.sha256(recipe)
-    if component == "bind_runtime":
+    if component in RUNTIME_KINDS:
         inputs = bind920_profile.producer_inputs(approved, series, upstream_record["freebsd_release"],
                                                 "x86_64", creator, recipe_sha256=recipe_hash,
-                                                build_inputs_sha256=build_inputs_sha256)
+                                                build_inputs_sha256=build_inputs_sha256,
+                                                package=_kind(component) if component != "bind_runtime" else None,
+                                                tools_version=bind920_profile.resolve_tools_version(approved) if component == "bind920" else None)
     else:
         inputs = validate_plugin_inputs(dict(schema=1, source_commit=source_commit, series=series,
             package_abi=creator["abi"], freebsd_release=upstream_record["freebsd_release"],
@@ -760,16 +816,24 @@ def prepare_selection(trusted_directory, *, component, series, mode, control_com
         if build_inputs_sha256 is not None:
             inputs.update(schema=2, build_inputs_sha256=build_inputs_sha256)
             validate_plugin_inputs(inputs)
-        runtime_directory = intake_directory / "bind_runtime"
-        runtime_directory.parent.mkdir(parents=True, exist_ok=True)
-        receipt = fetch_component(repository, "bind_runtime", series, runtime_directory)
-        if receipt is None:
-            raise ValueError(f"{series} runtime {bind920_profile.package_version(approved)} is absent; publish runtime first and retry")
-        if (_json(runtime_directory / "bind920-profile.json") != approved
-                or _json(runtime_directory / "bind920-provenance.json")["freebsd_release"] != upstream_record["freebsd_release"]
-                or receipt["package_abi"] != creator["abi"]):
-            raise ValueError(f"{series} runtime differs from approved {bind920_profile.package_version(approved)} recipe; publish runtime first and retry")
-        (trusted_directory / "runtime-selection.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n")
+        if independent:
+            from bind.plugin import build_dependency
+            record = build_dependency.resolve(upstream_record, _json(trusted_directory / "creator-target.json"))
+            path = trusted_directory / "bind-build-dependency.json"
+            path.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+            inputs.update(schema=3, build_dependency_sha256=releases.sha256(path))
+            validate_plugin_inputs(inputs)
+        if not independent:
+            runtime_directory = intake_directory / "bind_runtime"
+            runtime_directory.parent.mkdir(parents=True, exist_ok=True)
+            receipt = fetch_component(repository, "bind_runtime", series, runtime_directory)
+            if receipt is None:
+                raise ValueError(f"{series} runtime {bind920_profile.package_version(approved)} is absent; publish runtime first and retry")
+            if (_json(runtime_directory / "bind920-profile.json") != approved
+                    or _json(runtime_directory / "bind920-provenance.json")["freebsd_release"] != upstream_record["freebsd_release"]
+                    or receipt["package_abi"] != creator["abi"]):
+                raise ValueError(f"{series} runtime differs from approved {bind920_profile.package_version(approved)} recipe; publish runtime first and retry")
+            (trusted_directory / "runtime-selection.json").write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n")
     fingerprint = _fingerprint(component, inputs)
     cached = None
     cache_directory = intake_directory / "cached_component"
@@ -780,7 +844,7 @@ def prepare_selection(trusted_directory, *, component, series, mode, control_com
     (trusted_directory / "producer-inputs.json").write_text(json.dumps(inputs, sort_keys=True, indent=2) + "\n")
     if cached:
         (trusted_directory / "cached-component.json").write_text(json.dumps(cached, sort_keys=True, indent=2) + "\n")
-    selection = dict(schema=1, component=component, series=series, mode=mode, control_commit=control_commit,
+    selection = dict(schema=2 if independent else 1, component=component, series=series, mode=mode, control_commit=control_commit,
                      source_commit=source_commit, profile_commit=profile_commit,
                      producer_action=action["producer_action"], expected_fingerprint=fingerprint)
     digest = seal_selection(trusted_directory, selection)
@@ -807,15 +871,27 @@ def validate_candidate(directory, selection, trusted_directory, *, pkg_command):
     sidecars = {"upstream.json": upstream, "creator-target.json": _json(trusted_directory / "creator-target.json")}
     if (trusted_directory / "series-build-inputs.json").is_file():
         sidecars["series-build-inputs.json"] = _json(trusted_directory / "series-build-inputs.json")
-    manifest = dict(schema=1, kind=_kind(component), series=series, package_abi=creator["abi"],
+    if component == "bind_plugin" and selection["schema"] == 2:
+        sidecars["bind-build-dependency.json"] = _json(trusted_directory / "bind-build-dependency.json")
+    manifest = dict(schema=selection["schema"], kind=_kind(component), series=series, package_abi=creator["abi"],
                     control_commit=selection["control_commit"], build_fingerprint=selection["expected_fingerprint"],
                     package_creator=creator, creator_source=source)
-    if component == "bind_runtime":
+    if component in RUNTIME_KINDS:
         profile = _json(trusted_directory / "bind920-profile.json")
         provenance = _json(directory / "bind920-provenance.json")
         sidecars.update({"bind920-profile.json": profile, "bind920-provenance.json": provenance})
-        names = {f"{name}-{bind920_profile.package_version(profile)}.pkg" for name in ("bind-tools", "bind920")}
+        package_names = ("bind-tools", "bind920") if component == "bind_runtime" else (_kind(component),)
+        names = {f"{name}-{bind920_profile.package_version(profile)}.pkg" for name in package_names}
         required = names | {"bind920-provenance.json"}
+        if component == "bind920":
+            tools_version = _json(trusted_directory / "producer-inputs.json")["tools_version"]
+            dependency = f"qualification-bind-tools-{tools_version}.pkg"
+            required.add(dependency)
+            if pkg_command is not None:
+                identity, _ = releases.query_package(directory / dependency, pkg_command)
+                if identity != ("bind-tools", tools_version, "dns/bind-tools", creator["abi"]):
+                    raise ValueError("internal qualification dependency differs from approved Ports recipe")
+                package_checksums.verify_archive(pkg_command, directory / dependency)
         manifest["profile_commit"] = selection["profile_commit"]
         selected_inputs = _json(trusted_directory / "producer-inputs.json")
         if (provenance["build_recipe_sha256"] != selected_inputs["build_recipe_sha256"]
@@ -832,15 +908,20 @@ def validate_candidate(directory, selection, trusted_directory, *, pkg_command):
             raise ValueError("fresh plugin output must contain one archive")
         version = next(iter(names)).removeprefix("os-bind-rp-").removesuffix(".pkg")
         required = names | {"plugin-build-inputs.json", "build-metadata.txt"}
-        runtime = validate_receipt(_json(trusted_directory / "runtime-selection.json"), "bind_runtime", series)
-        runtime_version = next(name.removeprefix("bind920-").removesuffix(".pkg") for name in runtime["packages"] if name.startswith("bind920-"))
-        manifest.update(source_commit=selection["source_commit"], plugin_version=version,
-                        built_against_runtime=dict(snapshot_tag=runtime["snapshot_tag"], fingerprint=runtime["fingerprint"],
-                                                   version=runtime_version, packages=runtime["packages"]))
+        manifest.update(source_commit=selection["source_commit"], plugin_version=version)
+        if selection["schema"] == 2:
+            metadata = _metadata(sidecars["build-metadata.txt"])
+            manifest["build_runtime"] = dict(name="bind920", version=metadata["bind920"],
+                                             origin="dns/bind920", abi=creator["abi"])
+        else:
+            runtime = validate_receipt(_json(trusted_directory / "runtime-selection.json"), "bind_runtime", series)
+            runtime_version = next(name.removeprefix("bind920-").removesuffix(".pkg") for name in runtime["packages"] if name.startswith("bind920-"))
+            manifest["built_against_runtime"] = dict(snapshot_tag=runtime["snapshot_tag"], fingerprint=runtime["fingerprint"],
+                                                    version=runtime_version, packages=runtime["packages"])
     if set(actual) != required:
         raise ValueError("producer output differs from exact owned files")
     manifest["packages"] = {name: actual[name] for name in sorted(names)}
-    manifest["assets"] = dict(actual)
+    manifest["assets"] = {name: digest for name, digest in actual.items() if not name.startswith("qualification-")}
     for name in sidecars:
         if name not in manifest["assets"]:
             manifest["assets"][name] = releases.sha256(trusted_directory / name)
@@ -853,7 +934,7 @@ def validate_candidate(directory, selection, trusted_directory, *, pkg_command):
 def validate_producer_copy(producer, cached_directory, kind, series):
     """Check the raw owned upload against independently frozen original cache."""
     manifest = validate_component(cached_directory, kind, series)
-    names = set(manifest["packages"]) | ({"bind920-provenance.json"} if kind == "bind_runtime"
+    names = set(manifest["packages"]) | ({"bind920-provenance.json"} if kind in RUNTIME_KINDS
                                         else {"build-metadata.txt", "plugin-build-inputs.json"})
     actual = _files(producer)
     if actual != {name: releases.sha256(cached_directory / name) for name in names}:
@@ -879,7 +960,7 @@ def validate_selected_git(selection, trusted_directory):
     control = selection["control_commit"]
     if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != control:
         raise ValueError("executing checkout differs from selected control")
-    folder = "runtime" if selection["component"] == "bind_runtime" else "plugin"
+    folder = "runtime" if selection["component"] in RUNTIME_KINDS else "plugin"
     recipe = "build-bind920.sh" if folder == "runtime" else "build-os-bind-rp.sh"
     inputs = _json(trusted_directory / "producer-inputs.json")
     if hashlib.sha256(_git_bytes(control, f".github/ci/bind/{folder}/{recipe}")).hexdigest() != inputs["build_recipe_sha256"]:
@@ -893,7 +974,9 @@ def validate_selected_git(selection, trusted_directory):
                 _json(trusted_directory / "upstream.json"), _json(trusted_directory / "tools-profile.json"),
                 _json(trusted_directory / series_builds.INPUT_FILE).get("package_targets")):
             raise ValueError("per-series inputs differ from selected source/control Git objects")
-    definitions = [("dns/bind/Makefile", "runtime-approval.mk", control)]
+    definitions = ([(APPROVAL_PATHS[selection["component"]], "runtime-approval.mk", control)]
+                   if selection["component"] in RUNTIME_KINDS else [] if selection["schema"] == 2
+                   else [("dns/bind/Makefile", "runtime-approval.mk", control)])
     if selection["component"] == "bind_plugin":
         definitions.append(("dns/bind/Makefile", "plugin-package.mk", selection["source_commit"]))
     for path, name, commit in definitions:
@@ -926,14 +1009,15 @@ def component_can_advance(current, staged, kind, *, compare_versions):
 def component_record_can_advance(before, after, kind, *, compare_versions):
     if before == after:
         return True
-    fields = ("profile_commit", "control_commit") if kind == "bind_runtime" else ("source_commit", "control_commit")
+    fields = ("profile_commit", "control_commit") if kind in RUNTIME_KINDS else ("source_commit", "control_commit")
     _ensure_commits(*(record[field] for record in (before, after) for field in fields))
     if not all(releases.commit_is_ancestor_or_equal(before[field], after[field]) for field in fields):
         return False
-    if kind == "bind_runtime":
+    if kind in RUNTIME_KINDS:
         def versions(record):
             return {name:next(filename.removeprefix(name+"-").removesuffix(".pkg") for filename in record["packages"]
-                              if filename.startswith(name+"-")) for name in ("bind-tools","bind920")}
+                              if filename.startswith(name+"-")) for name in
+                    (("bind-tools", "bind920") if kind == "bind_runtime" else (_kind(kind),))}
         old, new = versions(before), versions(after)
         if any(compare_versions(new[name], old[name]) == "<" for name in old):
             return False
@@ -963,7 +1047,7 @@ def authenticate_candidate(producer, selection, trusted_directory, root, *, pkg_
     validate_selected_git(selection, trusted_directory)
     _select_role(trusted_directory, series, "reader", pkg_command)
 
-    if kind == "bind_plugin":
+    if kind == "bind_plugin" and selection["schema"] == 1:
         runtime = root / "runtime"
         receipt = _json(trusted_directory / "runtime-selection.json")
         fetch_frozen_component(REPOSITORY, receipt, runtime)
@@ -999,7 +1083,9 @@ def stage_component(producer, selection, trusted_directory, output, key, *, pkg_
         else:
             if key is None or subprocess.check_output(["openssl", "pkey", "-in", str(key), "-pubout"]) != PUBLIC_KEY.read_bytes():
                 raise ValueError("signing key differs from committed key")
-            names = RUNTIME_SIDECARS if kind == "bind_runtime" else PLUGIN_SIDECARS
+            names = RUNTIME_SIDECARS if kind in RUNTIME_KINDS else PLUGIN_SIDECARS
+            if kind == "bind_plugin" and selection["schema"] == 2:
+                names = names | {"bind-build-dependency.json"}
             if (trusted_directory / "series-build-inputs.json").is_file():
                 names = names | {"series-build-inputs.json"}
             metadata = [producer / name if (producer / name).is_file() else trusted_directory / name
@@ -1023,7 +1109,26 @@ def stage_preview(producer, selection, trusted_directory, output, *, pkg_command
     validate_selected_git(selection, trusted_directory)
     _select_role(trusted_directory, selection["series"], "reader", pkg_command)
     packages = [producer / name for name in _files(producer) if name.endswith(".pkg")]
-    if selection["component"] == "bind_runtime":
+    if selection["schema"] == 2 and selection["component"] in RUNTIME_KINDS:
+        manifest = validate_candidate(producer, selection, trusted_directory, pkg_command=pkg_command)
+        packages = [producer / name for name in manifest["packages"]]
+        releases.stage_selected_repository(packages, output, None, pkg_command, [producer / "bind920-provenance.json"])
+        if selection["component"] == "bind920":
+            directory = output.parent / "native-dependencies"
+            directory.mkdir()
+            for path in producer.glob("qualification-*.pkg"):
+                shutil.copyfile(path, directory / path.name)
+        package_catalogue.verify_repository(packages, output.resolve().as_uri(), pkg_command=pkg_command, unsigned=True)
+        return
+    if selection["schema"] == 2 and selection["component"] == "bind_plugin":
+        from bind.plugin import plugin_release
+        plugin_release.validate_output(producer, selection, trusted_directory, pkg_command)
+        releases.stage_selected_repository(packages, output, None, pkg_command, [])
+        for name in ("plugin-build-inputs.json", "build-metadata.txt"):
+            shutil.copyfile(producer / name, output / name)
+        package_catalogue.verify_repository(packages, output.resolve().as_uri(), pkg_command=pkg_command, unsigned=True)
+        return
+    if selection["component"] in RUNTIME_KINDS:
         validate_candidate(producer, selection, trusted_directory, pkg_command=pkg_command)
     else:
         inputs = _json(producer / "plugin-build-inputs.json")
@@ -1133,6 +1238,20 @@ def load_composition(repository_root, *, component, series, composition_sha256):
     if path.is_symlink() or releases.sha256(path)!=composition_sha256:
         raise ValueError("composition digest differs from signer job")
     data=_json(path)
+    if data.get("schema") == 2:
+        if (set(data) != {"schema", "component", "series", "components", "native_dependencies"}
+                or data["component"] != component or data["series"] != series
+                or set(data["components"]) != {component}):
+            raise ValueError("independent publication must contain only its owned package")
+        validate_receipt(data["components"][component], component, series)
+        dependencies = _hashes(data["native_dependencies"])
+        directory = repository_root / "native-dependencies"
+        if (dependencies and _files(directory) != dependencies or not dependencies and directory.exists()):
+            raise ValueError("internal qualification dependency differs from signer seal")
+        expected = {f"qualification-bind-tools-{_json(repository_root / 'component/current/bind920-provenance.json')['tools_version']}.pkg"} if component == "bind920" else set()
+        if set(dependencies) != expected:
+            raise ValueError("unexpected internal qualification package")
+        return data
     if (not isinstance(data,dict) or set(data)!={"schema","component","series","initialized","components"}
             or type(data["schema"]) is not int or data["schema"]!=1
             or component not in (*KINDS,"dhcp") or data["component"]!=component or data["series"]!=series
@@ -1163,6 +1282,26 @@ def check_composition_peers(repository, composition, *, owned_must_match=False):
 
 
 def validate_repository_root(repository_root, selection, trusted_directory, composition):
+    if selection["schema"] == 2:
+        kind, series = selection["component"], selection["series"]
+        current = repository_root / "component/current"
+        manifest = validate_component(current, kind, series)
+        if (composition.get("schema") != 2 or component_receipt(current, kind, series) != composition["components"][kind]
+                or _files(current) != _files(repository_root / "component/snapshot")
+                or manifest["build_fingerprint"] != selection["expected_fingerprint"]):
+            raise ValueError("owned publication differs from its controller and signer seals")
+        if selection["producer_action"] == "reuse":
+            if component_receipt(current, kind, series) != _json(trusted_directory / "cached-component.json"):
+                raise ValueError("owned cache differs from its immutable receipt")
+        else:
+            for name in selection["files"]:
+                path = current / name
+                if path.is_file() and releases.sha256(path) != selection["files"][name]:
+                    raise ValueError("owned provenance differs from sealed controller inputs")
+            if (manifest["control_commit"] != selection["control_commit"]
+                    or manifest.get("source_commit", manifest.get("profile_commit")) != selection["profile_commit"]):
+                raise ValueError("owned source/control differs from sealed selection")
+        return manifest
     from shared import package_catalogue
     kind,series=selection["component"],selection["series"]
     current=repository_root / "component/current"
@@ -1199,7 +1338,7 @@ def validate_repository_root(repository_root, selection, trusted_directory, comp
         if (repository_root / "stack").exists() or (repository_root / "combined").exists():
             raise ValueError("runtime bootstrap must not expose incomplete feed")
         return manifest
-    pair={key:package_catalogue.component_record(composition["components"][key]) for key in KINDS}
+    pair={key:package_catalogue.component_record(composition["components"][key]) for key in LEGACY_KINDS}
     stack=package_catalogue.validate(repository_root / "stack/current")
     if (stack["components"]!=pair
             or _files(repository_root / "stack/current")!=_files(repository_root / "stack/snapshot")):
@@ -1215,6 +1354,25 @@ def validate_repository_root(repository_root, selection, trusted_directory, comp
 
 
 def stage_repository(producer, selection, trusted, output, key, *, pkg_command):
+    if selection["schema"] == 2:
+        kind, series = selection["component"], selection["series"]
+        output.mkdir(parents=True)
+        stage_component(producer, selection, trusted, output / "component", key, pkg_command=pkg_command)
+        receipt = component_receipt(output / "component/current", kind, series)
+        dependencies = {}
+        if kind == "bind920":
+            directory = output / "native-dependencies"
+            directory.mkdir()
+            for path in producer.glob("qualification-*.pkg"):
+                shutil.copyfile(path, directory / path.name)
+            dependencies = _files(directory)
+        path = output / "composition-inputs.json"
+        path.write_text(json.dumps(dict(schema=2, component=kind, series=series, components={kind: receipt}, native_dependencies=dependencies),
+                                   sort_keys=True, indent=2) + "\n")
+        digest = releases.sha256(path)
+        composition = load_composition(output, component=kind, series=series, composition_sha256=digest)
+        validate_repository_root(output, selection, trusted, composition)
+        return digest
     from shared import package_catalogue
     kind,series=selection["component"],selection["series"]
     stage_component(producer,selection,trusted,output / "component",key,pkg_command=pkg_command)
@@ -1263,7 +1421,7 @@ def stack_can_advance(current, staged):
     before,after=package_catalogue.validate(current),package_catalogue.validate(staged)
     if before["kind"]!="bind-stack" or after["kind"]!="bind-stack" or before["series"]!=after["series"]:
         return False
-    for kind in KINDS:
+    for kind in LEGACY_KINDS:
         if before["components"][kind]==after["components"][kind]:
             continue
         from shared import upstream_inputs
@@ -1290,13 +1448,25 @@ def publish_component(repository, repository_root, trusted_directory, recovery, 
     _ensure_commits(owned["control_commit"])
     if not releases.commit_is_ancestor_or_equal(owned["control_commit"],master):
         raise ValueError("owned original control is not merged into registered master")
+    if selection["schema"] == 2:
+        receipt = composition["components"][component]
+        releases.publish_channels(repository, [dict(current_tag=receipt["current_tag"], snapshot_tag=receipt["snapshot_tag"],
+            directory=repository_root / "component/current",
+            validate=lambda directory: validate_component(directory, component, series),
+            can_advance=lambda before, after: component_can_advance(before, after, component,
+                                                                  compare_versions=compare_runtime_versions))], recovery)
+        with tempfile.TemporaryDirectory() as temporary:
+            observed = fetch_component(repository, component, series, Path(temporary) / "owned")
+            if observed != receipt:
+                raise RuntimeError("published owned package differs from qualified bytes")
+        return
     if _initialized(repository,series,owned["package_abi"])!=composition["initialized"]:
         # The first complete publication can initialize Releases before Pages
         # succeeds. Continue only that exact qualified publication on retry.
         if composition["initialized"] or composition["components"]["bind_plugin"] is None:
             raise RuntimeError("registered initialization changed after qualification")
         check_composition_peers(repository,composition,owned_must_match=True)
-        runtime,plugin=(composition["components"][kind] for kind in KINDS)
+        runtime,plugin=(composition["components"][kind] for kind in LEGACY_KINDS)
         version=next(name.removeprefix("os-bind-rp-").removesuffix(".pkg") for name in plugin["packages"])
         with tempfile.TemporaryDirectory() as temporary:
             for index,tag in enumerate(stack_tags(series,version,runtime["fingerprint"],plugin["fingerprint"])):
@@ -1313,7 +1483,7 @@ def publish_component(repository, repository_root, trusted_directory, recovery, 
         directory=repository_root / "component/current",validate=validate_owned,
         can_advance=lambda before,after:component_can_advance(before,after,component,compare_versions=compare_runtime_versions))]
     if composition["components"]["bind_plugin"] is not None:
-        runtime,plugin=(composition["components"][kind] for kind in KINDS)
+        runtime,plugin=(composition["components"][kind] for kind in LEGACY_KINDS)
         version=next(name.removeprefix("os-bind-rp-").removesuffix(".pkg") for name in plugin["packages"])
         current,snapshot=stack_tags(series,version,runtime["fingerprint"],plugin["fingerprint"])
         def validate_stack(directory):
@@ -1395,6 +1565,7 @@ def main():
     inputs.add_argument("--mode", choices=("production", "development"), default="production")
     inputs.add_argument("--control-commit")
     inputs.add_argument("--profile-commit")
+    inputs.add_argument("--independent", action="store_true")
     select = commands.add_parser("select")
     select.add_argument("--component", choices=KINDS, required=True)
     select.add_argument("--inputs", type=Path, required=True)
@@ -1440,8 +1611,10 @@ def main():
         result = dict(current_tag=current, snapshot_tag=snapshot)
     elif args.command == "inputs":
         if args.trusted_directory is not None:
-            if any(value is None for value in (args.recipe, args.runtime_approval, args.tools_repository,
-                                               args.intake_directory, args.control_commit, args.profile_commit)):
+            if (not args.independent and args.runtime_approval is None or
+                args.component in RUNTIME_KINDS and args.runtime_approval is None or
+                any(value is None for value in (args.recipe, args.tools_repository,
+                                               args.intake_directory, args.control_commit, args.profile_commit))):
                 parser.error("controller inputs require --recipe, --runtime-approval, --tools-repository, --intake-directory, --control-commit and --profile-commit")
             result = prepare_selection(args.trusted_directory, component=args.component, series=args.series,
                 mode=args.mode, control_commit=args.control_commit, source_commit=args.source_commit,
@@ -1449,7 +1622,7 @@ def main():
                 package_definition=args.package_definition, tools_repository=args.tools_repository,
                 recipe=args.recipe, repository=args.repository,
                 intake_directory=args.intake_directory, creator_target=args.creator_target, reader_target=args.reader_target,
-                series_build_inputs=args.series_build_inputs)
+                series_build_inputs=args.series_build_inputs, independent=args.independent)
             encoded = json.dumps(result, sort_keys=True, indent=2) + "\n"
             if args.output is not None:
                 args.output.write_text(encoded, encoding="utf-8")
@@ -1460,7 +1633,7 @@ def main():
             parser.error("raw producer inputs require --creator-target and --recipe-sha256")
         upstream = metadata_profile.validate_profile(_json(args.upstream), args.series)
         creator, _ = _role(_json(args.creator_target), upstream, "creator")
-        if args.component == "bind_runtime":
+        if args.component in RUNTIME_KINDS:
             if args.profile is None:
                 parser.error("runtime inputs require --profile")
             result = bind920_profile.producer_inputs(bind920_profile.load_profile(args.profile), args.series,
@@ -1475,6 +1648,12 @@ def main():
     elif args.command == "select":
         result = select_producer_action(args.component, _json(args.inputs), args.directory)
     elif args.command == "publish":
+        if args.retention_only and load_selection(args.trusted_directory, component=args.component, series=args.series,
+                                                selection_sha256=args.selection_sha256)["schema"] == 2:
+            composition = load_composition(args.repository_root, component=args.component, series=args.series,
+                                           composition_sha256=args.composition_sha256)
+            print(json.dumps(dict(preserved_snapshot=composition["components"][args.component]["snapshot_tag"])))
+            return
         if args.retention_only:
             from bind.shared import retention
             retention.prune(args.repository,args.repository_root,args.trusted_directory,args.recovery,

@@ -53,8 +53,8 @@ self-contained current and rollback channels are generated in
   and recipe hashes before consumers run. A generated profile must use a matching
   `opnsense/tools` numeric tag and the `OS?=` value from `config/<series>/build.conf`.
   Consumers must use the sealed inputs without resolving moving refs again.
-- Keep `os-bind-rp`, `os-dhcp-interface-ha`, and the BIND runtime packages
-  independent. A package's pipeline must not dispatch, rebuild, block on, or
+- Keep `os-bind-rp`, `os-dhcp-interface-ha`, `bind-tools`, and `bind920`
+  independent, with separate package pipelines and signed release channels. A package's pipeline must not dispatch, rebuild, block on, or
   require publication by another package's pipeline. Shared CI helpers and the
   repository index may consume existing package records without coupling their
   build or publication lifecycles. Preserve native installation dependencies.
@@ -66,7 +66,15 @@ self-contained current and rollback channels are generated in
 - Build BIND runtime packages for a maintainer-requested BIND version-update PR
   and its approved publication, or an explicitly authorized manual runtime run.
   Runtime builds have no daily schedule and do not follow plugin or OPNsense
-  environment changes. Keep runtime version approval separate from plugin code.
+  environment changes. Each runtime package owns its approval under
+  `packages/<name>/Makefile`; its version PR builds unsigned previews, and its
+  reviewed merge selects only that package's production builds. Building an
+  internal native prerequisite must not publish it or invoke its package pipeline.
+- Package workflows publish only their own current channel and immutable variants.
+  The separate repository-index workflow consumes existing signed packages,
+  tolerates absent unrelated packages, and owns the shared catalogue/Pages write
+  lock. An index refresh must not trigger a package build; package publication
+  must not require an index refresh or another package's current channel.
 - Apply eligibility independently to each package and registered OPNsense series.
   A code change confined to one series must not rebuild its peers. Discover and
   seal current build inputs only after that package and series are eligible.

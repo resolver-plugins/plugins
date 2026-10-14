@@ -12,8 +12,10 @@ conflict with it. A system must have one or the other installed, never both.
 
 The package build requires OPNsense `26.1.11_10` or newer. That floor includes
 the BIND version carrying the named DoT-related fix relied on by this fork.
-The master package Makefile owns the `bind920` approval used by `os-bind-rp` and may
-advance it independently of OPNsense after review. Candidate automation may
+Each runtime package owns its reviewed version and Ports pin in
+`packages/bind-tools/Makefile` or `packages/bind920/Makefile`. The plugin uses an
+ordinary authenticated OPNsense BIND build dependency, resolved from its frozen
+upstream recipe independently of either runtime package release. Candidate automation may
 prepare evidence and PRs, but signed package publication remains a separate
 maintainer-controlled boundary.
 
@@ -67,23 +69,22 @@ rollback channels are published as GitHub Releases in
 metadata. A release-branch build remains a reviewed build input; it does not
 independently authorize publication or a change to the installation contract.
 
-The runtime and plugin have independent producers, compatibility fingerprints
-and signed component histories. Runtime changes do not rebuild an unchanged
-plugin; plugin changes consume an already published approved runtime and do not
-build or dispatch it. Automatic runtime releases require an approved pin change
-on `master`; helper, policy and plugin changes do not start that pipeline.
-For a new series, dispatch runtime publication directly. For a new series or
-runtime pin, publish the runtime first and retry the plugin if its required
-component is not yet available.
+`bind-tools`, `bind920`, `os-bind-rp`, and `os-dhcp-interface-ha` have independent
+builds, signed channels and immutable histories. Runtime version-update PRs
+build unsigned previews; their approved merges select only the package whose
+approval changed. Plugin source reviews select only their own changed series.
+No package pipeline dispatches, waits for, or requires another package release.
+The daily synchronizer creates plugin source reviews and never builds runtime packages.
 
-Composition preserves original component archives, build records and creator
-audit references, including the plugin's historical build-time runtime. Current
-reader authentication and the new catalogue writer are separate qualification
-records. Complete current and rollback BIND stacks remain self-contained; the
-shared feed retains every registered peer, including HA on 26.7. All publishers
-share one queued release lock and recheck their frozen peer receipts before
-mutation. Only the plugin workflow creates the plugin's source release.
+The plugin's native BIND dependency is frozen from the matching upstream Ports
+revision before building. A daemon build creates its tools prerequisite inside
+that same run for native qualification; it publishes only the daemon archive.
+Ordinary installation dependencies remain part of the native package contract.
 
-Do not alter signing, GitHub Release publication, package-repository
-publication, tokens, secrets, or the end-user installation contract without
-explicit maintainer authorization.
+A separate repository-index workflow authenticates already published packages,
+preserves their original archives and metadata, and signs the shared catalogue.
+Missing unrelated packages are allowed. It alone owns the shared Pages write
+lock; index failure cannot undo or block an owned package publication. Existing
+client URLs and trust keys remain in use. Legacy paired runtime and complete
+BIND rollback releases are retained with their original bytes. Only plugin
+workflows create their respective source releases.
