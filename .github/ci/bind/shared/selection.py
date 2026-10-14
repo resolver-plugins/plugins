@@ -219,10 +219,11 @@ def main():
     changed = (json.loads(args.changed_paths_file.read_text()) if args.changed_paths_file is not None
                else discover_changed_paths(event, document))
     package = {}
-    if event["name"] == "push" and PACKAGE_DEFINITION in changed:
+    definition = APPROVAL_PATHS.get(args.component, PACKAGE_DEFINITION)
+    if event["name"] == "push" and definition in changed:
         for key, commit in (("before_package", event["before"]), ("after_package", event["sha"])):
             package[key] = ("" if _commit(commit) == "0" * 40 else subprocess.check_output(
-                ["git", "show", f"{commit}:{PACKAGE_DEFINITION}"], text=True))
+                ["git", "show", f"{commit}:{definition}"], text=True))
     selected = select_event(args.component, event, json.loads(args.refs_file.read_text()), changed, **package)
     args.output.write_text(json.dumps(selected, sort_keys=True, indent=2) + "\n")
     if args.github_output is not None:

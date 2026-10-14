@@ -98,11 +98,11 @@ jobs:
               .github/workflows/bind-tests.yml \
               .github/workflows/bind920-candidate.yml \
               docs/package-repository/resolver-plugins.pub
-            git show refs/remotes/origin/control-plane:dns/bind/Makefile > "$RUNNER_TEMP/runtime-approval.mk"
+            git show refs/remotes/origin/control-plane:packages/bind920/Makefile > "$RUNNER_TEMP/runtime-approval.mk"
           fi
           test -d .github/ci
           if [[ "$PR_BASE" != release/bind-rp/* ]]; then
-            git show HEAD:dns/bind/Makefile > "$RUNNER_TEMP/runtime-approval.mk"
+            git show HEAD:packages/bind920/Makefile > "$RUNNER_TEMP/runtime-approval.mk"
           fi
           test -f "$RUNNER_TEMP/runtime-approval.mk"
       - uses: actions/setup-python@v5

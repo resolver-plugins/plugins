@@ -76,7 +76,7 @@ def stack_receipts(data, series):
     fields={"schema","kind","series","package_abi","catalogue_creator","components","packages","assets"}
     if (not isinstance(data,dict) or set(data)!=fields or type(data["schema"]) is not int or data["schema"]!=6
             or data["kind"]!="bind-stack" or data["series"]!=series
-            or not isinstance(data["components"],dict) or set(data["components"])!=set(bind.KINDS)
+            or not isinstance(data["components"],dict) or set(data["components"])!=set(bind.LEGACY_KINDS)
             or not isinstance(data["catalogue_creator"],dict)
             or set(data["catalogue_creator"])!={"package_creator","creator_source"}):
         raise ValueError("invalid published paired history")
@@ -129,7 +129,7 @@ def retention_plan(records, current_components, current_stack, *, keep=5):
         raise ValueError("registered runtime is required for retention")
     series=runtime["series"]
     protected=set()
-    for kind in bind.KINDS:
+    for kind in bind.LEGACY_KINDS:
         receipt=current_components.get(kind)
         if receipt is not None:
             bind.validate_receipt(receipt,kind,series)
@@ -145,7 +145,7 @@ def retention_plan(records, current_components, current_stack, *, keep=5):
         if record["tag"] in history:
             raise ValueError("duplicate published snapshot")
         manifest=record["manifest"]
-        if kind in bind.KINDS:
+        if kind in bind.LEGACY_KINDS:
             expected=component_manifest(manifest,kind,series)
         elif kind=="stack":
             expected=paired_tag(manifest,series)
@@ -178,10 +178,10 @@ def retention_plan(records, current_components, current_stack, *, keep=5):
                         or original[1]["manifest"]["packages"]!=receipt["packages"]):
                     raise ValueError("retained stack original component history is missing or inconsistent")
     for tag in protected:
-        if tag not in history or history[tag][0] not in bind.KINDS:
+        if tag not in history or history[tag][0] not in bind.LEGACY_KINDS:
             raise ValueError("required current component history is missing")
     for receipt in current_components.values():
-        if receipt is not None and receipt["component"] in bind.KINDS:
+        if receipt is not None and receipt["component"] in bind.LEGACY_KINDS:
             original=history[receipt["snapshot_tag"]][1]["manifest"]
             if (original["assets"]!={name:digest for name,digest in receipt["assets"].items() if name!="channel.json"}
                     or original["packages"]!=receipt["packages"]):
@@ -229,13 +229,13 @@ def collect(repository, series):
                     {"catalogue-upstream.json","catalogue-creator-target.json"})
                 releases.download_release_asset(repository,tag,"channel.json",directory)
                 data=bind._json(directory / "channel.json")
-                if kind in bind.KINDS and "series-build-inputs.json" in data["assets"]:
+                if kind in bind.LEGACY_KINDS and "series-build-inputs.json" in data["assets"]:
                     names.add("series-build-inputs.json")
                 for name in sorted(names-{"channel.json"}):
                     releases.download_release_asset(repository,tag,name,directory)
                 if any(data["assets"].get(name)!=releases.sha256(directory / name) for name in names-{"channel.json"}):
                     raise ValueError("historical original metadata bytes differ")
-                if kind in bind.KINDS:
+                if kind in bind.LEGACY_KINDS:
                     bind.validate_component_record(data,bind._sidecars(directory,kind),data["packages"],kind,series)
                     expected=component_manifest(data,kind,series)
                 else:
@@ -253,7 +253,7 @@ def collect(repository, series):
 def current_state(repository, series):
     with tempfile.TemporaryDirectory() as temporary:
         root=Path(temporary)
-        components={kind:catalogue.fetch(repository,kind,series,root / kind) for kind in bind.KINDS}
+        components={kind:catalogue.fetch(repository,kind,series,root / kind) for kind in bind.LEGACY_KINDS}
         current=releases.snapshot_release(repository,releases.channel_tag(series),root / "stack-current")
         stack=None
         if current.existed:

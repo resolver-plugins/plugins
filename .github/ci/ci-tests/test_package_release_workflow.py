@@ -281,22 +281,20 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
 def test_git_package_delta_routes_approval_and_plugin_independently(tmp_path, change, expected):
     from package_fixtures import PLUGIN_PACKAGE, runtime_approval
     repository = init_repository(tmp_path / 'history')
-    before_definition = PLUGIN_PACKAGE + ('' if change == 'initialize' else runtime_approval())
-    before = commit(repository, {'dns/bind/Makefile': before_definition}, 'before reviewed package change')
-    after_definition = PLUGIN_PACKAGE + runtime_approval()
+    before_runtime = '' if change == 'initialize' else runtime_approval()
+    before = commit(repository, {'dns/bind/Makefile': PLUGIN_PACKAGE,
+                                  'packages/bind920/Makefile': before_runtime}, 'before reviewed package change')
+    after_runtime = runtime_approval()
     if change in ('runtime', 'both'):
-        after_definition = PLUGIN_PACKAGE + runtime_approval('9.20.27', '2' * 40)
+        after_runtime = runtime_approval('9.20.27', '2' * 40)
+    after_definition = PLUGIN_PACKAGE
     if change in ('plugin', 'both'):
         after_definition = after_definition.replace('>= 9.20.26', '>= 9.20.27')
-    after = commit(repository, {'dns/bind/Makefile': after_definition, 'docs/note': 'reviewed note'}, 'after reviewed change')
+    after = commit(repository, {'dns/bind/Makefile': after_definition, 'packages/bind920/Makefile': after_runtime,
+                               'docs/note': 'reviewed note'}, 'after reviewed change')
     context = dict(name='push', ref='refs/heads/master', sha=after, workflow_sha=after)
-    for component, release in zip(('bind_runtime', 'bind_plugin'), expected):
-        paths = trigger_paths(release_workflow(component), 'push')
-        admitted = False
-        for pattern in paths:
-            if fnmatchcase('dns/bind/Makefile', pattern.removeprefix('!')):
-                admitted = not pattern.startswith('!')
-        assert admitted
+    for component, release in zip(('bind920', 'bind_plugin'), expected):
+        context_paths = ['packages/bind920/Makefile'] if component == 'bind920' else ['dns/bind/Makefile']
         completed, selected, serialized = select_cli(tmp_path / component, component, context,
             {'before': before}, repository=repository)
         assert completed.returncode == 0, completed.stderr

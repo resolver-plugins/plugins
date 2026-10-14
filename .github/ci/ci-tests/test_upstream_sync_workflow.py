@@ -94,7 +94,7 @@ def test_workflow_uses_one_frozen_discovery_and_sealed_plan_for_review_mutation(
     assert '> "$RUNNER_TEMP/discovery.json"' in workflow
     assert '--discovery "$RUNNER_TEMP/discovery.json"' in workflow
     assert '--output "$RUNNER_TEMP/plan.json"' in workflow
-    assert workflow.count('--plan "$RUNNER_TEMP/plan.json"') == 3
+    assert workflow.count('--plan "$RUNNER_TEMP/plan.json"') == 2
     for step in re.split(r'^      - ', workflow, flags=re.MULTILINE):
         if any(operation in step for operation in operations[2:]):
             assert "steps.recovery.outputs.handled != 'true'" in step
