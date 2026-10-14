@@ -166,6 +166,19 @@ removed. Controller fixture consolidation also preserves the captured settings
 and status scenario responses, apart from timestamps and fixture interface bookkeeping.
 Unit tests do not establish native browser, boot, failover or session behavior.
 
+The first signed release, `0.2_45` from source `8e29ddd8590e8b7708d5bcebd8a7b09238621788`,
+completed the [release workflow](https://github.com/resolver-plugins/plugins/actions/runs/38493507292)
+on 2026-10-14. Build, signing, staged installation, public-feed installation and
+source prerelease publication passed on OPNsense `26.7.4_1` / FreeBSD
+`15.1-RELEASE-p3`, using pkg `2.3.1_1`. The native checks verified package file
+checksums, UI route resolution, interface inventory and a running controller with
+setup incomplete, HA disabled and no managed interface attached. All 37 published
+feed files matched the signed artifact; BIND archives and the `0.2_44` snapshot
+were preserved. The released package SHA-256 is
+`f97b6b226c4d4450986a0d74ba6db7fd84ce8e7ab79fbca5b299963f701bd71b`.
+The VM package hooks reported `Reloading template OPNsense/Syslog: ERR`;
+native log integration remains unqualified by this run.
+
 On 2026-10-08, the same manually built `0.2_42` archive from source `eaa73b948`
 was installed and verified on both appliances. Its SHA-256 is
 `5bc25df5f0bed6b7530c50567c3fc7f7223077a8b17106bffc460f7e564c4b2c`.
@@ -196,7 +209,6 @@ backups and console recovery before authorized disruptive tests.
 | Routing recovery | DHCP renewal, native interface/routing reconfiguration, gateway alarms, missed events, restart, feature disable and failed cleanup. Preserve unrelated routes, management, VPN/static routes, XMLRPC and pfsync. |
 | Common failures | Shared ISP outage, no VIP owner, both nodes BACKUP, mixed roles and loss of the internal path. Show no sustained peer/self-routing loop or extra election; native split-brain limitations remain. |
 | Session continuity | Verify stable public lease, equivalent native firewall/NAT policy and healthy pfsync with the same kernel interface name. Measure established TCP/NAT and application behavior; standby-originated connections may reconnect. |
-| Release pipeline | Complete the first FreeBSD build/sign/staged-install/public-install workflow and record its URL/outcome. Signed `0.2_45` publication remains pending. |
 
 Delayed failback is not implemented: keep its value at zero and retain native
 CARP preemption policy. Peer release acknowledgments, Internet-health election,
