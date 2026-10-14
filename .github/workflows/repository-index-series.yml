@@ -201,3 +201,39 @@ jobs:
           path: ${{ runner.temp }}/index-recovery
           if-no-files-found: ignore
           retention-days: 30
+
+  verify-published:
+    needs: [select, sign, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      RP_INDEX_SHA256: ${{ needs.select.outputs.selection_sha256 }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.sign.outputs.repository_artifact_id }}
+          path: artifacts/index
+          merge-multiple: true
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ needs.select.outputs.freebsd_release }}
+          arch: x86_64
+          envs: RP_INDEX_SHA256
+          usesh: true
+          disable-cache: true
+          prepare: |
+            export IGNORE_OSVERSION=yes
+            pkg update -f
+            pkg install -y python3 git
+          run: |
+            set -eu
+            export IGNORE_OSVERSION=yes
+            abi=$(python3 -I .github/ci/shared/workflow_data.py field artifacts/index/channel.json package_abi)
+            series='${{ inputs.series }}'
+            python3 -I .github/ci/shared/repository_index.py verify --directory artifacts/index --sha256 "$RP_INDEX_SHA256" \
+              --url "https://resolver-plugins.github.io/repository/pkg/$abi/$series/latest"

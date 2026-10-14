@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bind.shared import components as bind
@@ -204,7 +205,14 @@ def verify(directory, digest, pkg_command, url=None):
     for package in packages:
         package_checksums.verify_archive(pkg_command, package)
     if url:
-        releases.verify_abi_endpoint(url, directory)
+        for attempt in range(20):
+            try:
+                releases.verify_abi_endpoint(url, directory)
+                break
+            except (OSError, RuntimeError):
+                if attempt == 19:
+                    raise
+                time.sleep(30)
     catalogue.verify_packages(packages, url or directory.resolve().as_uri(), reader, upstream, pkg_command=pkg_command)
 
 
