@@ -74,7 +74,7 @@ def package_release_title(tag: str) -> str:
     ha_channel = re.fullmatch(r"pkg-dhcp-interface-ha-(\d+\.\d+)(?:-([0-9]+(?:\.[0-9]+)*(?:_[0-9]+)?))?", tag)
     if ha_channel:
         series, version = ha_channel.groups()
-        return f"HA DHCP Interface {series} — {version or 'latest'}"
+        return f"os-dhcp-interface-ha {series} {version or 'latest'}"
     component = re.fullmatch(r"pkg-(\d+\.\d+)-bind-(runtime|plugin)(?:-(.+)-[0-9a-f]{64})?", tag)
     if component:
         series, kind, version = component.groups()
