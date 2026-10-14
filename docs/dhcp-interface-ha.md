@@ -7,9 +7,11 @@ the [package repository guide](package-repository.md#ha-dhcp-interface) covers t
 shared BIND/HA catalogue and publication. This guide records implemented behavior and
 remaining qualification. Completed implementation plans are retained in Git history.
 
-Package releases follow the BIND plugin model: reviewed source and immutable
-build metadata on `release/dhcp-interface-ha/<series>`, canonical tests and CI
-on `master`, and series-based package versions such as `26.7_1`. See the
+Package releases follow the BIND plugin model: reviewed source on
+`release/dhcp-interface-ha/<series>`, canonical tests and CI on `master`, and
+series-based package versions such as `26.7_1`. Build inputs are discovered and
+sealed for each run; source branches do not require `.resolver-plugins` files.
+The prepared `26.7_1` source is registered for canonical PR checks. See the
 [fork model](fork-model.md#branch-responsibilities) for ownership and the
 [build guide](building.md#before-approving-a-build-change) for local source
 materialization. Native installation gates qualify each selected environment;
