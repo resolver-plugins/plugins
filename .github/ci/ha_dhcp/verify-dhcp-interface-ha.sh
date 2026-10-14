@@ -37,6 +37,8 @@ case "$url" in
         ;;
 esac
 python3 "$ci/shared/package_catalogue.py" verify --directory "$combined" --url "$url" --reader-target "$RP_READER_PKG_METADATA" --upstream "$RP_UPSTREAM_METADATA"
+kldload -n carp
+sysctl -n net.inet.carp.allow >/dev/null
 sh "$ci/shared/prepare-opnsense-vm.sh"
 install -d -m 0755 /usr/local/etc/pkg/keys /usr/local/etc/pkg/repos
 install -m 0644 "$root/docs/package-repository/resolver-plugins.pub" /usr/local/etc/pkg/keys/resolver-plugins.pub
