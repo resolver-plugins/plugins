@@ -142,16 +142,10 @@ class Bind920CandidateWorkflowTest(unittest.TestCase):
     def workflow_text(self) -> str:
         return CANDIDATE_WORKFLOW.read_text(encoding="utf-8")
 
-    def test_candidate_workflow_runs_candidate_reuse_and_provenance_checks(self) -> None:
-        workflow = self.workflow_text()
-        self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("python .github/ci/ci-tests/test_bind920_candidate.py", workflow)
-        self.assertIn("python .github/ci/ci-tests/test_bind920_reuse.py", workflow)
-        self.assertIn("python .github/ci/ci-tests/test_release_channel_provenance.py", workflow)
-
     def test_candidate_workflow_never_publishes_packages(self) -> None:
         """Candidate review PRs must not cross the publication boundary."""
         workflow = self.workflow_text()
+        self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("release upload", workflow)
         self.assertNotIn("release_channel.py publish", workflow)
         assert_action_release_tags(workflow)

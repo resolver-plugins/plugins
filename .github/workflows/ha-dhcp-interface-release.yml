@@ -72,14 +72,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  test:
-    needs: profile
-    if: needs.profile.outputs.release == 'true'
-    uses: ./.github/workflows/ha-dhcp-interface-tests.yml
-    with:
-      series: ${{ needs.profile.outputs.series }}
-      source_commit: ${{ needs.profile.outputs.source_commit }}
-
   profile:
     needs: select
     if: needs.select.outputs.release == 'true'
@@ -142,7 +134,7 @@ jobs:
           retention-days: 7
 
   build:
-    needs: [profile, test]
+    needs: profile
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:

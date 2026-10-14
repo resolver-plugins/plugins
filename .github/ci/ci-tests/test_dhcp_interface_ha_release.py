@@ -211,19 +211,7 @@ def test_failed_uploaded_verification_keeps_release_draft(release):
     assert "--draft" in calls.run_gh.call_args.args[0]
 
 
-def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification(tmp_path, monkeypatch):
-    test_workflow = (ROOT / '.github/workflows/ha-dhcp-interface-tests.yml').read_text()
-    test_header = test_workflow.split('jobs:\n', 1)[0]
-    assert not re.search(r'^  push:', test_header, re.MULTILINE)
-    for event in ('pull_request', 'workflow_dispatch', 'workflow_call'):
-        assert re.search(r'^  ' + event + ':', test_header, re.MULTILINE), event
-    watched = ['.github/ci/ha_dhcp/build.sh', '.github/ci/shared/package_catalogue.py',
-               '.github/ci/bind/shared/components.py', '.github/ci/bind/runtime/bind920_profile.py',
-               '.github/ci/ci-tests/test_dhcp_interface_ha_release.py',
-               '.github/workflows/ha-dhcp-interface-release.yml']
-    patterns = trigger_paths(test_workflow, 'pull_request')
-    for path in watched:
-        assert any(fnmatchcase(path, pattern) for pattern in patterns), path
+def test_workflow_keeps_build_readonly_and_publishes_only_after_package_verification(tmp_path, monkeypatch):
     workflow = (ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text()
     header = workflow.split('jobs:\n', 1)[0]
     jobs = workflow_jobs(workflow)
@@ -231,15 +219,15 @@ def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verifi
     assert re.search(r'^  push:\n    branches: \[master\]', header, re.MULTILINE)
     assert "branches: ['release/dhcp-interface-ha/**']" in header
     assert not re.search(r'^  pull_request:', header, re.MULTILINE)
-    assert "if: needs.profile.outputs.release == 'true'" in workflow.split('  profile:')[0]
+    assert "if: needs.select.outputs.release == 'true'" in jobs['profile']
     assert 'release: ' + '$' + '{{ needs.profile.outputs.freebsd_release }}' in jobs['build']
     assert 'validate-source' in jobs['build']
     assert '--source-commit' in jobs['build'] and 'selection_sha256' in jobs['build']
-    for name, required in {'build': {'profile', 'test'}, 'publish': {'profile', 'sign', 'verify'},
+    for name, required in {'build': {'profile'}, 'publish': {'profile', 'sign', 'verify'},
                            'verify-published': {'profile', 'sign', 'publish'},
                            'source-release': {'profile', 'sign', 'verify-published'}}.items():
-        declared = re.search(r'^    needs: \[([^\n]+)\]$', jobs[name], re.MULTILINE)[1]
-        assert required <= {value.strip() for value in declared.split(',')}, name
+        declared = re.search(r'^    needs: ([^\n]+)$', jobs[name], re.MULTILINE)[1]
+        assert required <= {value.strip() for value in declared.strip('[]').split(',')}, name
     for name, job in jobs.items():
         if name in ('select', 'profile', 'test'):
             continue

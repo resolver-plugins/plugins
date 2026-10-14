@@ -25,7 +25,6 @@ from shared.upstream_inputs import source_baseline, tools_release_profile
 SERIES_PATTERN = re.compile(r'^stable/(\d+)\.(\d+)$')
 RELEASE_PATTERN = re.compile(r'^(\d+)\.(\d+)$')
 AUDIT_TRAILER = 'Resolver-Sync-Plan: '
-CALLER_PATH = '.github/workflows/bind-tests.yml'
 OVERLAY_PATHS = ('dns/bind', 'Mk/plugins.mk', ':(exclude)dns/bind/tests')
 DISCOVERY_FIELDS = {
     'action', 'series', 'upstream_ref', 'upstream_commit', 'source_release',
@@ -37,27 +36,6 @@ PLAN_FIELDS = DISCOVERY_FIELDS | {
     'schema', 'sync_branch', 'core_commit', 'core_archive_url', 'core_archive_sha256',
 }
 SYNC_PATTERN = re.compile(r'^sync/(bootstrap|bind)/(\d+\.\d+)/([0-9a-f]{12})-([0-9a-f]{12})$')
-THIN_CALLER = """name: Test BIND release source
-
-on:
-  pull_request:
-    paths:
-      - 'dns/bind/**'
-      - 'Mk/plugins.mk'
-      - '.github/workflows/bind-tests.yml'
-
-permissions:
-  contents: read
-
-jobs:
-  test:
-    permissions:
-      contents: read
-    uses: resolver-plugins/plugins/.github/workflows/bind-tests.yml@master
-    with:
-      pull_request_base: ${{ github.event.pull_request.base.ref }}
-      pull_request_sha: ${{ github.event.pull_request.head.sha }}
-"""
 
 
 def run_git(repository: Path, *arguments: str) -> str:
@@ -333,15 +311,10 @@ def commit_clone(clone: Path, paths: list[str], message: str,
     conflicts = unmerged_paths(clone)
     if conflicts:
         raise ValueError(f'overlay patch conflicts: {", ".join(conflicts)}')
-    generated = []
     if plan_data is not None:
-        caller_path = clone / CALLER_PATH
-        caller_path.parent.mkdir(parents=True, exist_ok=True)
-        caller_path.write_text(THIN_CALLER, encoding='utf-8')
-        generated.append(CALLER_PATH)
         message += '\n\n' + AUDIT_TRAILER + json.dumps(plan_data, sort_keys=True, separators=(',', ':'))
-    if generated or paths:
-        require_git(clone, 'add', '--all', '--', *generated, *paths)
+    if paths:
+        require_git(clone, 'add', '--all', '--', *paths)
     parent_timestamp = require_git(clone, 'show', '-s', '--format=%ct', 'HEAD')
     environment = os.environ.copy()
     environment.update(GIT_AUTHOR_DATE=f'@{parent_timestamp} +0000',

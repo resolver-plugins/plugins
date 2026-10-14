@@ -544,7 +544,7 @@ def vm_body(job):
 @pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
 def test_native_qualification_is_mandatory_and_authentication_precedes_key_decode(component):
     jobs = workflow_jobs(release_workflow(component))
-    for job, prerequisite in [('producer', 'test'), ('verify', 'sign'), ('publish', 'verify'),
+    for job, prerequisite in [('producer', 'profile'), ('verify', 'sign'), ('publish', 'verify'),
                               ('verify-published', 'publish')]:
         assert prerequisite in needs_jobs(jobs[job]), (component, job)
     if component == 'bind_plugin':

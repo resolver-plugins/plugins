@@ -71,8 +71,8 @@ core and pkg inputs in `series-build-inputs.json`. Build fingerprints protect
 provenance and immutable variants; they are not automatic rebuild triggers.
 Release helpers are grouped in `.github/ci/bind/`,
 `.github/ci/ha_dhcp/`, and `.github/ci/shared/`; regression tests remain in
-`.github/ci/ci-tests/`. PR tests retain broader validation filters, including
-runtime helpers and workflow changes. HA-only changes, test-only edits and
+`.github/ci/ci-tests/` and run locally only. Hosted synchronization and package
+workflows do not run regression suites. HA-only changes, test-only edits and
 documentation do not select BIND package builds.
 
 When several series need the same producer, its selection job builds one and
@@ -348,26 +348,38 @@ version, ABI, provenance values, and FreeBSD environment used for the build.
 build runner. Use it directly only when diagnosing repository setup; it changes
 the FreeBSD VM's package repository configuration.
 
-The `Test BIND plugin` pull-request workflow discovers every active
-`release/bind-rp/<series>` branch, materializes its `dns/bind/src` tree, and
-runs the canonical `dns/bind/tests` suite from the pull request. Release-source
-helper checks load the CI code and committed repository key from the same
-`master` checkout. The workflow also runs
-the CI helper tests for BIND profile changes, including package-owned
-runtime approval candidate PRs. Do not add a static release
-matrix: a newly created release branch is included automatically.
-
-Local canonical checks require the same selected release-source materialization.
+Local canonical checks require selected release-source materialization.
 The control-plane `master` tree intentionally lacks `dns/bind/src`, so a raw
-`pytest dns/bind/tests` there cannot collect the behavior suite. In a disposable
-checkout, follow the workflow's `Materialize canonical tests and release BIND
-source` step for each active release branch, retaining the tests from the
-selected control commit, then run `python3 -m pytest -q dns/bind/tests` against
-that exact source with `RP_TEST_SERIES="$series"`. The series comes from branch
-discovery; the behavior tests do not read release JSON. Report each series and
-immutable source commit checked.
+`pytest dns/bind/tests` there cannot collect the behavior suite. Use a disposable
+clone under a unique `/tmp` directory with automatic cleanup. Fetch the release
+refs deliberately before testing; the local runner makes no network requests.
+For each relevant `release/bind-rp/<series>` source, prepare that clone:
 
-The workflow requires `dns/bind/pkg-descr` to change with publishable
+```sh
+(
+  set -eu
+  series=26.1
+  control_commit=$(git rev-parse HEAD)
+  source_commit=$(git rev-parse "refs/remotes/origin/release/bind-rp/$series^{commit}")
+  test_tmp=$(mktemp -d /tmp/resolver-bind-tests.XXXXXX)
+  trap 'rm -rf "$test_tmp"' 0
+  trap 'exit 1' HUP INT TERM
+  git clone --quiet --shared . "$test_tmp/source"
+  cd "$test_tmp/source"
+  rm -rf dns/bind
+  git checkout "$source_commit" -- dns/bind
+  rm -rf dns/bind/tests
+  git checkout "$control_commit" -- dns/bind/tests
+  RP_TEST_SERIES="$series" python3 .github/ci/run-local-tests.py bind
+)
+```
+
+Keep CI helpers and the committed repository key from the selected control
+checkout. Report each series and immutable source commit checked; the behavior
+tests do not read release JSON.
+
+The local `.github/ci/check-bind-pkg-descr.sh <base-sha> <head-sha>` check requires
+`dns/bind/pkg-descr` to change with publishable
 plugin runtime, package-hook, or PLUGIN metadata changes. Runtime approval-only
 changes do not modify the plugin package contract. Test-only changes and
 `PLUGIN_REVISION`-only rebuilds do not require a changelog entry.
@@ -400,21 +412,33 @@ it does not publish packages.
 
 ## Before approving a build change
 
-The `CI helper tests` pull-request workflow runs the full `.github/ci/ci-tests/`
-suite when CI, workflow, package, framework, or installer inputs change. It uses
-read-only repository permissions and local Git and command fixtures. Package
-build and publication triggers are unchanged.
+Regression, unit, behavior and lint suites run locally only. Test-only GitHub
+workflows are retired and disabled, including historical release-source callers.
+Synchronization, candidate and package workflows do not run helper suites or
+depend on a test job. Package provenance, signing, archive and native installation
+qualification remain mandatory parts of producing publishable packages.
 
-The `HA DHCP Interface tests` workflow discovers registered
-`release/dhcp-interface-ha/<series>` branches and runs `Plugin tests and lint`
-against their exact package sources using canonical master tests. Release-source
-PRs call the master workflow and test their proposed source. A newer PR update
-cancels its superseded HA test run. The release workflow supplies its frozen
-source SHA and series to the same suite before building; each release or manual
-run has its own concurrency group and is never canceled by a PR update.
+The local entrypoint uses Python 3, Git and pytest (`pytest==8.3.5` is the reviewed
+version). BIND checks also need PHP CLI; HA checks need Node.js, PHP with SimpleXML
+and mbstring, and ShellCheck. Run on a host with an executable `/tmp` filesystem:
+command fixtures must execute, and temporary Git fixtures and clones must be
+automatically removed. The helper runner stops before testing on a `noexec`
+temporary filesystem so fixture commands cannot fall through to real host tools.
 
-For a local HA check, use a disposable clone (no worktree), keep the canonical
-tests from master, and materialize the release source as CI does:
+```sh
+python3 -m pip install 'pytest==8.3.5'
+python3 .github/ci/run-local-tests.py helpers
+```
+
+The optional `bind` and `ha` arguments run their package suite and HA lint checks
+against the current prepared checkout; `all` runs all three suites. A maintainer
+materializes each relevant registered series before approving source changes.
+Record local results in the PR. Publish and merge CI, test and documentation
+changes with `[skip ci]` commit annotations; do not dispatch Actions for test
+validation. PR-release cleanup is restricted to package source changes.
+
+For a local HA check, use a disposable clone (no worktree), keep canonical tests
+and CI from master, and materialize the exact reviewed release source:
 
 ```sh
 series=26.7
@@ -427,9 +451,7 @@ selection_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py so
 python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py materialize \
   --series "$series" --directory artifacts/trusted --repository-root "$PWD" \
   --source-commit "$source_commit" --control-commit "$control_commit" --sha256 "$selection_sha256"
-python3 -m unittest discover -s net/dhcp-interface-ha/tests -v
-node net/dhcp-interface-ha/tests/ui/test_configure_lagg.js
-node net/dhcp-interface-ha/tests/ui/test_log.js
+python3 .github/ci/run-local-tests.py ha
 ```
 
 The native HA builder additionally requires `CONTROL_COMMIT`, `SOURCE_COMMIT`,
@@ -457,7 +479,7 @@ python3 -m compileall -q .github/ci
 git diff --check
 ```
 
-Also check the three suites used by the candidate workflow without pytest:
+The candidate helpers can also be checked locally without pytest:
 
 ```sh
 python3 .github/ci/ci-tests/test_bind920_candidate.py

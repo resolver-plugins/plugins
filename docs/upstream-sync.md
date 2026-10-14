@@ -50,9 +50,9 @@ for the executing repository and revokes its short-lived token at job cleanup.
 Only the recovery and publication commands receive that token. Checkout uses a
 read-only `GITHUB_TOKEN` with credential persistence disabled.
 
-The Workflows permission is required because proposals include the generated
-`.github/workflows/bind-tests.yml` caller. It is unavailable through the
-`GITHUB_TOKEN` workflow `permissions` key. App authentication also allows PR
+The app retains its repository-scoped permissions for historical proposal recovery.
+New proposals do not generate test-workflow callers, and regression suites run
+locally before source review approval. App authentication also allows PR
 creation independently of the repository's **Allow GitHub Actions to create
 and approve pull requests** setting. See GitHub's
 [token action](https://github.com/actions/create-github-app-token) and
@@ -83,7 +83,7 @@ are `sync/<bind|bootstrap>/<series>/<upstream-prefix>-<input-hash-prefix>`;
 the hash covers the entire sealed plan except its derived ref.
 
 Source updates carry fork diffs only from `dns/bind` (excluding canonical tests)
-and `Mk/plugins.mk`, plus the thin read-only test caller.
+and `Mk/plugins.mk`.
 CI, policy and tool directories are not blanket overlays. Temporary clones
 prepare commits without resetting the user's checkout or creating worktrees.
 

@@ -39,12 +39,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.13'
-      - name: Run candidate helper tests
-        run: |
-          python -m compileall -q .github/ci
-          python .github/ci/ci-tests/test_bind920_candidate.py
-          python .github/ci/ci-tests/test_bind920_reuse.py
-          python .github/ci/ci-tests/test_release_channel_provenance.py
       - name: Fetch FreeBSD Ports candidate
         id: ports
         shell: bash
