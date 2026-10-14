@@ -196,7 +196,7 @@ backups and console recovery before authorized disruptive tests.
 | Routing recovery | DHCP renewal, native interface/routing reconfiguration, gateway alarms, missed events, restart, feature disable and failed cleanup. Preserve unrelated routes, management, VPN/static routes, XMLRPC and pfsync. |
 | Common failures | Shared ISP outage, no VIP owner, both nodes BACKUP, mixed roles and loss of the internal path. Show no sustained peer/self-routing loop or extra election; native split-brain limitations remain. |
 | Session continuity | Verify stable public lease, equivalent native firewall/NAT policy and healthy pfsync with the same kernel interface name. Measure established TCP/NAT and application behavior; standby-originated connections may reconnect. |
-| Release pipeline | Complete the first FreeBSD build/sign/staged-install/public-install workflow and record its URL/outcome. Signed `0.2_44` publication remains pending. |
+| Release pipeline | Complete the first FreeBSD build/sign/staged-install/public-install workflow and record its URL/outcome. Signed `0.2_45` publication remains pending. |
 
 Delayed failback is not implemented: keep its value at zero and retain native
 CARP preemption policy. Peer release acknowledgments, Internet-health election,

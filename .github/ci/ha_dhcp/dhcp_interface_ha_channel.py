@@ -170,8 +170,7 @@ def promote(repository, directory, recovery):
         old = validate(current.directory)
         if releases.snapshot_matches_directory(current, directory):
             if not archive.existed:
-                releases.publish_immutable_release(repository, archive_tag, directory,
-                                                   releases.package_release_title(archive_tag))
+                releases.publish_snapshot(repository, archive_tag, directory)
             return
         if old["source_commit"] == data["source_commit"] or not releases.commit_is_ancestor_or_equal(
                 old["source_commit"], data["source_commit"]):
@@ -181,8 +180,7 @@ def promote(repository, directory, recovery):
         fresh = releases.snapshot_release(repository, current_tag, Path(temporary))
         if not releases.release_snapshots_match(current, fresh):
             raise RuntimeError("current channel changed during preflight")
-    releases.publish_immutable_release(repository, archive_tag, directory,
-                                       releases.package_release_title(archive_tag))
+    releases.publish_snapshot(repository, archive_tag, directory)
     try:
         releases.publish(repository, current_tag, directory, True)
     except Exception:
