@@ -248,6 +248,9 @@ this helper copies the installed factory configuration, then runs
 It requires PHP to resolve and load `config.inc` through the generated include
 path. Existing customer configuration is preserved; this setup does not run the
 appliance's network or firewall boot sequence.
+HA's builder and staged/public installation checks additionally load the
+`carp` kernel module and require `net.inet.carp.allow` before plugin installation.
+Generic FreeBSD VMs do not have OPNsense's CARP kernel setup at boot.
 Local qualification requests each built package's exact version and compares its
 installed identity with the archive. Public native pkg qualification also checks
 the supported behavior of keeping a newer compatible upstream BIND pair.

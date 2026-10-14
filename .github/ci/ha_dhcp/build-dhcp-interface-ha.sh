@@ -43,6 +43,8 @@ package=$1
 python3 "$ci/shared/package_checksums.py" --pkg-command "$pkg_static" "$package"
 
 # Verify installation in the disposable VM, with no configured HA interface.
+kldload -n carp
+sysctl -n net.inet.carp.allow >/dev/null
 sh "$ci/shared/prepare-opnsense-vm.sh"
 "$pkg_static" add "$package"
 "$pkg_static" check -s os-dhcp-interface-ha
