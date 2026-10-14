@@ -27,9 +27,9 @@ def test_workflow_runs_daily_and_manually_with_exact_permissions():
     assert_permissions(workflow, {'contents': 'read'})
     jobs = workflow_jobs(workflow)
     for name, job in jobs.items():
-        assert_permissions(job, {'contents': 'read'} if name == 'test' else None, indent=4)
+        assert_permissions(job, None, indent=4)
         assert "    if: github.ref == 'refs/heads/master'\n" in job
-    assert '    needs: test\n' in jobs['reconcile']
+    assert set(jobs) == {'reconcile'}
 
 
 def test_workflow_uses_approved_upstream_sources_and_complete_stable_discovery():

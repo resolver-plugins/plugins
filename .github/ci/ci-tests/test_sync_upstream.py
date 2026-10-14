@@ -112,10 +112,7 @@ def test_apply_bootstrap_review_creates_pristine_release_and_bounded_overlay(rep
     subprocess.run(['python3', str(PLANNER), 'profile', '--plan', str(tmp_path / 'plan.json'),
                     '--output', str(profile_path)], check=True)
     assert json.loads(profile_path.read_text()) == upstream_profile('26.7', upstream)
-    caller = git(repository, 'show', f'{review}:{CALLER_PATH}')
-    assert 'contents: read' in caller and 'secrets:' not in caller
-    assert 'pull_request_base:' in caller and 'pull_request_sha:' in caller
-    assert '.resolver-plugins' not in caller and 'Mk/plugins.mk' in caller
+    assert git(repository, 'ls-tree', review, '--', CALLER_PATH) == ''
     assert git(repository, 'ls-tree', target, '--', AUDIT_PATH, CALLER_PATH) == ''
     original = git(repository, 'rev-parse', target, review)
     retry = apply_sync(repositories, sealed, tmp_path, PLANNER,

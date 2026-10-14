@@ -23,9 +23,9 @@ maintainer-controlled boundary.
 
 `master` is the control plane. It holds shared CI scripts, GitHub Actions
 workflows, documentation, and the canonical BIND behavior suite in
-`dns/bind/tests`. Pull requests run that suite against every active release
-source discovered from `release/bind-rp/<series>` branches, so a new supported
-series needs no workflow-matrix edit. It should stay aligned with upstream
+`dns/bind/tests`. Maintainers run that suite locally against the active release
+sources under `release/bind-rp/<series>` before approving source changes.
+It should stay aligned with upstream
 OPNsense plugins except for the fork's deliberate control-plane and
 package-identity changes.
 
@@ -33,10 +33,9 @@ package-identity changes.
 They need no `.resolver-plugins` files. Controllers discover build inputs from
 official upstream refs and Git ancestry, then freeze their exact identities in
 the run's artifacts and published receipts. Treat a release branch as a stable, reviewed input to a
-package build; do not force-push or casually rewrite it. Each release branch
-carries a thin `.github/workflows/bind-tests.yml` caller that invokes the
-canonical read-only test workflow from `master`; new release bootstraps inherit
-it as an explicitly generated trusted caller.
+package build; do not force-push or casually rewrite it. Test suites run locally;
+new source reviews contain no generated test-workflow caller. Historical source
+refs remain immutable, and their retired test workflows stay disabled in GitHub.
 Preserve upstream ancestry by merging generated source reviews with their history;
 discovery uses that ancestry to identify the reviewed upstream baseline.
 
@@ -51,8 +50,7 @@ starting with `26.7_1`. The package remains `os-dhcp-interface-ha`; its applicat
 and package policy are independent of BIND.
 
 The canonical HA suite lives in `net/dhcp-interface-ha/tests` on `master` and runs
-against every registered HA release source. HA branches carry only a thin caller
-of the master test workflow. Builds materialize the exact reviewed package and
+locally against registered HA release sources. Builds materialize the exact reviewed package and
 framework trees while keeping CI and tests from the control plane. Relevant
 package code changes select only the series whose own code differs from its
 published source. CI, framework and environment changes do not rebuild HA. Merging a package

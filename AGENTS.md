@@ -86,16 +86,23 @@ self-contained current and rollback channels are generated in
 - Keep durable CI helper and workflow regression tests in
   `.github/ci/ci-tests/`; use local Git and command fixtures rather than live
   services. Keep the canonical BIND behavior suite in `dns/bind/tests/` on
-  `master`; its PR workflow materializes and tests every active
-  `release/bind-rp/<series>` source. Use the ignored `.github/ci-local/`
+  `master`; local verification materializes and tests the relevant
+  `release/bind-rp/<series>` sources. Run regression, unit, behavior and lint
+  suites locally only. GitHub Actions must not run these suites or generate
+  release-source test callers. Package publication retains its provenance,
+  signing, archive and native installation qualification checks.
+  Publish and merge CI, test and documentation changes with `[skip ci]` commit
+  annotations; do not dispatch Actions to validate those changes.
+  Use the ignored `.github/ci-local/`
   directory only for CI discovery reports and investigation harnesses;
   never stage or commit anything under it.
 - The signed package repository is an approved system. Do not alter its
   GitHub Release publication, signing boundary, tokens, secrets, or end-user
   installation contract without explicit maintainer authorization.
 - Verify CI changes with the focused local checks in
-  [docs/building.md](docs/building.md), and run the affected workflow manually
-  only when authorized. Report the workflow URL and its actual outcome.
+  [docs/building.md](docs/building.md). Run package or synchronization workflows
+  manually only when authorized for that operation; report the workflow URL and
+  its actual outcome.
 - Discovery and troubleshooting tests may remain temporary while investigating
   uncertainty. Keep them outside the final diff. Create temporary Git fixtures
   and disposable clones under a unique `/tmp` directory with automatic cleanup
