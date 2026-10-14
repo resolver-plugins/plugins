@@ -35,14 +35,24 @@ for name, expected in native.items():
         assert bool(observed.get(field)) == bool(expected.get(field)), (name, field)
 print('Non-verbose inventory: installed reader matches native HA safety fields.')
 
+status = None
 for attempt in range(10):
     result = subprocess.run(['configctl', 'dhcp_interface_ha', 'status'],
-                            text=True, capture_output=True, check=True)
-    status = json.loads(result.stdout)
-    if status.get('controller_running'):
+                            text=True, capture_output=True, timeout=10)
+    try:
+        response = json.loads(result.stdout) if result.returncode == 0 else None
+    except json.JSONDecodeError:
+        response = None
+    status = response if isinstance(response, dict) else None
+    if status and status.get('controller_running'):
         break
     time.sleep(0.5)
-assert status['controller_running'], status
+if not status or not status.get('controller_running'):
+    direct = subprocess.run([sys.executable,
+        '/usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py', 'status', '--from-config'],
+        text=True, capture_output=True, timeout=10)
+    raise AssertionError({'configctl': (result.returncode, result.stdout, result.stderr),
+                          'direct_status': (direct.returncode, direct.stdout, direct.stderr)})
 assert status['state'] == 'SETUP_INCOMPLETE', status
 assert status['enabled'] is False, status
 assert not status['managed_interface'], status
