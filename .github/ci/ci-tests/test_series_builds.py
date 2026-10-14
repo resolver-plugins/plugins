@@ -135,6 +135,16 @@ def test_ha_environment_variants_preserve_version_snapshots_and_reject_stale_ret
     assert old_receipt['current_tag'] == new_receipt['current_tag'] == 'pkg-dhcp-interface-ha-26.7'
     assert old_receipt['snapshot_tag'] != new_receipt['snapshot_tag']
     assert set(old_receipt['packages']) == set(new_receipt['packages']) == {'os-dhcp-interface-ha-26.7_1.pkg'}
+    target = tmp_path / 'creator-target.json'
+    target.write_text(json.dumps(new['targets']['creator']))
+    package = tmp_path / 'plugin-package.mk'
+    package.write_text(git(fixture.repository, 'show', new['selection']['source_ref'] + ':net/dhcp-interface-ha/Makefile') + '\n')
+    monkeypatch.setattr(channel.releases, 'snapshot_release', lambda *_args: current)
+    with pytest.raises(ValueError, match='inputs'):
+        channel.reuse('fixture/distribution', after, tmp_path / 'wrong-variant', '26.7',
+            new['selection']['source_ref'], new['selection']['source_ref'], after / 'upstream.json', target, package,
+            trusted_inputs=after / series_builds.INPUT_FILE, control_commit=new['selection']['control_ref'])
+    assert not (tmp_path / 'wrong-variant').exists()
     monkeypatch.chdir(fixture.repository)
     monkeypatch.setattr(channel.releases, 'snapshot_release', lambda _repo, tag, _dir:
         current if tag == 'pkg-dhcp-interface-ha-26.7' else SimpleNamespace(existed=False))

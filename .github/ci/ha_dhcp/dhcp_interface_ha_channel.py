@@ -87,6 +87,8 @@ def validate_incoming(directory, series, source, profile, trusted_upstream, targ
     build = metadata(directory, series, source, profile)
     upstream = metadata_profile.load_profile(trusted_upstream, series)
     target = target_pkg.load_target(target_metadata, series, upstream=trusted_upstream, role="creator")
+    if (trusted_inputs is not None or control_commit is not None) and "build_fingerprint" not in build:
+        raise ValueError("HA build inputs differ from trusted controller")
     if "build_fingerprint" in build:
         if (trusted_inputs is None or build["control_commit"] != control_commit
                 or (directory / series_builds.INPUT_FILE).read_bytes() != trusted_inputs.read_bytes()):
@@ -184,8 +186,9 @@ def reuse(repository, directory, output, series, source, profile, trusted_upstre
             return False
         data = validate(snapshot.directory)
         if (data["source_commit"] != source or data["profile_commit"] != profile
+                or data.get("build_fingerprint") != build.get("build_fingerprint")
                 or target_pkg.normalize_creator(data["package_creator"]) != target.record()):
-            raise ValueError("existing immutable version has different source/profile or creator; bump the plugin revision")
+            raise ValueError("existing immutable version has different source/profile, inputs or creator; bump the plugin revision")
         shutil.copytree(snapshot.directory, output)
     return True
 

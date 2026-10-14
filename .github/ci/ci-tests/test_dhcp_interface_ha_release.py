@@ -428,7 +428,7 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
 
 @pytest.mark.parametrize("variant,fault", [
     (False, None), (False, "key"), (False, "identity"),
-    (True, None), (True, "key"), (True, "identity"), (True, "inputs"), (True, "control"),
+    (True, None), (True, "key"), (True, "identity"), (True, "inputs"), (True, "control"), (True, "downgrade"),
 ])
 def test_signer_verifies_package_and_public_key_before_signing(incoming_channel, signing_target, tmp_path, monkeypatch, variant, fault, package_definition):
     target = channel.target_pkg.load_target(signing_target, "26.7")
@@ -455,6 +455,9 @@ def test_signer_verifies_package_and_public_key_before_signing(incoming_channel,
             file.write_text(json.dumps(dict(inputs, recipe_sha256='6' * 64)))
         elif fault == 'control':
             options['control_commit'] = 'e' * 40
+        elif fault == 'downgrade':
+            build.write_text('\n'.join(line for line in build.read_text().splitlines()
+                if not line.startswith(('control_commit=', 'build_fingerprint='))) + '\n')
     calls = Mock()
     calls.check_output.side_effect = [channel.PUBLIC_KEY.read_bytes() if fault != "key" else b"foreign key"]
     calls.query_package.return_value = (("foreign-package" if fault == "identity" else channel.NAME, "26.7_1", f"opnsense/{channel.NAME}", target.identity.abi), set())
@@ -482,7 +485,7 @@ def test_signer_verifies_package_and_public_key_before_signing(incoming_channel,
         assert names.index("verify_target_pkg") < names.index("stage")
         assert names.index("verify_archive") < names.index("stage")
     else:
-        error = "controller" if fault in ('inputs', 'control') else "package identity" if fault == "identity" else "signing key"
+        error = "controller" if fault in ('inputs', 'control', 'downgrade') else "package identity" if fault == "identity" else "signing key"
         with pytest.raises(ValueError, match=error):
             channel.stage(*args, **options)
         calls.stage.assert_not_called()
