@@ -56,36 +56,92 @@ def series_repository(tmp_path):
     return SimpleNamespace(repository=repository, tools=tools, refs=refs, event=event, discover=discover, resolve=resolve)
 
 
-@pytest.mark.parametrize('component', ['bind_plugin', 'dhcp_interface_ha', 'bind_runtime'])
-def test_only_the_series_with_changed_inputs_is_selected(series_repository, component):
+@pytest.mark.parametrize('component', ['bind_plugin', 'dhcp_interface_ha'])
+def test_only_own_package_code_changes_select_a_series(series_repository, component):
     fixture = series_repository
+    event = dict(fixture.event, name='push')
+    paths = [series_builds.PACKAGES[component] + '/src/plugin.py']
     published = {}
+    calls = []
+    def discover(*args):
+        calls.append(args[2])
+        return fixture.discover(*args)
     def choose():
-        return series_builds.select_builds(fixture.repository, component, fixture.event, fixture.refs, [],
-            'fixture/distribution', discover=fixture.discover,
-            resolve_targets=fixture.resolve,
+        return series_builds.select_builds(fixture.repository, component, event, fixture.refs, paths,
+            'fixture/distribution', discover=discover, resolve_targets=fixture.resolve,
             published=lambda _repo, _component, series: published.get(series))
     first = choose()
     assert [item['selection']['series'] for item in first] == ['26.7', '26.1']
-    published.update({item['selection']['series']: item['inputs'] for item in first})
+    published.update({item['selection']['series']: {'source_commit': item['selection']['source_ref']} for item in first})
     assert choose() == []
     commit(fixture.tools, {'config/26.7/build.conf': 'OS?= 15.2\n'}, '26.7 environment change')
     git(fixture.tools, 'tag', '26.7.2')
-    changed = choose()
-    assert [item['selection']['series'] for item in changed] == ['26.7']
-    published['26.7'] = changed[0]['inputs']
     assert choose() == []
-    if component != 'bind_runtime':
-        source = series_builds.selection.RELEASE_PREFIX[component] + '26.1'
-        git(fixture.repository, 'checkout', source)
-        commit(fixture.repository, {'README.md': 'source documentation only\n',
-                                   '.resolver-plugins/upstream.json': 'obsolete, ignored metadata\n'}, 'irrelevant source change')
-        git(fixture.repository, 'checkout', 'master')
-        assert choose() == []
-        git(fixture.repository, 'checkout', source)
-        commit(fixture.repository, {series_builds.PACKAGES[component] + '/src/plugin.py': 'changed plugin\n'}, 'reviewed plugin change')
-        git(fixture.repository, 'checkout', 'master')
-        assert [item['selection']['series'] for item in choose()] == ['26.1']
+    control = commit(fixture.repository, {'.github/ci/shared/target_pkg.py': 'changed CI only\n'}, 'controller update')
+    event.update(sha=control, workflow_sha=control)
+    assert choose() == []
+    source = series_builds.selection.RELEASE_PREFIX[component] + '26.1'
+    other = 'dhcp_interface_ha' if component == 'bind_plugin' else 'bind_plugin'
+    git(fixture.repository, 'checkout', source)
+    commit(fixture.repository, {series_builds.PACKAGES[component] + '/README.md': 'documentation only\n',
+                               '.resolver-plugins/upstream.json': 'obsolete, ignored metadata\n',
+                               series_builds.PACKAGES[other] + '/src/plugin.py': 'other package change\n',
+                               'Mk/plugins.mk': 'shared framework change\n'}, 'irrelevant source changes')
+    git(fixture.repository, 'checkout', 'master')
+    assert choose() == []
+    assert calls == ['26.7', '26.1']  # No environment discovery for ineligible code.
+    git(fixture.repository, 'checkout', source)
+    commit(fixture.repository, {series_builds.PACKAGES[component] + '/src/plugin.py': 'changed plugin\n'}, 'reviewed plugin change')
+    git(fixture.repository, 'checkout', 'master')
+    selected = choose()
+    assert [item['selection']['series'] for item in selected] == ['26.1']
+    assert selected[0]['upstream']['tools_tag'] == '26.1.11'
+    assert calls == ['26.7', '26.1', '26.1']
+
+
+@pytest.mark.parametrize('component', ['bind_runtime', 'dhcp_interface_ha'])
+def test_runtime_and_ha_have_no_scheduled_builds(series_repository, component):
+    fixture = series_repository
+    discover = Mock(side_effect=AssertionError('an unrequested package build discovered inputs'))
+    assert series_builds.select_builds(fixture.repository, component, fixture.event, fixture.refs, [],
+        'fixture/distribution', discover=discover, published=lambda *_args: None) == []
+    discover.assert_not_called()
+
+
+def test_runtime_only_advances_for_an_explicit_version_approval(series_repository):
+    fixture = series_repository
+    event = dict(fixture.event, name='workflow_dispatch',
+                 inputs=dict(mode='production', series='26.7', pull_number=None))
+    previous = {'runtime_approval': dict(version='9.20.26_2', ports_commit='3' * 40)}
+    discover = Mock(wraps=fixture.discover)
+    def choose():
+        return series_builds.select_builds(fixture.repository, 'bind_runtime', event, fixture.refs, [],
+            'fixture/distribution', discover=discover, resolve_targets=fixture.resolve,
+            published=lambda *_args: previous)
+    assert choose() == []
+    commit(fixture.tools, {'config/26.7/build.conf': 'OS?= 15.2\n'}, 'environment change')
+    git(fixture.tools, 'tag', '26.7.2')
+    assert choose() == []
+    discover.assert_not_called()
+    control = commit(fixture.repository, {'dns/bind/Makefile':
+        'RP_BIND_VERSION= 9.20.27\nRP_BIND_PORTS_COMMIT= ' + '4' * 40 + '\n'}, 'reviewed next BIND version')
+    event.update(sha=control, workflow_sha=control)
+    selected = choose()
+    assert [item['selection']['series'] for item in selected] == ['26.7']
+    assert selected[0]['inputs']['runtime_approval']['version'] == '9.20.27'
+    assert selected[0]['upstream']['tools_tag'] == '26.7.2'
+
+
+def test_legacy_source_provenance_skips_without_a_generated_input_record(series_repository, monkeypatch):
+    fixture = series_repository
+    source = git(fixture.repository, 'rev-parse', 'release/bind-rp/26.7')
+    monkeypatch.setattr(series_builds.subprocess, 'run', lambda command, **kwargs:
+        subprocess.CompletedProcess(command, 0, stdout=json.dumps({'assets': [{'name': 'channel.json'}], 'isDraft': False})))
+    def download(repository, tag, name, directory):
+        assert tag == 'pkg-26.7-bind-plugin' and name == 'channel.json'
+        (directory / name).write_text(json.dumps({'series': '26.7', 'source_commit': source}))
+    monkeypatch.setattr(series_builds.release_channel, 'download_release_asset', download)
+    assert series_builds.current_identity('fixture/distribution', 'bind_plugin', '26.7') == {'source_commit': source}
 
 
 def test_merged_release_source_selects_only_its_own_series(series_repository):
@@ -116,7 +172,7 @@ def test_ha_environment_variants_preserve_version_snapshots_and_reject_stale_ret
     from shared import package_catalogue
     fixture = series_repository
     def discover():
-        return series_builds.select_builds(fixture.repository, 'dhcp_interface_ha', fixture.event, fixture.refs, [],
+        return series_builds.select_builds(fixture.repository, 'dhcp_interface_ha', dict(fixture.event, name='push'), fixture.refs, ['net/dhcp-interface-ha/src/plugin.py'],
             'fixture/distribution', discover=fixture.discover, resolve_targets=fixture.resolve, published=lambda *_args: None)[0]
     old = discover()
     before = make_ha_channel(tmp_path / 'before', version='26.7_1', source=old['selection']['source_ref'],

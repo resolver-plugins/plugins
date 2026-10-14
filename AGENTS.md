@@ -18,8 +18,8 @@ inputs when needed and freeze their immutable identities in each run's trusted
 artifacts; release branches do not require `.resolver-plugins` files.
 
 Automation is deliberately conservative. An upstream BIND change becomes a
-review PR; it does not silently advance a release branch. An unchanged BIND
-tree for a new series can receive a temporary build artifact. Signed,
+review PR; merging that source review makes the affected plugin series eligible
+for a build. Each package has an independent build and publication lifecycle. Signed,
 self-contained current and rollback channels are generated in
 `resolver-plugins/repository`; source releases remain narrow and human-facing.
 
@@ -53,10 +53,26 @@ self-contained current and rollback channels are generated in
   and recipe hashes before consumers run. A generated profile must use a matching
   `opnsense/tools` numeric tag and the `OS?=` value from `config/<series>/build.conf`.
   Consumers must use the sealed inputs without resolving moving refs again.
-- Compare build inputs independently for each plugin and registered OPNsense
-  series. Select only changed series; a change confined to one series must not
-  rebuild its peers. Preserve historical signed snapshots when publishing a new
-  build variant under an unchanged reviewed plugin version.
+- Keep `os-bind-rp`, `os-dhcp-interface-ha`, and the BIND runtime packages
+  independent. A package's pipeline must not dispatch, rebuild, block on, or
+  require publication by another package's pipeline. Shared CI helpers and the
+  repository index may consume existing package records without coupling their
+  build or publication lifecycles. Preserve native installation dependencies.
+- Build `os-dhcp-interface-ha` only when its own reviewed package code changes.
+  Build `os-bind-rp` only when its own reviewed package code changes, including
+  changes brought in by the daily upstream synchronizer. CI, documentation,
+  metadata, toolchain, OPNsense environment, runtime approval, and other package
+  changes alone must not trigger either plugin's rebuild.
+- Build BIND runtime packages for a maintainer-requested BIND version-update PR
+  and its approved publication, or an explicitly authorized manual runtime run.
+  Runtime builds have no daily schedule and do not follow plugin or OPNsense
+  environment changes. Keep runtime version approval separate from plugin code.
+- Apply eligibility independently to each package and registered OPNsense series.
+  A code change confined to one series must not rebuild its peers. Discover and
+  seal current build inputs only after that package and series are eligible.
+  Missing generated input metadata alone is not a rebuild trigger. Preserve
+  historical signed snapshots when publishing an authorized new build variant
+  under an unchanged reviewed plugin version.
 - Do not weaken provenance checks, pin checks, package fingerprint checks, or
   the explicit `os-bind` conflict to make a build pass.
 - Keep durable CI helper and workflow regression tests in

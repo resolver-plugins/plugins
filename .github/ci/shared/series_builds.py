@@ -124,7 +124,7 @@ def validate_environment(record, upstream, tools=None):
                 raise ValueError('series build environment differs from exact tools evidence')
 
 
-def current_inputs(repository, component, series):
+def current_identity(repository, component, series):
     tag = (f'pkg-dhcp-interface-ha-{series}' if component == 'dhcp_interface_ha'
            else f'pkg-{series}-{component.replace("_", "-")}')
     result = subprocess.run(['gh', 'release', 'view', tag, '--repo', repository, '--json', 'assets,isDraft'],
@@ -136,22 +136,29 @@ def current_inputs(repository, component, series):
     payload = json.loads(result.stdout)
     if payload.get('isDraft') is not False:
         raise ValueError('current series component is unpublished')
-    names = [asset['name'] for asset in payload['assets']]
-    if INPUT_FILE not in names:
-        return None  # Existing published builds predate the per-series input contract.
     with tempfile.TemporaryDirectory(prefix='series-current-') as temporary:
         directory = Path(temporary)
-        for name in (INPUT_FILE, 'channel.json'):
-            release_channel.download_release_asset(repository, tag, name, directory)
+        release_channel.download_release_asset(repository, tag, 'channel.json', directory)
         channel = json.loads((directory / 'channel.json').read_text())
-        record = validate_inputs(json.loads((directory / INPUT_FILE).read_text()))
-        if (record['component'] != component or record['series'] != series or channel['series'] != series
-                or channel['assets'].get(INPUT_FILE) != release_channel.sha256(directory / INPUT_FILE)):
-            raise ValueError('current series inputs differ from its published component')
-        return record
+        if channel.get('series') != series:
+            raise ValueError('current package belongs to a different series')
+        if component == 'bind_runtime':
+            name = 'bind920-profile.json'
+            release_channel.download_release_asset(repository, tag, name, directory)
+            if channel['assets'].get(name) != release_channel.sha256(directory / name):
+                raise ValueError('current runtime approval differs from published provenance')
+            profile = bind920_profile.validate_profile(json.loads((directory / name).read_text()))
+            return dict(runtime_approval=dict(version=bind920_profile.package_version(profile),
+                                              ports_commit=profile['ports_commit']))
+        source = channel.get('source_commit')
+        if not isinstance(source, str) or metadata_profile.COMMIT_PATTERN.fullmatch(source) is None:
+            raise ValueError('current plugin has no immutable source provenance')
+        return dict(source_commit=source)
 
 
 def candidate_events(component, event, refs, changed, **package):
+    if event['name'] == 'schedule' and component != 'bind_plugin':
+        return []
     prefix = 'refs/heads/' + selection.RELEASE_PREFIX[component]
     registered = sorted((ref for ref in refs if re.fullmatch(re.escape(prefix) + r'\d+\.\d+', ref)),
                         key=lambda ref: tuple(map(int, ref[len(prefix):].split('.'))), reverse=True)
@@ -167,7 +174,7 @@ def candidate_events(component, event, refs, changed, **package):
 
 
 def select_builds(repository, component, event, refs, changed, distribution, *, discover=upstream_inputs.discover_inputs,
-                  published=current_inputs, resolve_targets=target_pkg.resolve_targets, **package):
+                  published=current_identity, resolve_targets=target_pkg.resolve_targets, **package):
     selected = []
     with tempfile.TemporaryDirectory(prefix='series-discovery-') as temporary:
         for index, candidate in enumerate(candidate_events(component, event, refs, changed, **package)):
@@ -177,6 +184,25 @@ def select_builds(repository, component, event, refs, changed, distribution, *, 
             subprocess.run(['git', '-C', str(repository), 'fetch', '--no-tags', 'origin', ref],
                            check=True, stdout=sys.stderr)
             source = upstream_inputs.git(repository, 'rev-parse', 'FETCH_HEAD^{commit}')
+            previous = published(distribution, component, candidate['series']) if candidate['mode'] == 'production' else None
+            if previous is not None:
+                if component == 'bind_runtime':
+                    raw = upstream_inputs.git(repository, 'show', f'{candidate["control_ref"]}:dns/bind/Makefile')
+                    unchanged = previous['runtime_approval'] == bind920_profile.approval_from_makefile(raw)
+                    if not unchanged:
+                        old = previous['runtime_approval']
+                        selection.package_changes(f'RP_BIND_VERSION= {old["version"]}\nRP_BIND_PORTS_COMMIT= {old["ports_commit"]}\n', raw)
+                else:
+                    before = previous['source_commit']
+                    if subprocess.run(['git', '-C', str(repository), 'cat-file', '-e', f'{before}^{{commit}}'],
+                                      capture_output=True).returncode:
+                        subprocess.run(['git', '-C', str(repository), 'fetch', '--no-tags', 'origin', before],
+                                       check=True, stdout=sys.stderr)
+                    paths = (PACKAGES[component],)
+                    unchanged = tree_digest(repository, before, paths) == tree_digest(repository, source, paths)
+                if unchanged:
+                    print(f'{component} {candidate["series"]}: package source/approval unchanged; no build', file=sys.stderr)
+                    continue
             tools_repository = Path(temporary) / str(index)
             profile = discover(repository, source, candidate['series'], tools_repository)
             tools = metadata_profile.verify_tools_profile(profile, tools_repository)
@@ -190,10 +216,6 @@ def select_builds(repository, component, event, refs, changed, distribution, *, 
                        for role in ('creator', 'reader')}
             inputs = build_inputs(repository, component, candidate['series'], source,
                                   candidate['control_ref'], profile, tools, targets)
-            previous = published(distribution, component, candidate['series']) if candidate['mode'] == 'production' else None
-            if previous is not None and fingerprint(previous) == fingerprint(inputs):
-                print(f'{component} {candidate["series"]}: inputs unchanged; no build', file=sys.stderr)
-                continue
             candidate.update(profile_ref=source)
             if component != 'bind_runtime':
                 candidate['source_ref'] = source

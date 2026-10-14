@@ -64,21 +64,23 @@ replaces the selected source commit's entire `dns/bind`, `Mk`, `Scripts` and
 legacy release branches, which intentionally do not carry control-plane code,
 and prevents a leftover development marker from changing the production name.
 
-Each producer discovers its registered numeric release branches. Relevant master
-pushes and daily schedules compare each series with its published
-`series-build-inputs.json`. The comparison covers the plugin/framework source
-trees, actual build helpers, that series' tools commit and build configuration,
-core commit, and resolved creator/reader recipes. Runtime inputs also cover the
-reviewed `RP_BIND_VERSION` / `RP_BIND_PORTS_COMMIT` approval. A tools or core change
-in 26.7 selects 26.7 alone. Shared build changes can select several series when
-their inputs change; documentation, tests and unrelated plugin paths are excluded.
-An unchanged published input record skips the build, including production manual
-dispatch. Existing receipts without the new input record receive one migration
-build. Release helpers are grouped in `.github/ci/bind/`,
+Each plugin compares its own package code with the immutable source commit in
+that series' published channel. Code-only eligibility precedes upstream discovery:
+CI, framework, documentation, tests, metadata, other packages and tools/core
+changes alone do not rebuild it. Legacy channels without
+`series-build-inputs.json` use their existing source provenance and do not need a
+migration build. A code change confined to 26.7 leaves 26.1 alone. Runtime builds
+use an explicit version approval and manual runtime runs; they have no schedule
+and unchanged approvals skip production.
+
+Eligible builds still freeze and validate the complete framework, recipe, tools,
+core and pkg inputs in `series-build-inputs.json`. Build fingerprints protect
+provenance and immutable variants; they are not automatic rebuild triggers.
+Release helpers are grouped in `.github/ci/bind/`,
 `.github/ci/ha_dhcp/`, and `.github/ci/shared/`; regression tests remain in
 `.github/ci/ci-tests/`. PR tests retain broader validation filters, including
 runtime helpers and workflow changes. HA-only changes, test-only edits and
-documentation do not change BIND build inputs.
+documentation do not select BIND package builds.
 
 When several series need the same producer, its selection job builds one and
 dispatches that same workflow for the other changed series. Only selection has

@@ -110,24 +110,23 @@ run's generated profile first, then reproduce the build using [Building](buildin
 
 ## Runtime and plugin publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) always uses
-the approved BIND pin on `master`. An approval change and daily upstream discovery
-select only series whose runtime build inputs changed. The
-[plugin workflow](../.github/workflows/bind-plugin-release.yml) owns the plugin
-and its `Mk`, `Scripts` and `Templates` build framework. Shared helpers,
-catalogue and package-manager changes trigger discovery; actual build inputs
-determine whether a plugin build is necessary. Documentation, tests and HA-only
-source changes do not select BIND builds.
+The [runtime workflow](../.github/workflows/bind-runtime-release.yml) uses the
+reviewed BIND version approval on `master`. It runs for a version-update review
+and an explicitly authorized manual runtime build, with no daily schedule.
+The [plugin workflow](../.github/workflows/bind-plugin-release.yml) selects only
+changes to its own reviewed package code, including merged daily upstream source
+reviews. HA selects only its own reviewed package code changes. CI, metadata,
+framework, environment and other package changes do not trigger plugin rebuilds.
 
-A relevant `master` push and each producer's daily schedule check every registered
-series independently against its published build inputs. The shared selector
-builds one changed series and dispatches the same producer for any others; a
-change confined to one series never rebuilds its peers. The source and environment
+The shared selector compares package code independently with each series' existing
+published source provenance before discovering any build environment. It builds
+one eligible series and dispatches that same producer for other eligible series;
+a change confined to one series never rebuilds its peers. The source and environment
 are frozen once in a sealed discovery artifact, including both pkg recipes.
 Package jobs validate that artifact without repeating upstream discovery.
 A merged plugin-affecting PR into an exact `release/bind-rp/<series>` selects
 only plugin production for that series and its merged immutable source/profile
-commit; unmerged closure selects neither producer. Unchanged production inputs
+commit; unmerged closure selects neither producer. Unchanged package code or runtime approval
 skip the build even for a manual dispatch. Workflow code and privileged
 helpers remain pinned to the trusted default-branch workflow commit. A manual
 production dispatch requires `master` and an explicit registered series; use the

@@ -344,16 +344,17 @@ its isolated pair before a plugin exists; it cannot expose an incomplete
 combined feed. Once a complete feed exists, every writer retains all registered
 peers or fails.
 
-Relevant master pushes and daily schedules discover every registered series for
-the owning producer. The shared selector compares source/build-helper trees and
-that series' resolved tools, core and pkg recipes with the published input record.
-Only changed series build; a 26.7 environment change leaves 26.1's inputs and
-archives alone. The runtime always uses the reviewed `RP_BIND_VERSION` /
+Plugin producers select only their own reviewed code changes, independently for
+each registered series. Environment, framework, CI, metadata and other package
+changes alone do not rebuild them. Published source commits support legacy
+channels without requiring a new input-record migration build. An eligible build
+then discovers and seals its complete tools, core, framework and pkg provenance.
+The runtime has no daily schedule and uses the reviewed `RP_BIND_VERSION` /
 `RP_BIND_PORTS_COMMIT` approval. A changed approval selects each affected runtime
 series, while plugin-only source changes do not select runtime builds.
 Relevant merges into a release-source branch select only that plugin and series.
-Unchanged inputs skip production, including a manual dispatch. Existing channels
-without an input record receive one migration build. `workflow_dispatch` remains
+Unchanged plugin code or runtime approvals skip production, including manual dispatch.
+`workflow_dispatch` remains
 available for development builds and explicit production series selection. A production
 dispatch from any ref other than `master` is rejected. Release branches supply
 immutable build inputs only and never run publication helpers. Publication runs
@@ -518,9 +519,10 @@ branch as its compatibility source.
 Publication follows staged and public native installation checks and does not
 deploy to appliances.
 
-Bump `PLUGIN_REVISION` for new HA package behavior. Environment-only rebuilds keep
-the reviewed plugin version and get a distinct immutable snapshot keyed by their
-build fingerprint. Retries reuse that exact variant and never overwrite another
+Bump `PLUGIN_REVISION` for new HA package behavior. Environment changes alone do
+not select an HA rebuild. An explicitly authorized build variant retains its
+reviewed version and uses a distinct immutable snapshot keyed by the build
+fingerprint. Retries reuse that exact variant and never overwrite another
 snapshot. Older tools or core inputs cannot replace a newer current channel.
 Test-only and documentation changes do not start package publication. As with
 BIND, ordinary dependencies come from the selected series' authenticated latest

@@ -246,7 +246,7 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
     dispatch = dict(push, name='workflow_dispatch')
     merged = dict(number=51, pull_request=dict(merged=True, base=dict(ref='release/bind-rp/26.7'), merge_commit_sha='c' * 40))
     scenarios = [
-        (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
+        (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, False, False, 'production', None, None, None),
         (push, {'before': 'd' * 40}, ['.resolver-plugins/upstream.json'], None, False, False, 'production', None, None, None),
         (push, {'before': 'd' * 40}, ['dns/bind/tests/test_watcher.py'], None, False, False, 'production', None, None, None),
         (merge, merged, ['dns/bind/Makefile'], None, False, True, 'production', '26.7', 'c' * 40, 'b' * 40),
@@ -333,19 +333,19 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
 
 @pytest.mark.parametrize('path,push,merge', [
     ('.github/ci/bind/runtime/build-bind920.sh', (False, False), (False, False)),
-    ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, True), (False, False)),
+    ('.github/ci/bind/plugin/build-os-bind-rp.sh', (False, False), (False, False)),
     ('dns/bind/Makefile', (True, True), (False, True)),
     ('dns/bind/src/etc/rc.d/named', (False, True), (False, True)),
-    ('Mk/plugins.mk', (False, True), (False, True)),
-    ('Scripts/version.sh', (False, True), (False, True)),
-    ('Templates/plugin.in', (False, True), (False, True)),
-    ('.github/ci/bind/shared/components.py', (False, True), (False, False)),
-    ('.github/ci/shared/new-helper.py', (False, True), (False, False)),
+    ('Mk/plugins.mk', (False, False), (False, False)),
+    ('Scripts/version.sh', (False, False), (False, False)),
+    ('Templates/plugin.in', (False, False), (False, False)),
+    ('.github/ci/bind/shared/components.py', (False, False), (False, False)),
+    ('.github/ci/shared/new-helper.py', (False, False), (False, False)),
     ('.resolver-plugins/upstream.json', (False, False), (False, False)),
-    ('docs/package-repository/resolver-plugins.pub', (False, True), (False, False)),
-    ('scripts/install-os-bind-rp.sh', (False, True), (False, False)),
+    ('docs/package-repository/resolver-plugins.pub', (False, False), (False, False)),
+    ('scripts/install-os-bind-rp.sh', (False, False), (False, False)),
     ('.github/workflows/bind-runtime-release.yml', (False, False), (False, False)),
-    ('.github/workflows/bind-plugin-release.yml', (False, True), (False, False)),
+    ('.github/workflows/bind-plugin-release.yml', (False, False), (False, False)),
     ('dns/bind/tests/test_watcher.py', (False, False), (False, False)),
     ('.github/ci/ci-tests/test_package_release_workflow.py', (False, False), (False, False)),
     ('docs/building.md', (False, False), (False, False)),
@@ -442,7 +442,7 @@ def test_privileged_event_guards_do_not_trust_selector_mode(component):
                           'github.event.pull_request.merged': True, 'github.event.pull_request.base.ref': f'{prefix}/26.7'})
     scenarios = [
         (base, True),
-        (dict(base, **{'github.event_name': 'schedule'}), True),
+        (dict(base, **{'github.event_name': 'schedule'}), False),
         (dict(base, **{'github.event_name': 'schedule', 'github.ref': 'refs/heads/feature'}), False),
         (dict(base, **{'github.ref': 'refs/heads/feature'}), False),
         (dict(base, **{approval: 'false' if ha else 'development'}), False),

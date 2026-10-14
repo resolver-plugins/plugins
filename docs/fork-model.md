@@ -52,8 +52,8 @@ The canonical HA suite lives in `net/dhcp-interface-ha/tests` on `master` and ru
 against every registered HA release source. HA branches carry only a thin caller
 of the master test workflow. Builds materialize the exact reviewed package and
 framework trees while keeping CI and tests from the control plane. Relevant
-master build changes and daily discovery check each registered series against its
-published build inputs; only changed series build. Merging a package
+package code changes select only the series whose own code differs from its
+published source. CI, framework and environment changes do not rebuild HA. Merging a package
 change into a release source selects that series and exact merge commit. A manual
 master dispatch selects a registered series for recovery. HA does not invoke the
 BIND producers.

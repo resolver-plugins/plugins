@@ -29,17 +29,12 @@ def watches(component, path):
     if component == "dhcp_interface_ha":
         if path == "net/dhcp-interface-ha/README.md" or path.startswith(("net/dhcp-interface-ha/tests/", ".github/ci/ci-tests/")):
             return False
-        return (path == "docs/package-repository/resolver-plugins.pub"
-                or path == ".github/workflows/ha-dhcp-interface-release.yml"
-                or path.startswith(("net/dhcp-interface-ha/", "Mk/", "Scripts/", "Templates/",
-                                    ".github/ci/ha_dhcp/", *SHARED_PATHS)))
+        return path.startswith("net/dhcp-interface-ha/")
     if component == "bind_runtime":
         return path == PACKAGE_DEFINITION
     if path.startswith(("dns/bind/tests/", ".github/ci/ci-tests/")):
         return False
-    if path in SHARED_FILES or path.startswith(SHARED_PATHS):
-        return True
-    return path.startswith(("dns/bind/", "Mk/", "Scripts/", "Templates/", ".github/ci/bind/plugin/")) or path == ".github/workflows/bind-plugin-release.yml"
+    return path.startswith("dns/bind/") and path != "dns/bind/README.md"
 
 
 def _commit(value):

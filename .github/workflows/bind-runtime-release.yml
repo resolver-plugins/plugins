@@ -1,8 +1,6 @@
 name: Publish BIND runtime release
 
 on:
-  schedule:
-    - cron: '45 4 * * *'
   push:
     branches: [master]
     paths:
@@ -220,7 +218,7 @@ jobs:
   sign:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, producer]
     runs-on: ubuntu-24.04
@@ -377,7 +375,7 @@ jobs:
   publish:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, sign, verify]
     runs-on: ubuntu-24.04
@@ -515,7 +513,7 @@ jobs:
   retention:
     if: >-
       needs.select.outputs.mode == 'production' &&
-      (((github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/master') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.mode == 'production'))
     needs: [select, profile, sign, verify-published]
     runs-on: ubuntu-24.04
