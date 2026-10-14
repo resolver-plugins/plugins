@@ -577,6 +577,12 @@ class PublicationRecoveryTest(unittest.TestCase):
             root=Path(temporary)
             profile=upstream_profile('26.7')
             runtime_dirs=[];plugin_dirs=[];remote={};listed=[]
+            def inputs(kind, version):
+                return dict(schema=1, component=kind, series='26.7',
+                    source_sha256=None if kind=='bind_runtime' else 'a'*64, recipe_sha256='b'*64,
+                    environment=dict(tools_tag=profile['tools_tag'], tools_commit='c'*40,
+                        build_conf_sha256='d'*64, freebsd_release=profile['freebsd_release'], core_commit=profile['core_commit']),
+                    runtime_approval=dict(version=version, ports_commit='1'*40) if kind=='bind_runtime' else None)
             def register(directory,kind,number):
                 receipt=components.component_receipt(directory,kind,'26.7')
                 remote[receipt['snapshot_tag']]=directory
@@ -585,12 +591,14 @@ class PublicationRecoveryTest(unittest.TestCase):
             runtimes=[]
             for number in range(16):
                 directory=make_bind_component('bind_runtime',root / f'runtime-{number}',series='26.7',creator=creator_identity(),
-                    source_commit='a'*40,control_commit='a'*40,profile=profile,version=f'9.20.{26+number}_2')
+                    source_commit='a'*40,control_commit='a'*40,profile=profile,version=f'9.20.{26+number}_2',
+                    series_inputs=inputs('bind_runtime',f'9.20.{26+number}_2') if number==15 else None)
                 runtime_dirs.append(directory);runtimes.append(register(directory,'bind_runtime',number))
             plugins=[]
             for number in range(7):
                 directory=make_bind_component('bind_plugin',root / f'plugin-{number}',series='26.7',creator=creator_identity(),
-                    source_commit=f'{number+1:040x}',control_commit='a'*40,profile=profile,version=f'26.7_{number+1}')
+                    source_commit=f'{number+1:040x}',control_commit='a'*40,profile=profile,version=f'26.7_{number+1}',
+                    series_inputs=inputs('bind_plugin',f'26.7_{number+1}') if number==6 else None)
                 original=runtimes[0 if number==6 else number]
                 version=f'9.20.{26+(0 if number==6 else number)}_2'
                 manifest=json.loads((directory / 'channel.json').read_text())

@@ -227,9 +227,12 @@ def collect(repository, series):
                 directory.mkdir()
                 names={"channel.json"} | (bind.RUNTIME_SIDECARS if kind=="bind_runtime" else bind.PLUGIN_SIDECARS if kind=="bind_plugin" else
                     {"catalogue-upstream.json","catalogue-creator-target.json"})
-                for name in sorted(names):
-                    releases.download_release_asset(repository,tag,name,directory)
+                releases.download_release_asset(repository,tag,"channel.json",directory)
                 data=bind._json(directory / "channel.json")
+                if kind in bind.KINDS and "series-build-inputs.json" in data["assets"]:
+                    names.add("series-build-inputs.json")
+                for name in sorted(names-{"channel.json"}):
+                    releases.download_release_asset(repository,tag,name,directory)
                 if any(data["assets"].get(name)!=releases.sha256(directory / name) for name in names-{"channel.json"}):
                     raise ValueError("historical original metadata bytes differ")
                 if kind in bind.KINDS:
