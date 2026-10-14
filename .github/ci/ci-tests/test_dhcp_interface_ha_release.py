@@ -171,14 +171,17 @@ def test_failed_uploaded_verification_keeps_release_draft(release):
 
 def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verification(tmp_path, monkeypatch):
     test_workflow = (ROOT / '.github/workflows/ha-dhcp-interface-tests.yml').read_text()
+    test_header = test_workflow.split('jobs:\n', 1)[0]
+    assert not re.search(r'^  push:', test_header, re.MULTILINE)
+    for event in ('pull_request', 'workflow_dispatch', 'workflow_call'):
+        assert re.search(r'^  ' + event + ':', test_header, re.MULTILINE), event
     watched = ['.github/ci/ha_dhcp/build.sh', '.github/ci/shared/package_catalogue.py',
                '.github/ci/bind/shared/components.py', '.github/ci/bind/runtime/bind920_profile.py',
                '.github/ci/ci-tests/test_dhcp_interface_ha_release.py',
                '.github/workflows/bind-runtime-release.yml', '.github/workflows/bind-plugin-release.yml']
-    for event in ('push', 'pull_request'):
-        patterns = trigger_paths(test_workflow, event)
-        for path in watched:
-            assert any(fnmatchcase(path, pattern) for pattern in patterns), (event, path)
+    patterns = trigger_paths(test_workflow, 'pull_request')
+    for path in watched:
+        assert any(fnmatchcase(path, pattern) for pattern in patterns), path
     workflow = (ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text()
     header = workflow.split('jobs:\n', 1)[0]
     jobs = workflow_jobs(workflow)

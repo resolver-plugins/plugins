@@ -406,6 +406,12 @@ suite when CI, workflow, package, framework, or installer inputs change. It uses
 read-only repository permissions and local Git and command fixtures. Package
 build and publication triggers are unchanged.
 
+The `HA DHCP Interface tests` workflow runs `Plugin tests and lint` on relevant
+pull requests and manual dispatches. A newer PR update cancels its superseded
+HA test run. The HA release workflow calls the same suite against the merged
+release source before building; each release or manual run has its own
+concurrency group and is never canceled by a PR update.
+
 Use the profile extracted in the local build steps above to check metadata
 before running a full VM build:
 

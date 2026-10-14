@@ -1,18 +1,6 @@
 name: HA DHCP Interface tests
 
 on:
-  push:
-    paths:
-      - '.github/ci/ha_dhcp/**'
-      - '.github/ci/shared/**'
-      - '.github/ci/bind/shared/**'
-      - '.github/ci/bind/runtime/**'
-      - '.github/ci/ci-tests/**'
-      - 'net/dhcp-interface-ha/**'
-      - '.github/workflows/ha-dhcp-interface-tests.yml'
-      - '.github/workflows/ha-dhcp-interface-release.yml'
-      - '.github/workflows/bind-runtime-release.yml'
-      - '.github/workflows/bind-plugin-release.yml'
   pull_request:
     paths:
       - '.github/ci/ha_dhcp/**'
@@ -31,8 +19,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ha-dhcp-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  unit:
+  tests:
+    name: Plugin tests and lint
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
