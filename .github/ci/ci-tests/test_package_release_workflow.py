@@ -10,7 +10,7 @@ REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize('helper', [
-    'shared/release_channel.py', 'shared/package_catalogue.py',
+    'shared/release_channel.py', 'shared/package_catalogue.py', 'shared/upstream_inputs.py',
     'ha_dhcp/dhcp_interface_ha_channel.py', 'ha_dhcp/publish-dhcp-interface-ha.py',
 ])
 def test_release_entrypoints_resolve_cross_directory_imports(tmp_path, helper):
@@ -38,12 +38,19 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, monkeypatch,
         target_pkg.load_target(record, '26.7', upstream=upstream, role=role)
     ports, approval, _ = make_ports_recipe(tmp_path / 'ports')
     repository = init_repository(tmp_path)
+    source = commit(repository, {
+        'net/dhcp-interface-ha/Makefile': 'PLUGIN_NAME= dhcp-interface-ha\nPLUGIN_VERSION= 26.7\nPLUGIN_REVISION= 1\n',
+    }, 'reviewed HA release source')
+    profile = upstream_profile('26.7', source)
+    write_json(upstream, profile)
     control = commit(repository, {'dns/bind/Makefile': PLUGIN_PACKAGE + approval}, 'reviewed HA control')
+    git(repository, 'remote', 'add', 'origin', str(repository))
     tools = make_tools_repository(tmp_path / 'tools', upstream_profile('26.7'))
     ha_inputs = load_module('ha_workflow_inputs', 'ha_dhcp/dhcp_interface_ha_release.py')
     resolve = ha_inputs.bind920_profile.resolve_profile
     with monkeypatch.context() as boundary:
         boundary.chdir(repository)
+        source_digest = ha_inputs.freeze_source(trusted, '26.7', source, control, upstream)
         boundary.setattr(ha_inputs.bind920_profile, 'resolve_profile', lambda record: resolve(record, repository=ports))
         bind_digest = ha_inputs.freeze_bind_inputs(trusted, upstream_profile('26.7'), tools, control)
     shutil.copytree(REPOSITORY_ROOT / '.github/ci', tmp_path / '.github/ci',
@@ -54,6 +61,8 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, monkeypatch,
         script = script.replace(action_expression(f'needs.profile.outputs.{role}_target_sha256'), digest)
     script = script.replace(action_expression('github.workflow_sha'), control)
     script = script.replace(action_expression('needs.profile.outputs.bind_inputs_sha256'), bind_digest)
+    script = script.replace(action_expression('needs.profile.outputs.source_commit'), source)
+    script = script.replace(action_expression('needs.profile.outputs.selection_sha256'), source_digest)
     sentinel = tmp_path / 'privileged-output'
     result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script + '\n: > "$Q_PRIVILEGED_SENTINEL"\n'],
         cwd=tmp_path, env=dict(os.environ, SERIES='26.7', Q_PRIVILEGED_SENTINEL=str(sentinel)),
@@ -66,6 +75,7 @@ def test_control_bundle_preflight_rejects_changed_records(tmp_path, monkeypatch,
     ('bind_runtime', None), ('bind_plugin', None), ('bind_plugin', 'creator'),
     ('bind_plugin', 'reader'), ('bind_plugin', 'runtime'), ('bind_plugin', 'reader-file'),
     ('bind_plugin', 'control'), ('bind_plugin', 'profile-control'), ('bind_plugin', 'head'),
+    ('bind_plugin', 'upstream-lineage'),
 ])
 def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, monkeypatch, component, changed):
     components = load_module('sealed_components', 'bind/shared/components.py')
@@ -85,11 +95,12 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
     reader = write_resolved_target(tmp_path / 'reader.json', profile, role='reader')
     repository = init_repository(tmp_path / 'checkout')
     source = commit(repository, {
-        '.resolver-plugins/upstream.json': upstream.read_text(),
         'dns/bind/Makefile': package.read_text(),
         '.github/ci/bind/runtime/build-bind920.sh': recipe.read_text(),
         '.github/ci/bind/plugin/build-os-bind-rp.sh': recipe.read_text(),
     }, 'selected release source without runtime approval')
+    profile['upstream_commit'] = source if changed != 'upstream-lineage' else 'f' * 40
+    write_json(upstream, profile)
     control = commit(repository, {'dns/bind/Makefile': approval.read_text()}, 'trusted control approval')
     runtime = make_bind_component('bind_runtime', tmp_path / 'runtime', series='26.7',
         creator=creator_identity(), source_commit='1' * 40, control_commit='2' * 40,
@@ -191,7 +202,8 @@ def test_sealed_component_bundle_preflight_precedes_privileged_output(tmp_path, 
         assert candidate['packages'] == {name: digest for name, digest in original.items() if name.endswith('.pkg')}
 
 def release_workflow(component):
-    filename = 'bind-runtime-release.yml' if component == 'bind_runtime' else 'bind-plugin-release.yml'
+    filename = {'bind_runtime': 'bind-runtime-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
+                'dhcp_interface_ha': 'ha-dhcp-interface-release.yml'}[component]
     return (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
 
 
@@ -237,7 +249,7 @@ def test_independent_event_routing_uses_exact_source_and_control(tmp_path):
         (push, {'before': 'd' * 40}, ['.github/ci/shared/target_pkg.py'], None, False, True, 'production', '26.10', 'refs/heads/release/bind-rp/26.10', 'a' * 40),
         (push, {'before': 'd' * 40}, ['.resolver-plugins/upstream.json'], None, False, False, 'production', None, None, None),
         (push, {'before': 'd' * 40}, ['dns/bind/tests/test_watcher.py'], None, False, False, 'production', None, None, None),
-        (merge, merged, ['.resolver-plugins/upstream.json'], None, False, True, 'production', '26.7', 'c' * 40, 'b' * 40),
+        (merge, merged, ['dns/bind/Makefile'], None, False, True, 'production', '26.7', 'c' * 40, 'b' * 40),
         (merge, merged, ['docs/building.md'], None, False, False, 'production', None, None, None),
         (merge, dict(merged, pull_request=dict(merged['pull_request'], merged=False)), [], None, False, False, 'production', None, None, None),
         (dispatch, {'inputs': dict(mode='production', series='26.7')}, [], None, True, True, 'production', '26.7', 'refs/heads/release/bind-rp/26.7', 'a' * 40),
@@ -329,7 +341,7 @@ def test_production_dispatch_cannot_select_release_branch_control(tmp_path, comp
     ('Templates/plugin.in', (False, True), (False, True)),
     ('.github/ci/bind/shared/components.py', (False, True), (False, False)),
     ('.github/ci/shared/new-helper.py', (False, True), (False, False)),
-    ('.resolver-plugins/upstream.json', (False, False), (False, True)),
+    ('.resolver-plugins/upstream.json', (False, False), (False, False)),
     ('docs/package-repository/resolver-plugins.pub', (False, True), (False, False)),
     ('scripts/install-os-bind-rp.sh', (False, True), (False, False)),
     ('.github/workflows/bind-runtime-release.yml', (False, False), (False, False)),
@@ -362,10 +374,14 @@ def action_expression(value):
 @pytest.mark.parametrize('filename', ['bind-runtime-release.yml', 'bind-plugin-release.yml', 'ha-dhcp-interface-release.yml'])
 def test_release_authority_is_limited_to_reviewed_jobs(filename):
     workflow = (REPOSITORY_ROOT / '.github/workflows' / filename).read_text()
+    profile_job = workflow_jobs(workflow)['profile']
+    assert profile_job.count('.github/ci/shared/series_builds.py materialize-discovery') == 1
+    assert '--sha256 ' + action_expression('needs.select.outputs.discovery_sha256') in profile_job.replace("'", '')
+    assert '--output "$RUNNER_TEMP/upstream.json"' in profile_job
+    assert '.resolver-plugins' not in workflow
     header = workflow.split('jobs:\n', 1)[0]
     assert not re.search(r'\bsecrets\b', '\n'.join(re.findall(r'\$\{\{(.*?)\}\}', header, re.DOTALL)))
-    global_permissions = {'contents': 'read'} | ({} if filename.startswith('ha-') else {'pull-requests': 'read'})
-    assert_permissions(workflow, global_permissions)
+    assert_permissions(workflow, {'contents': 'read', 'pull-requests': 'read'})
     concurrency = re.search(r'^concurrency:\n((?:  [^\n]*\n)*)', header, re.MULTILINE)[1]
     assert dict(line.strip().split(': ', 1) for line in concurrency.splitlines()) == {
         'group': 'package-release', 'cancel-in-progress': 'false', 'queue': 'max'}
@@ -387,6 +403,8 @@ def test_release_authority_is_limited_to_reviewed_jobs(filename):
         else:
             permissions = {'contents': 'read'} if name in (
                 'producer', 'sign', 'verify', 'publish', 'verify-published', 'retention', 'verify-development') else None
+        if name == 'select':
+            permissions = {'contents': 'read', 'pull-requests': 'read', 'actions': 'write'}
         assert_permissions(job, permissions, indent=4)
         if 'uses: actions/checkout@' in job:
             assert_checkout_credentials(job)
@@ -408,31 +426,38 @@ def condition_allows(job, context):
                             'format': lambda pattern, *args: pattern.format(*args)})
 
 
-@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
+@pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin', 'dhcp_interface_ha'])
 def test_privileged_event_guards_do_not_trust_selector_mode(component):
-    workflow_name = 'bind-runtime-release.yml' if component == 'bind_runtime' else 'bind-plugin-release.yml'
-    base = {'needs.select.outputs.mode': 'production', 'github.event_name': 'push',
+    ha = component == 'dhcp_interface_ha'
+    workflow_name = {'bind_runtime': 'bind-runtime-release.yml', 'bind_plugin': 'bind-plugin-release.yml',
+                     'dhcp_interface_ha': 'ha-dhcp-interface-release.yml'}[component]
+    approval = 'needs.profile.outputs.release' if ha else 'needs.select.outputs.mode'
+    prefix = 'release/dhcp-interface-ha' if ha else 'release/bind-rp'
+    base = {approval: 'true' if ha else 'production', 'github.event_name': 'push',
             'github.ref': 'refs/heads/master', 'inputs.mode': None,
             'github.event.pull_request.merged': False, 'github.event.pull_request.base.ref': None,
             'github.workflow_ref': f'example/plugins/.github/workflows/{workflow_name}@refs/heads/master',
             'github.repository': 'example/plugins'}
-    merged = dict(base, **{'github.event_name': 'pull_request_target', 'github.ref': 'refs/heads/release/bind-rp/26.7',
-                          'github.event.pull_request.merged': True, 'github.event.pull_request.base.ref': 'release/bind-rp/26.7'})
+    merged = dict(base, **{'github.event_name': 'pull_request_target', 'github.ref': f'refs/heads/{prefix}/26.7',
+                          'github.event.pull_request.merged': True, 'github.event.pull_request.base.ref': f'{prefix}/26.7'})
     scenarios = [
         (base, True),
+        (dict(base, **{'github.event_name': 'schedule'}), True),
+        (dict(base, **{'github.event_name': 'schedule', 'github.ref': 'refs/heads/feature'}), False),
         (dict(base, **{'github.ref': 'refs/heads/feature'}), False),
-        (dict(base, **{'needs.select.outputs.mode': 'development'}), False),
+        (dict(base, **{approval: 'false' if ha else 'development'}), False),
         (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production'}), True),
-        (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'development'}), False),
+        (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'development'}), ha),
         (dict(base, **{'github.event_name': 'workflow_dispatch', 'inputs.mode': 'production', 'github.ref': 'refs/heads/feature'}), False),
-        (merged, component == 'bind_plugin'),
+        (merged, component != 'bind_runtime'),
         (dict(merged, **{'github.event.pull_request.merged': False}), False),
         (dict(merged, **{'github.event.pull_request.base.ref': 'master'}), False),
         (dict(merged, **{'github.workflow_ref': f'example/plugins/.github/workflows/{workflow_name}@refs/heads/feature'}), False),
         (dict(base, **{'github.event_name': 'pull_request'}), False),
     ]
     jobs = workflow_jobs(release_workflow(component))
-    privileged = ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else [])
+    privileged = ['sign', 'publish', 'source-release'] if ha else (
+        ['sign', 'publish', 'retention'] + (['source-release'] if component == 'bind_plugin' else []))
     for name in privileged:
         for context, allowed in scenarios:
             assert condition_allows(jobs[name], context) is allowed, (component, name, context)
@@ -449,8 +474,9 @@ def test_privileged_jobs_bind_control_and_immutable_owner_artifacts(component):
                     assert re.search(r'^          retention-days: ([^\n]+)$', step, re.MULTILINE)[1] == '30', name
         downloads = [step for step in workflow_steps(job) if 'uses: actions/download-artifact@' in step]
         if downloads:
-            expected = {(action_expression('needs.profile.outputs.trusted_artifact_id'), 'artifacts/trusted')}
-            if name != 'producer':
+            expected = {(action_expression('needs.select.outputs.discovery_artifact_id'), action_expression('runner.temp') + '/discovered')} if name == 'profile' else {
+                (action_expression('needs.profile.outputs.trusted_artifact_id'), 'artifacts/trusted')}
+            if name not in ('producer', 'profile'):
                 owner = 'producer' if name in ('sign', 'verify-development', 'publish-development') else 'sign'
                 output = 'producer_artifact_id' if owner == 'producer' else 'repository_artifact_id'
                 directory = 'producer' if owner == 'producer' else 'repository'

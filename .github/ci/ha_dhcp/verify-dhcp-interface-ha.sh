@@ -17,8 +17,7 @@ python3 -I "$ci/shared/package_catalogue.py" validate --repository-root "$(dirna
 python3 "$ci/shared/target_pkg.py" field "$RP_TARGET_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role creator >/dev/null
 python3 "$ci/shared/target_pkg.py" field "$RP_READER_PKG_METADATA" "$series" release --upstream "$RP_UPSTREAM_METADATA" --role reader >/dev/null
 python3 "$ci/ha_dhcp/dhcp_interface_ha_channel.py" validate --directory "$expected" --target-pkg-metadata "$RP_TARGET_PKG_METADATA" --trusted-upstream "$RP_UPSTREAM_METADATA"
-RP_OPNSENSE_SNAPSHOT=$(python3 "$ci/ha_dhcp/dhcp_interface_ha_release.py" snapshot --series "$series")
-export RP_OPNSENSE_SNAPSHOT
+unset RP_OPNSENSE_SNAPSHOT
 RP_TARGET_PKG_METADATA=$RP_READER_PKG_METADATA "$ci/shared/setup-opnsense-repository.sh" "$series" >/dev/null
 pkg update -f
 python3 "$ci/shared/target_pkg.py" install "$RP_READER_PKG_METADATA" "$series" --upstream "$RP_UPSTREAM_METADATA" --role reader

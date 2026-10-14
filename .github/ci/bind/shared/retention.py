@@ -47,6 +47,8 @@ def component_manifest(data, kind, series):
     target_pkg.validate_source(data["creator_source"],creator,series)
     assets,packages=bind._hashes(data["assets"]),bind._hashes(data["packages"])
     sidecars=bind.RUNTIME_SIDECARS if kind=="bind_runtime" else bind.PLUGIN_SIDECARS
+    if "series-build-inputs.json" in assets:
+        sidecars = sidecars | {"series-build-inputs.json"}
     if (creator["abi"]!=data["package_abi"] or not sidecars | {"resolver-plugins.pub","meta.conf"} <= set(assets)
             or not bind.CATALOGUE_FILES.intersection(assets)
             or not set(assets) <= sidecars | {"resolver-plugins.pub"} | bind.CATALOGUE_ASSETS | set(packages)

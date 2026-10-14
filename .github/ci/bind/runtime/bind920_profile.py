@@ -170,6 +170,7 @@ def producer_inputs(
     package_creator: object,
     *,
     recipe_sha256: str,
+    build_inputs_sha256: str | None = None,
 ) -> dict[str, object]:
     """Return the canonical schema-4 runtime build inputs."""
     profile = validate_profile(profile)
@@ -182,7 +183,7 @@ def producer_inputs(
     package_creator = validate_package_creator(package_creator)
     if not isinstance(recipe_sha256, str) or SHA256_PATTERN.fullmatch(recipe_sha256) is None:
         raise ValueError("invalid BIND build recipe SHA256")
-    return {
+    inputs = {
         "schema": PROVENANCE_SCHEMA,
         "series": series,
         "freebsd_release": freebsd_release,
@@ -191,6 +192,11 @@ def producer_inputs(
         "build_recipe_sha256": recipe_sha256,
         "package_creator": package_creator,
     }
+    if build_inputs_sha256 is not None:
+        if SHA256_PATTERN.fullmatch(build_inputs_sha256) is None:
+            raise ValueError("invalid per-series build inputs SHA256")
+        inputs.update(schema=5, build_inputs_sha256=build_inputs_sha256)
+    return inputs
 
 
 def compatibility_fingerprint(
@@ -201,10 +207,11 @@ def compatibility_fingerprint(
     package_creator: object,
     *,
     recipe_sha256: str,
+    build_inputs_sha256: str | None = None,
 ) -> str:
     """Hash explicit inputs without consulting the validator's checkout."""
     inputs = producer_inputs(profile, series, freebsd_release, architecture,
-                             package_creator, recipe_sha256=recipe_sha256)
+                             package_creator, recipe_sha256=recipe_sha256, build_inputs_sha256=build_inputs_sha256)
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -218,13 +225,14 @@ def build_provenance(
     packages: object,
     *,
     recipe_sha256: str,
+    build_inputs_sha256: str | None = None,
 ) -> dict[str, object]:
     """Describe the exact BIND pair available for one compatibility identity."""
     profile = validate_profile(profile)
     package_creator = validate_package_creator(package_creator)
     fingerprint = compatibility_fingerprint(
         profile, series, freebsd_release, architecture, package_creator,
-        recipe_sha256=recipe_sha256,
+        recipe_sha256=recipe_sha256, build_inputs_sha256=build_inputs_sha256,
     )
     if not isinstance(packages, dict) or set(packages) != set(PACKAGE_ORIGINS):
         raise ValueError("BIND provenance has an invalid package set")
@@ -243,7 +251,7 @@ def build_provenance(
         if package != expected:
             raise ValueError(f"{package_name} package does not match the BIND profile")
         validated_packages[package_name] = package
-    return {
+    provenance = {
         "schema": PROVENANCE_SCHEMA,
         "fingerprint": fingerprint,
         "series": series,
@@ -253,6 +261,9 @@ def build_provenance(
         "package_creator": package_creator,
         "packages": validated_packages,
     }
+    if build_inputs_sha256 is not None:
+        provenance.update(schema=5, build_inputs_sha256=build_inputs_sha256)
+    return provenance
 
 
 def write_provenance(
@@ -266,6 +277,7 @@ def write_provenance(
     bind920: Path,
     *,
     recipe_sha256: str | None = None,
+    build_inputs_sha256: str | None = None,
 ) -> None:
     """Write canonical provenance for two finished BIND package archives."""
     if not bind_tools.is_file() or not bind920.is_file():
@@ -287,6 +299,7 @@ def write_provenance(
     provenance = build_provenance(
         profile, series, freebsd_release, architecture, package_creator, packages,
         recipe_sha256=build_recipe_sha256() if recipe_sha256 is None else recipe_sha256,
+        build_inputs_sha256=build_inputs_sha256,
     )
     output.write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
@@ -317,6 +330,7 @@ def main() -> None:
     parser.add_argument("--architecture", default="x86_64")
     parser.add_argument("--package-creator")
     parser.add_argument("--recipe-sha256", help="explicit original recipe hash; defaults to this wrapper")
+    parser.add_argument("--build-inputs-sha256")
     parser.add_argument("--bind-tools", type=Path)
     parser.add_argument("--bind920", type=Path)
     parser.add_argument("--output", type=Path)
@@ -358,6 +372,7 @@ def main() -> None:
                 package_creator,
                 recipe_sha256=(arguments.recipe_sha256 if arguments.recipe_sha256 is not None
                                else build_recipe_sha256()),
+                build_inputs_sha256=arguments.build_inputs_sha256,
             )
         )
         return
@@ -373,6 +388,7 @@ def main() -> None:
         arguments.bind_tools,
         arguments.bind920,
         recipe_sha256=arguments.recipe_sha256,
+        build_inputs_sha256=arguments.build_inputs_sha256,
     )
 
 

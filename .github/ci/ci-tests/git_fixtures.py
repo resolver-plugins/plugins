@@ -70,7 +70,6 @@ def bind_sync_repositories(tmp_path):
     git(repository, 'update-ref', 'refs/remotes/upstream/stable/27.1', stable_27_1)
     git(repository, 'checkout', '-B', 'release/bind-rp/26.1', initial)
     source_commit = commit(repository, {
-        '.resolver-plugins/upstream.json': json.dumps(upstream_profile(upstream_commit=initial)),
         'dns/bind/fork.conf': 'resolver overlay\n',
         'Mk/plugins.mk': 'native framework\nfork dependency formula\n',
         'dns/bind/tests/canonical-only.py': 'do not carry tests\n',
@@ -86,7 +85,6 @@ def discover_sync(fixture, planner):
     result = subprocess.run([
         'python3', str(planner), 'discover', '--repository', str(fixture['repository']),
         '--upstream', 'upstream', '--release-prefix', 'release/bind-rp/',
-        '--metadata-path', '.resolver-plugins/upstream.json',
         '--tools-repository', str(fixture['tools']),
         '--control-commit', git(fixture['repository'], 'rev-parse', 'HEAD'),
     ], check=True, text=True, capture_output=True)

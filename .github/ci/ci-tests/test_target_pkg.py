@@ -9,14 +9,14 @@ FIXTURE_ROOT = CI.parent / 'ci-local'
 
 def recipe_targets(tmp_path, series, *, zero_revision=False):
     ports = init_repository(tmp_path / 'ports')
-    floor = '26.1.11' if series == '26.1' else '26.7'
+    floor = '26.1.11' if series == '26.1' else series
     floor_version = '2.3.1_1' if series == '26.1' else '2.3.1'
     floor_commit = commit(ports, {'ports-mgmt/pkg/Makefile':
         'PORTNAME=pkg\nPORTVERSION=2.3.1\n' + ('PORTREVISION=1\n' if series == '26.1' else '')}, 'floor')
     git(ports, 'tag', floor)
     release, creator_commit, origin, version = floor, floor_commit, 'ports-mgmt/pkg', floor_version
-    if series == '26.7':
-        release = '26.7.2' if zero_revision else '26.7.1'
+    if series != '26.1':
+        release = f'{series}.{2 if zero_revision else 1}'
         git(ports, 'rm', '-r', 'ports-mgmt/pkg')
         creator_commit = commit(ports, {'opnsense/pkg/Makefile':
             ('PORTNAME = pkg # literal\nPORTVERSION=2.5.0\nPORTREVISION=0\nPORTEPOCH=1\n'
@@ -26,7 +26,7 @@ def recipe_targets(tmp_path, series, *, zero_revision=False):
         origin, version = 'opnsense/pkg', '2.5.0,1' if zero_revision else '2.4.0_2,1'
     commit(ports, {f'{origin}/Makefile': 'PORTNAME=pkg\nDISTVERSION=9.9.9\n'}, 'decoy moving branch')
     git(ports, 'tag', f'{series}.99')
-    profile = upstream_profile(series, tools_tag=release)
+    profile = upstream_profile(series, tools_tag=release, freebsd_release='14.3' if series == '26.1' else '15.1')
     upstream = tmp_path / 'upstream.json'
     upstream.write_text(json.dumps(profile))
     abi = 'FreeBSD:14:amd64' if series == '26.1' else 'FreeBSD:15:amd64'
@@ -42,7 +42,7 @@ def recipe_targets(tmp_path, series, *, zero_revision=False):
     return ports, upstream, expected
 
 
-@pytest.mark.parametrize('series,zero_revision', [('26.1', False), ('26.7', False), ('26.7', True)])
+@pytest.mark.parametrize('series,zero_revision', [('26.1', False), ('26.7', False), ('26.7', True), ('27.1', False)])
 def test_resolves_release_recipe_targets(tmp_path, monkeypatch, series, zero_revision):
     ports, upstream, expected = recipe_targets(tmp_path, series, zero_revision=zero_revision)
     monkeypatch.setenv('OPNSENSE_PORTS_REPOSITORY', str(ports))

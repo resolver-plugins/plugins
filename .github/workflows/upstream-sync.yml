@@ -85,7 +85,6 @@ jobs:
             --repository . \
             --upstream upstream \
             --release-prefix release/bind-rp/ \
-            --metadata-path .resolver-plugins/upstream.json \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" \
             --control-commit "$(git rev-parse HEAD)" \
             > "$RUNNER_TEMP/discovery.json"
@@ -159,9 +158,11 @@ jobs:
           git archive "$control_commit" .github/ci \
             docs/package-repository/resolver-plugins.pub | tar -x
           series='${{ steps.plan.outputs.series }}'
+          python3 .github/ci/sync_upstream.py profile \
+            --plan "$RUNNER_TEMP/plan.json" --output "$RUNNER_TEMP/upstream.json"
           python3 -I .github/ci/bind/shared/components.py inputs \
             --component bind_runtime --series "$series" --mode development \
-            --upstream .resolver-plugins/upstream.json \
+            --upstream "$RUNNER_TEMP/upstream.json" \
             --runtime-approval "$RUNNER_TEMP/runtime-approval.mk" \
             --tools-repository "$RUNNER_TEMP/opnsense-tools" \
             --recipe .github/ci/bind/runtime/build-bind920.sh \

@@ -59,10 +59,11 @@ def publication_environment(tmp_path,monkeypatch):
     resolve_profile=bind_components.bind920_profile.resolve_profile
     monkeypatch.setattr(bind_components.bind920_profile,'resolve_profile',lambda selected:
         resolve_profile(selected,repository=recipes[selected['version']][0]))
-    first=commit(history,{'.resolver-plugins/upstream.json':json.dumps(profile),
-        'dns/bind/Makefile':PLUGIN_PACKAGE+approval,
+    first=commit(history,{'dns/bind/Makefile':PLUGIN_PACKAGE+approval,
         '.github/ci/bind/runtime/build-bind920.sh':'reviewed runtime recipe',
         '.github/ci/bind/plugin/build-os-bind-rp.sh':'reviewed plugin recipe'},'reviewed initial control')
+    profile['upstream_commit']=first
+    upstream=write_json(tmp_path / 'source-upstream.json',profile)
     origin=tmp_path / 'origin.git';git(tmp_path,'clone','--bare',history,origin)
     git(history,'remote','add','origin',origin.as_uri())
     monkeypatch.chdir(history)
@@ -170,7 +171,7 @@ def publication_environment(tmp_path,monkeypatch):
         recipe=history / ('.github/ci/bind/runtime/build-bind920.sh' if component=='bind_runtime' else '.github/ci/bind/plugin/build-os-bind-rp.sh')
         result=bind_components.prepare_selection(run_root / 'trusted',component=component,series='26.7',mode='production',
             control_commit=current,profile_commit=source or current,source_commit=source if component=='bind_plugin' else None,
-            upstream=history / '.resolver-plugins/upstream.json',runtime_approval=history / 'dns/bind/Makefile',
+            upstream=upstream,runtime_approval=history / 'dns/bind/Makefile',
             package_definition=write_source_definition(run_root,source) if component=='bind_plugin' else None,
             tools_repository=tools,recipe=recipe,repository='example.invalid/distribution',
             intake_directory=run_root / 'intake',creator_target=creator_path,reader_target=reader_path)

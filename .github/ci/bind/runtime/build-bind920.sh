@@ -120,10 +120,17 @@ esac
 
 mkdir -p "$artifact_directory"
 provenance="$temporary_directory/bind920-provenance.json"
+set --
+if [ -f "$trusted_directory/series-build-inputs.json" ]; then
+    build_inputs_sha256=$("$python_command" -I "$script_directory/../../shared/series_builds.py" fingerprint \
+        --directory "$trusted_directory" --component bind_runtime)
+    set -- --build-inputs-sha256 "$build_inputs_sha256"
+fi
 "$python_command" "$script_directory/bind920_profile.py" "$profile_path" \
     provenance "$series" "$freebsd_release" \
     --package-creator "$pkg_creator_record" \
     --recipe-sha256 "$build_recipe_sha256" \
+    "$@" \
     --bind-tools "$bind_tools_package" --bind920 "$bind_package" --output "$provenance"
 cp "$bind_tools_package" "$bind_package" "$provenance" "$artifact_directory/"
 "$python_command" "$script_directory/../shared/components.py" validate \

@@ -15,6 +15,19 @@ on:
       - '.github/workflows/bind-plugin-release.yml'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      pull_request_base:
+        type: string
+        required: false
+      pull_request_sha:
+        type: string
+        required: false
+      series:
+        type: string
+        required: false
+      source_commit:
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -24,16 +37,83 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  tests:
-    name: Plugin tests and lint
+  discover:
     runs-on: ubuntu-24.04
+    outputs:
+      series: ${{ steps.releases.outputs.series }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - id: releases
+        name: Discover supported HA release branches
+        env:
+          PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}
+          SERIES: ${{ inputs.series }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -eu
+          case "$PR_BASE" in
+            release/dhcp-interface-ha/*)
+              git fetch --no-tags origin 'refs/heads/master:refs/remotes/origin/control-plane'
+              git checkout refs/remotes/origin/control-plane -- .github/ci
+              ;;
+          esac
+          if [ -n "$SOURCE_COMMIT" ]; then
+            test -n "$SERIES"
+            printf 'series=%s\n' "$(jq -cn --arg series "$SERIES" '[$series]')" >> "$GITHUB_OUTPUT"
+          else
+            git ls-remote --heads origin 'refs/heads/release/dhcp-interface-ha/*' > "$RUNNER_TEMP/release-refs"
+            python3 .github/ci/bind/shared/selection.py release-matrix --component dhcp_interface_ha \
+              --refs-file "$RUNNER_TEMP/release-refs" --output "$GITHUB_OUTPUT"
+          fi
+
+  tests:
+    needs: discover
+    if: needs.discover.outputs.series != '[]'
+    name: Plugin tests and lint (${{ matrix.series }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ${{ fromJSON(needs.discover.outputs.series) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.pull_request_sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Materialize canonical tests and release HA source
+        env:
+          PR_BASE: ${{ inputs.pull_request_base || github.event.pull_request.base.ref }}
+          SERIES: ${{ matrix.series }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -eu
+          case "$PR_BASE" in
+            release/dhcp-interface-ha/*)
+              git fetch --no-tags origin 'refs/heads/master:refs/remotes/origin/canonical-tests'
+              git checkout refs/remotes/origin/canonical-tests -- .github/ci .github/workflows net/dhcp-interface-ha/tests \
+                docs/package-repository/resolver-plugins.pub dns/bind/Makefile
+              ;;
+          esac
+          control_commit=$(git rev-parse HEAD)
+          if [ -n "$SOURCE_COMMIT" ]; then
+            git fetch --no-tags origin "$SOURCE_COMMIT"
+          elif [ "$PR_BASE" = "release/dhcp-interface-ha/$SERIES" ]; then
+            SOURCE_COMMIT=$control_commit
+          else
+            git fetch --no-tags origin "refs/heads/release/dhcp-interface-ha/$SERIES"
+            SOURCE_COMMIT=$(git rev-parse 'FETCH_HEAD^{commit}')
+          fi
+          selection_sha256=$(python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py source-inputs \
+            --series "$SERIES" --directory "$RUNNER_TEMP/ha-source" \
+            --source-commit "$SOURCE_COMMIT" --control-commit "$control_commit")
+          python3 -I .github/ci/ha_dhcp/dhcp_interface_ha_release.py materialize \
+            --series "$SERIES" --directory "$RUNNER_TEMP/ha-source" --repository-root "$PWD" \
+            --source-commit "$SOURCE_COMMIT" --control-commit "$control_commit" --sha256 "$selection_sha256"
       - name: Install PHP test runtime
         run: |
           sudo apt-get update

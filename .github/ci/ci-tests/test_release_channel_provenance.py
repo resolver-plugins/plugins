@@ -18,19 +18,21 @@ class StageProvenanceTest(unittest.TestCase):
         from package_fixtures import make_bind_component
         from test_release_channel_archive import release_api_store, release_channel as publication
         components = load_module('stage_components', 'bind/shared/components.py')
-        from shared import package_catalogue
-        for kind in ('bind_runtime', 'bind_plugin'):
-            with self.subTest(component=kind), tempfile.TemporaryDirectory() as temporary:
+        from shared import package_catalogue, metadata_profile, series_builds
+        for kind, frozen_series in (('bind_runtime', False), ('bind_plugin', False),
+                                    ('bind_runtime', True), ('bind_plugin', True)):
+            with self.subTest(component=kind, frozen_series=frozen_series), tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary)
                 history=init_repository(root / 'git')
                 profile=upstream_profile('26.7')
                 ports, approval, pin=make_ports_recipe(root / 'ports')
                 tools=make_tools_repository(root / 'tools',profile)
-                tracked={'.resolver-plugins/upstream.json':json.dumps(profile),
-                         'dns/bind/Makefile':PLUGIN_PACKAGE,
+                tracked={'dns/bind/Makefile':PLUGIN_PACKAGE,
                          '.github/ci/bind/runtime/build-bind920.sh':'runtime fixture recipe',
                          '.github/ci/bind/plugin/build-os-bind-rp.sh':'plugin fixture recipe'}
                 older=commit(history,tracked,'reviewed controller')
+                profile['upstream_commit']=older
+                upstream=write_json(root / 'upstream.json',profile)
                 selected=commit(history,{'dns/bind/Makefile':PLUGIN_PACKAGE.replace('>= 9.20.26','>= 9.20.27')+approval},'selected controller')
                 source_definition=root / 'source-package.mk'
                 source_definition.write_bytes(subprocess.check_output(['git','-C',str(history),'show',f'{older}:dns/bind/Makefile']))
@@ -82,12 +84,18 @@ class StageProvenanceTest(unittest.TestCase):
                             patch.object(package_catalogue,'verify_packages'), patch.object(package_catalogue,'verify_repository')):
                             providers.enter_context(provider)
                         trusted=root / 'trusted'
+                        series_inputs = None
+                        if frozen_series:
+                            tools_record = metadata_profile.verify_tools_profile(profile, tools)
+                            series_inputs = write_json(root / 'series-build-inputs.json', series_builds.build_inputs(
+                                history, kind, '26.7', older, selected, profile, tools_record))
                         components.prepare_selection(trusted,component=kind,series='26.7',mode='production',
                             control_commit=selected,profile_commit=older,source_commit=older if kind=='bind_plugin' else None,
-                            upstream=history / '.resolver-plugins/upstream.json',runtime_approval=history / 'dns/bind/Makefile',
+                            upstream=upstream,runtime_approval=history / 'dns/bind/Makefile',
                             package_definition=source_definition if kind=='bind_plugin' else None,tools_repository=tools,
                             recipe=history / ('.github/ci/bind/runtime/build-bind920.sh' if kind=='bind_runtime' else '.github/ci/bind/plugin/build-os-bind-rp.sh'),
-                            repository='example/distribution',intake_directory=root / 'intake',creator_target=creator,reader_target=reader)
+                            repository='example/distribution',intake_directory=root / 'intake',creator_target=creator,reader_target=reader,
+                            series_build_inputs=series_inputs)
                         selection=json.loads((trusted / 'selection.json').read_text())
                         raw=root / 'producer';raw.mkdir()
                         manifest=json.loads((template / 'channel.json').read_text())
@@ -96,7 +104,8 @@ class StageProvenanceTest(unittest.TestCase):
                         if kind=='bind_runtime':
                             inputs=json.loads((trusted / 'producer-inputs.json').read_text())
                             write_json(raw / 'bind920-provenance.json',components.bind920_profile.build_provenance(
-                                pin,'26.7','15.1','x86_64',creator_identity(),bind_records(),recipe_sha256=inputs['build_recipe_sha256']))
+                                pin,'26.7','15.1','x86_64',creator_identity(),bind_records(),recipe_sha256=inputs['build_recipe_sha256'],
+                                build_inputs_sha256=inputs.get('build_inputs_sha256')))
                         else:
                             shutil.copyfile(trusted / 'producer-inputs.json',raw / 'plugin-build-inputs.json')
                         expected={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in raw.iterdir()}

@@ -5,10 +5,12 @@
 `Synchronize os-bind-rp upstream` runs daily at 04:17 UTC and may also be run
 manually from GitHub Actions on `master`. It fetches OPNsense plugin stable
 branches, the fork's release branches, and `opnsense/tools`. It then validates
-the current release metadata and discovers one review decision.
+the reviewed source ancestry and discovers one review decision. No file under
+`.resolver-plugins` is required or consulted.
 
-This workflow tracks OPNsense plugin source and numeric tools environment
-changes. Runtime approval remains the separate pair of RP_BIND fields in
+This workflow tracks OPNsense plugin source changes and new stable series.
+Build controllers discover tools, FreeBSD and core inputs when needed; a tools
+update alone does not create a metadata-refresh PR. Runtime approval remains the separate pair of RP_BIND fields in
 `dns/bind/Makefile`; synchronization does not advance that approval.
 
 ## Synchronization app setup
@@ -59,8 +61,8 @@ and approve pull requests** setting. See GitHub's
 
 | Planner action | Meaning | Automation result |
 | --- | --- | --- |
-| `noop` | BIND source and tools environment are unchanged, with no newer stable series. | Finish without creating a ref, PR, or artifact. |
-| `update-review` | The current series has a BIND tree or tools/FreeBSD environment change. | Create or recover a `sync/bind/...` review PR. No artifact is built before review. |
+| `noop` | BIND source is unchanged, with no newer stable series. | Finish without creating a ref, PR, or artifact. |
+| `update-review` | The current series has an upstream BIND tree change. | Create or recover a `sync/bind/...` review PR. No artifact is built before review. |
 | `bootstrap-review` | A newer OPNsense series exists, whether or not its BIND tree differs. | Create a `sync/bootstrap/...` review PR for the new release source. No package artifact is built before review. |
 
 Review the generated PR and merge it only after the fork-specific behavior has
@@ -76,48 +78,57 @@ to the runtime wrapper. It does not build a plugin or create a stable channel.
 
 Discovery freezes the control and source SHAs, observed stable tip, numeric tools
 tag/commit and upstream-derived FreeBSD release. The workflow resolves the core
-commit/archive audit once, then `seal-plan` produces a complete schema-2 plan.
+commit/archive audit once, then `seal-plan` produces a complete schema-3 plan.
 Apply and publish consume that plan without rediscovering inputs. Generated refs
 are `sync/<bind|bootstrap>/<series>/<upstream-prefix>-<input-hash-prefix>`;
 the hash covers the entire sealed plan except its derived ref.
 
-An environment-only proposal parents the existing release head, keeps its plugin
-and framework trees and original upstream baseline, and updates only the profile,
-generated proposal audit and thin read-only test caller. Source updates carry
-fork diffs only from `dns/bind` (excluding canonical tests) and `Mk/plugins.mk`.
+Source updates carry fork diffs only from `dns/bind` (excluding canonical tests)
+and `Mk/plugins.mk`, plus the thin read-only test caller.
 CI, policy and tool directories are not blanket overlays. Temporary clones
 prepare commits without resetting the user's checkout or creating worktrees.
 
-The review commit's generated `.resolver-plugins/sync-plan.json` records its exact
-sealed inputs for interrupted-publication recovery. Recovery checks that audit,
-ref, metadata and source relationships before reconciling the PR. An existing
-ref with different bytes is a conflict, never an overwrite. Before activating
-this schema, finish outstanding reviews created by the previous schema using
-its normal recovery path; historical refs remain untouched.
+The review commit's `Resolver-Sync-Plan` message trailer records its exact sealed
+proposal inputs for interrupted-publication recovery. No plan or upstream JSON
+is added to the generated source tree. Recovery checks the trailer, ref and
+source relationships before reconciling the PR. An existing
+ref with different bytes is a conflict, never an overwrite. Historical schema-2
+refs and their JSONs remain untouched and are not recovery inputs for the new
+schema. Existing metadata-only reviews can be closed without merging.
+Merge source reviews with their upstream history so the next discovery can derive
+the reviewed baseline. Build controllers independently discover and seal their
+inputs at build time; the proposal's audit is not a maintained build profile.
 
 ## Operational response
 
 For a blocked run, use the failure message to identify the invalid source
-metadata or unavailable upstream input. Correct it through a reviewed release
-branch change; do not bypass the validator or edit a generated branch in
+ancestry or unavailable upstream input. Check that the source history and upstream
+refs were fully fetched; correct source problems through a reviewed release
+branch change. Do not bypass the validator or edit a generated branch in
 place. For an artifact-build failure, inspect the VM build logs and the
-metadata profile first, then reproduce the build using [Building](building.md).
+run's generated profile first, then reproduce the build using [Building](building.md).
 
 ## Runtime and plugin publication
 
-The [runtime workflow](../.github/workflows/bind-runtime-release.yml) starts
-automatically only for an approved BIND pin change on `master`. The
+The [runtime workflow](../.github/workflows/bind-runtime-release.yml) always uses
+the approved BIND pin on `master`. An approval change and daily upstream discovery
+select only series whose runtime build inputs changed. The
 [plugin workflow](../.github/workflows/bind-plugin-release.yml) owns the plugin
 and its `Mk`, `Scripts` and `Templates` build framework. Shared helpers,
-catalogue and package-manager changes can select the plugin;
-they do not select runtime production. Runtime helper and workflow changes run
-PR tests without starting a runtime release. Documentation, tests, HA-only
-changes and upstream discovery changes do not select BIND production.
+catalogue and package-manager changes trigger discovery; actual build inputs
+determine whether a plugin build is necessary. Documentation, tests and HA-only
+source changes do not select BIND builds.
 
-A relevant `master` push selects the newest numeric registered release series.
+A relevant `master` push and each producer's daily schedule check every registered
+series independently against its published build inputs. The shared selector
+builds one changed series and dispatches the same producer for any others; a
+change confined to one series never rebuilds its peers. The source and environment
+are frozen once in a sealed discovery artifact, including both pkg recipes.
+Package jobs validate that artifact without repeating upstream discovery.
 A merged plugin-affecting PR into an exact `release/bind-rp/<series>` selects
 only plugin production for that series and its merged immutable source/profile
-commit; unmerged closure selects neither producer. Workflow code and privileged
+commit; unmerged closure selects neither producer. Unchanged production inputs
+skip the build even for a manual dispatch. Workflow code and privileged
 helpers remain pinned to the trusted default-branch workflow commit. A manual
 production dispatch requires `master` and an explicit registered series; use the
 runtime workflow directly to publish the approved runtime for another series.

@@ -29,7 +29,8 @@ def test_workflow_discovers_release_branches_and_runs_canonical_tests(tmp_path):
     assert "refs/heads/release/bind-rp/*" in workflow
     assert "fromJSON(needs.discover.outputs.series)" in workflow
     assert 'refs/heads/release/bind-rp/$SERIES' in workflow
-    assert 'git checkout "$source_commit" -- .resolver-plugins/upstream.json dns/bind/Makefile dns/bind/src' in workflow
+    assert 'git checkout "$source_commit" -- dns/bind/Makefile dns/bind/src' in workflow
+    assert 'RP_TEST_SERIES: ${{ matrix.series }}' in workflow
     assert 'python3 -m pytest -q dns/bind/tests' in workflow
 
     origin = init_repository(tmp_path / 'origin')

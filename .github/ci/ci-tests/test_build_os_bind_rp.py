@@ -141,8 +141,6 @@ def build_fixture(tmp_path):
         shutil.copytree(REPOSITORY_ROOT / name, root / name, ignore=shutil.ignore_patterns('work'))
     core_commit = create_core_repository(tmp_path / 'core')
     upstream = upstream_profile(core_commit=core_commit)
-    (root / '.resolver-plugins').mkdir()
-    (root / '.resolver-plugins/upstream.json').write_text(json.dumps(upstream))
     makefile = root / 'dns/bind/Makefile'
     selected_definition = re.sub(r'^RP_BIND_.*\n', '', makefile.read_text(), flags=re.M)
     selected_definition = re.sub(r'^PLUGIN_VERSION=.*$', 'PLUGIN_VERSION=\t26.1',
@@ -151,9 +149,11 @@ def build_fixture(tmp_path):
         selected_definition += '\nPLUGIN_MANIFEST_DEPENDS= opnsense: { version: "26.1.11_10", origin: "opnsense/opnsense" }\n'
     makefile.write_text(selected_definition)
     (root / 'dns/bind/+PRE_INSTALL.pre').write_text(PLUGIN_PRE_INSTALL)
-    git(root, 'add', 'dns/bind', 'Mk', 'Scripts', 'Templates', '.resolver-plugins')
+    git(root, 'add', 'dns/bind', 'Mk', 'Scripts', 'Templates')
     git(root, 'commit', '-m', 'selected package inputs')
     source_commit = git(root, 'rev-parse', 'HEAD')
+    upstream['upstream_commit'] = source_commit
+    upstream_path = write_json(tmp_path / 'source-upstream.json', upstream)
     ports, approval, pin = make_ports_recipe(tmp_path / 'ports')
     tools = make_tools_repository(tmp_path / 'tools', upstream)
     # Master control intentionally differs; source has no RP approval block.
@@ -181,7 +181,7 @@ def build_fixture(tmp_path):
             patch.object(components, 'fetch_cached_component', return_value=None):
         result = components.prepare_selection(trusted, component='bind_plugin', series='26.1', mode='production',
             control_commit=control_commit, profile_commit=source_commit, source_commit=source_commit,
-            upstream=root / '.resolver-plugins/upstream.json', runtime_approval=makefile, package_definition=package,
+            upstream=upstream_path, runtime_approval=makefile, package_definition=package,
             tools_repository=tools, recipe=root / '.github/ci/bind/plugin/build-os-bind-rp.sh',
             repository='example/distribution', intake_directory=tmp_path / 'intake',
             creator_target=creator, reader_target=reader)
@@ -242,7 +242,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
     assert metadata == {
         'series': '26.1', 'pkg_abi': 'FreeBSD:14:amd64', 'bind920': '9.20.26_2',
         'bind_source': 'resolver', 'opnsense': '26.1.11_10', 'opnsense_core_commit': upstream['core_commit'],
-        'upstream_commit': '1' * 40, 'core_commit': upstream['core_commit'], 'tools_tag': '26.1.11',
+        'upstream_commit': upstream['upstream_commit'], 'core_commit': upstream['core_commit'], 'tools_tag': '26.1.11',
         'freebsd_release': '14.3', 'source_commit': environment['SOURCE_COMMIT'], 'pkg_creator': '2.3.1_1',
         'creator_release': '26.1.11', 'creator_ports_commit': '4' * 40, 'creator_recipe_path': 'ports-mgmt/pkg'}
     assert (root / 'dns/bind/Makefile').read_bytes() == (trusted / 'plugin-package.mk').read_bytes()
@@ -263,10 +263,7 @@ def test_build_wrapper_creates_package_and_metadata_for_26_1(tmp_path):
 
 def test_materialization_uses_exact_framework_and_removes_absent_control_paths(tmp_path):
     root = init_repository(tmp_path / 'source')
-    upstream = tmp_path / 'upstream.json'
-    upstream.write_text('{"selected":true}\n')
     source = commit(root, {
-        '.resolver-plugins/upstream.json': upstream.read_text(),
         'dns/bind/Makefile': 'selected plugin\n', 'Mk/plugins.mk': 'selected framework\n',
         'Mk/defaults.mk': 'selected defaults\n', 'Mk/common.mk': 'selected common\n',
         'Templates/version': 'selected template\n',
@@ -276,7 +273,7 @@ def test_materialization_uses_exact_framework_and_removes_absent_control_paths(t
     (root / 'Scripts/stale.sh').write_text('stale script\n')
     (root / '.github/ci').mkdir(parents=True)
     (root / '.github/ci/control.py').write_text('trusted control\n')
-    plugin.materialize_source(root, source, upstream)
+    plugin.materialize_source(root, source)
     assert (root / 'Mk/plugins.mk').read_text() == 'selected framework\n'
     assert (root / 'Templates/version').read_text() == 'selected template\n'
     assert not (root / 'Mk/devel.mk').exists() and not (root / 'Scripts').exists()

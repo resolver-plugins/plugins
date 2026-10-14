@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Event routing and complete changed-file discovery for independent BIND producers."""
+"""Event routing and complete changed-file discovery for package producers."""
 import argparse
 import json
 import os
@@ -11,7 +11,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bind.runtime import bind920_profile
 
-KINDS = ("bind_runtime", "bind_plugin")
+KINDS = ("bind_runtime", "bind_plugin", "dhcp_interface_ha")
+RELEASE_PREFIX = {"bind_runtime": "release/bind-rp/", "bind_plugin": "release/bind-rp/",
+                  "dhcp_interface_ha": "release/dhcp-interface-ha/"}
 EVENT_FIELDS = {"name", "ref", "sha", "workflow_sha", "before", "merged", "base_ref",
                 "merge_commit_sha", "inputs", "pr_base_ref"}
 OUTPUT_FIELDS = ("mode", "series", "source_ref", "profile_ref", "control_ref",
@@ -24,6 +26,13 @@ SHARED_FILES = {"docs/package-repository/resolver-plugins.pub", "scripts/install
 
 
 def watches(component, path):
+    if component == "dhcp_interface_ha":
+        if path == "net/dhcp-interface-ha/README.md" or path.startswith(("net/dhcp-interface-ha/tests/", ".github/ci/ci-tests/")):
+            return False
+        return (path == "docs/package-repository/resolver-plugins.pub"
+                or path == ".github/workflows/ha-dhcp-interface-release.yml"
+                or path.startswith(("net/dhcp-interface-ha/", "Mk/", "Scripts/", "Templates/",
+                                    ".github/ci/ha_dhcp/", *SHARED_PATHS)))
     if component == "bind_runtime":
         return path == PACKAGE_DEFINITION
     if path.startswith(("dns/bind/tests/", ".github/ci/ci-tests/")):
@@ -65,14 +74,15 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
         raise ValueError("invalid registered refs or event inputs")
     selected = dict.fromkeys(OUTPUT_FIELDS)
     selected.update(mode="production", release=False)
+    prefix = RELEASE_PREFIX[component]
     series_refs = {match[1]: ref for ref in refs
-                   if (match := re.fullmatch(r"refs/heads/release/bind-rp/([0-9]+\.[0-9]+)", ref))}
+                   if (match := re.fullmatch("refs/heads/" + re.escape(prefix) + r"([0-9]+\.[0-9]+)", ref))}
     name = event["name"]
     if name == "push":
         if event["ref"] != "refs/heads/master":
             raise ValueError("production pushes require merged master control")
         relevant = [path for path in changed_paths if watches(component, path)]
-        if PACKAGE_DEFINITION in relevant:
+        if component != "dhcp_interface_ha" and PACKAGE_DEFINITION in relevant:
             runtime_changed, plugin_changed = package_changes(before_package, after_package)
             if not (runtime_changed if component == "bind_runtime" else plugin_changed):
                 relevant.remove(PACKAGE_DEFINITION)
@@ -88,17 +98,20 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
             raise ValueError("invalid release-source merge state")
         if not event["merged"] or component == "bind_runtime":
             return selected
-        match = re.fullmatch(r"release/bind-rp/([0-9]+\.[0-9]+)", event["base_ref"] or "")
+        match = re.fullmatch(re.escape(prefix) + r"([0-9]+\.[0-9]+)", event["base_ref"] or "")
         if match is None or match[1] not in series_refs:
             raise ValueError("unsupported release-source merge base")
-        if not any(path == ".resolver-plugins/upstream.json" or watches(component, path)
-                   for path in changed_paths):
+        if not any(watches(component, path) for path in changed_paths):
             return selected
         series = match[1]
         profile, control = _commit(event["merge_commit_sha"]), _commit(event["workflow_sha"])
     elif name == "workflow_dispatch":
         inputs = event["inputs"]
         mode, series = inputs["mode"], inputs["series"]
+        if component == "dhcp_interface_ha" and mode is None:
+            mode = "production"
+        if component == "dhcp_interface_ha" and mode != "production":
+            raise ValueError("HA dispatch requires production mode")
         if mode not in ("production", "development") or series not in series_refs:
             raise ValueError("unsupported dispatch mode or registered series")
         control = _commit(event["sha"])
@@ -111,15 +124,15 @@ def select_event(component, event, refs, changed_paths, *, before_package=None, 
             pull = inputs["pull_number"]
             if not isinstance(pull, str) or re.fullmatch(r"[1-9][0-9]*", pull) is None:
                 raise ValueError("development dispatch requires a pull request number")
-            if event["pr_base_ref"] == f"release/bind-rp/{series}":
+            if event["pr_base_ref"] == f"{prefix}{series}":
                 profile = f"refs/pull/{pull}/head"
             elif event["pr_base_ref"] != "master":
                 raise ValueError("pull request base does not supply selected release source")
             selected.update(pull_number=pull, prerelease_tag=f"pr-{pull}-{series}-{component.replace('_', '-')}")
     else:
-        raise ValueError("unsupported BIND producer event")
+        raise ValueError("unsupported package producer event")
     selected.update(series=series, profile_ref=profile, control_ref=control, release=True)
-    if component == "bind_plugin":
+    if component != "bind_runtime":
         selected["source_ref"] = profile
     return selected
 
@@ -169,6 +182,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     matrix = commands.add_parser("release-matrix")
+    matrix.add_argument("--component", choices=KINDS, default="bind_plugin")
     matrix.add_argument("--refs-file", type=Path, required=True)
     matrix.add_argument("--output", type=Path, required=True)
     event_parser = commands.add_parser("select-event")
@@ -184,7 +198,7 @@ def main():
         series = []
         for line in args.refs_file.read_text().splitlines():
             _object_id, ref = line.split("\t", maxsplit=1)
-            candidate = ref.removeprefix("refs/heads/release/bind-rp/")
+            candidate = ref.removeprefix("refs/heads/" + RELEASE_PREFIX[args.component])
             if re.fullmatch(r"\d+\.\d+", candidate) is None:
                 raise ValueError(f"invalid release branch name: {ref}")
             series.append(candidate)

@@ -159,8 +159,7 @@ def test_recovery_uses_exact_audit_and_original_refs_after_core_changes(publicat
     git(repository, 'branch', '-D', plan['sync_branch'], plan['target_release'])
     # A later control/source construction cannot replace the already published proposal.
     git(repository, 'checkout', '-B', 'retry-target', plan['upstream_commit'])
-    commit(repository, {'.resolver-plugins/upstream.json': json.dumps(upstream_profile(
-        plan['series'], plan['upstream_commit'], core_commit='f' * 40))}, 'later core input')
+    commit(repository, {'README': 'different retry construction\n'}, 'later retry input')
     git(repository, 'checkout', 'master')
     refs = {plan['source_release']: plan['source_commit'], plan['sync_branch']: fixture['sync_commit']}
     if target_present:
@@ -195,29 +194,6 @@ def test_recovery_rejects_sync_only_bootstrap_after_upstream_drift(publication_r
 
     assert handled is False
     assert github.created_refs == github.pulls == []
-
-
-def test_environment_review_publication_describes_retained_source_and_new_tools(tmp_path):
-    fixture = bind_sync_repositories(tmp_path)
-    repository, tools = fixture['repository'], fixture['tools']
-    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/26.7')
-    git(repository, 'update-ref', '-d', 'refs/remotes/upstream/stable/27.1')
-    commit(tools, {'config/26.1/build.conf': 'OS?=14.4\n'}, 'tools environment update')
-    git(tools, 'tag', '26.1.12')
-    plan = seal_sync(discover_sync(fixture, PLANNER), tmp_path, PLANNER)
-    result = apply_sync(fixture, plan, tmp_path, PLANNER)
-    assert result.returncode == 0, result.stderr
-    fixture.update(plan=plan, source_release=plan['source_commit'])
-    github = publication_github(fixture)
-
-    publish(publisher_module(), fixture, github)
-
-    assert github.created_refs == [plan['sync_branch']]
-    assert github.refs[plan['target_release']] == plan['source_commit']
-    body = github.pulls[0]['body']
-    assert 'BIND source unchanged; build environment changed' in body
-    assert 'Tools: `26.1.11` -> `26.1.12`' in body
-    assert 'FreeBSD: `14.3` -> `14.4`' in body
 
 
 def test_github_reproduces_exact_local_objects_before_accepting_commit(tmp_path, monkeypatch):

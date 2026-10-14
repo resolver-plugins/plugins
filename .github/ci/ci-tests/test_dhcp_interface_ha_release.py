@@ -7,6 +7,8 @@ ROOT = CI.parents[1]
 sys.path.insert(0, str(CI))
 from ha_dhcp import dhcp_interface_ha_channel as channel
 from ha_dhcp import dhcp_interface_ha_release as selection
+from bind.shared import selection as routing
+from git_fixtures import init_repository, commit, git, upstream_profile
 from ha_fixtures import make_ha_channel
 from package_fixtures import write_resolved_target, creator_identity
 from workflow_fixtures import workflow_jobs, workflow_steps, trigger_paths
@@ -16,59 +18,97 @@ COMMIT = "a" * 40
 
 @pytest.fixture
 def release_history(tmp_path, monkeypatch):
+    init_repository(tmp_path)
     monkeypatch.chdir(tmp_path)
-    subprocess.run(["git", "init", "-q"], check=True)
 
-    def commit(version=None, revision=0, comment=""):
-        if version is not None:
-            path = tmp_path / selection.MAKEFILE
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"PLUGIN_VERSION=\t{version}\nPLUGIN_REVISION=\t{revision}\n{comment}\n")
-            subprocess.run(["git", "add", selection.MAKEFILE], check=True)
-        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                        "commit", "--allow-empty", "-qm", "fixture"], check=True)
-        return selection.git("rev-parse", "HEAD")
+    def advance():
+        git(tmp_path, 'commit', '--allow-empty', '-qm', 'fixture')
+        return git(tmp_path, 'rev-parse', 'HEAD')
 
-    return commit
+    return advance
 
 
-@pytest.mark.parametrize("previous,current,release", [
-    (None, ("0.2", 43), True),
-    (("0.2", 42), ("0.2", 43), True),
-    (("0.2", 99), ("0.3", 0), True),
-    (("0.2", 43), ("0.2", 43), False),
-    (("0.2", 43), ("0.2.0", 43), False),
+@pytest.mark.parametrize('event_name,changed,base,series', [
+    ('push', ['net/dhcp-interface-ha/tests/test_runtime.py'], None, None),
+    ('push', ['.github/ci/ha_dhcp/build-dhcp-interface-ha.sh'], None, '26.7'),
+    ('pull_request_target', ['net/dhcp-interface-ha/src/controller.py'], 'release/dhcp-interface-ha/26.1', '26.1'),
+    ('pull_request_target', ['net/dhcp-interface-ha/README.md'], 'release/dhcp-interface-ha/26.7', None),
+    ('workflow_dispatch', [], None, '26.1'),
 ])
-def test_push_selects_only_package_version_increases(release_history, previous, current, release):
-    before = release_history(*previous) if previous else release_history()
-    source = release_history(*current, comment="# metadata-only edit")
-    assert selection.select("push", "refs/heads/master", source, before) is release
+def test_registered_series_routing_uses_reviewed_source_and_master_control(tmp_path, event_name, changed, base, series):
+    refs = [f'refs/heads/release/dhcp-interface-ha/{value}' for value in ('26.1', '26.7')]
+    event = dict(name=event_name, ref='refs/heads/master', sha=COMMIT, workflow_sha=COMMIT,
+        before='b' * 40, merged=True, base_ref=base, merge_commit_sha='c' * 40,
+        inputs=dict(mode=None, series='26.1', pull_number=None), pr_base_ref=None)
+    paths = {'event.json': event, 'refs.json': refs, 'paths.json': changed}
+    for name, record in paths.items():
+        (tmp_path / name).write_text(json.dumps(record))
+    output = tmp_path / 'output'
+    subprocess.run([sys.executable, '-I', str(CI / 'bind/shared/selection.py'), 'select-event',
+        '--component', 'dhcp_interface_ha', '--event-file', str(tmp_path / 'event.json'),
+        '--refs-file', str(tmp_path / 'refs.json'), '--changed-paths-file', str(tmp_path / 'paths.json'),
+        '--output', str(tmp_path / 'selected.json'), '--github-output', str(output)], check=True)
+    selected = json.loads((tmp_path / 'selected.json').read_text())
+    assert selected['release'] is (series is not None)
+    if series:
+        expected = 'c' * 40 if event_name == 'pull_request_target' else f'refs/heads/release/dhcp-interface-ha/{series}'
+        assert (selected['series'], selected['source_ref'], selected['profile_ref'], selected['control_ref']) == (
+            series, expected, expected, COMMIT)
+        assert f'source_ref={expected}' in output.read_text()
+    event['ref'] = 'refs/heads/feature'
+    if event_name != 'pull_request_target':
+        with pytest.raises(ValueError, match='master'):
+            routing.select_event('dhcp_interface_ha', event, refs, ['net/dhcp-interface-ha/Makefile'])
 
 
-def test_manual_retry_and_new_branch_select_exact_source(release_history):
-    source = release_history("0.2", 43)
-    assert selection.select("workflow_dispatch", "refs/heads/master", source)
-    assert selection.select("push", "refs/heads/master", source, "0" * 40)
-
-
-def test_release_rejects_downgrade(release_history):
-    before = release_history("0.2", 43)
-    source = release_history("0.2", 42)
-    with pytest.raises(ValueError, match="decreased"):
-        selection.select("push", "refs/heads/master", source, before)
-
-
-def test_release_cli_consumes_push_payload_and_emits_job_outputs(release_history, tmp_path):
-    before = release_history()
-    source = release_history("0.2", 43)
-    event = tmp_path / "event.json"
-    event.write_text(json.dumps({"before": before}))
-    env = dict(os.environ, GITHUB_EVENT_PATH=str(event), GITHUB_EVENT_NAME="push",
-               GITHUB_REF="refs/heads/master", GITHUB_SHA=source)
-    output = subprocess.check_output([sys.executable, CI / "ha_dhcp/dhcp_interface_ha_release.py", "select"],
-                                     env=env, text=True)
-    assert dict(line.split("=", 1) for line in output.splitlines()) == {
-        "release": "true", "series": "26.7", "source_commit": source}
+@pytest.mark.parametrize('fault', [None, 'source-file', 'control'])
+def test_source_selection_materializes_exact_package_and_framework_preserving_canonical_controls(tmp_path, fault):
+    repository = init_repository(tmp_path / 'repository')
+    package = 'PLUGIN_NAME= dhcp-interface-ha\nPLUGIN_VERSION= 26.7\nPLUGIN_REVISION= 1\n'
+    source = commit(repository, {selection.MAKEFILE: package,
+        'net/dhcp-interface-ha/src/controller.py': 'reviewed source\n',
+        'Mk/plugins.mk': 'reviewed framework\n', 'Mk/defaults.mk': '', 'Mk/common.mk': '',
+        'Templates/version': 'reviewed template\n'}, 'reviewed HA release')
+    control = commit(repository, {selection.MAKEFILE: package.replace('26.7', '0.2'),
+        'net/dhcp-interface-ha/src/controller.py': 'stale control source\n',
+        'net/dhcp-interface-ha/tests/test_runtime.py': 'canonical tests\n',
+        'Mk/devel.mk': 'stale framework marker\n', '.github/ci/control.py': 'trusted controller\n'}, 'master control')
+    trusted = tmp_path / 'trusted'
+    def command(operation, *args):
+        return [sys.executable, '-I', str(CI / 'ha_dhcp/dhcp_interface_ha_release.py'), operation,
+            '--directory', str(trusted), '--series', '26.7', '--source-commit', source,
+            '--control-commit', control, *args]
+    digest = subprocess.check_output(command('source-inputs'), cwd=repository, text=True).strip()
+    if fault == 'source-file':
+        (trusted / 'plugin-package.mk').write_text(package.replace('1', '2'))
+    elif fault == 'control':
+        subprocess.run(['git', '-C', str(repository), 'checkout', '--detach', source], check=True, capture_output=True)
+    observed = (selection.MAKEFILE, 'net/dhcp-interface-ha/src/controller.py', 'Mk/plugins.mk', '.github/ci/control.py')
+    before = {name: (repository / name).read_bytes() if (repository / name).exists() else None for name in observed}
+    result = subprocess.run(command('materialize', '--repository-root', str(repository), '--sha256', digest),
+                            cwd=repository, text=True, capture_output=True)
+    assert (result.returncode == 0) is (fault is None), result.stderr
+    if fault:
+        assert 'differs' in result.stderr
+        assert before == {name: (repository / name).read_bytes() if (repository / name).exists() else None for name in observed}
+    else:
+        assert (repository / selection.MAKEFILE).read_text() == package
+        assert (repository / 'net/dhcp-interface-ha/src/controller.py').read_text() == 'reviewed source\n'
+        assert (repository / 'net/dhcp-interface-ha/tests/test_runtime.py').read_text() == 'canonical tests\n'
+        assert (repository / '.github/ci/control.py').read_text() == 'trusted controller\n'
+        assert (repository / 'Templates/version').read_text() == 'reviewed template\n'
+        assert not (repository / 'Mk/devel.mk').exists()
+        assert selection.validate_source(trusted, '26.7', source, control, digest, repository)['plugin_version'] == '26.7_1'
+        version_file = tmp_path / 'version.json'
+        version_file.write_text(json.dumps(dict(product_hash=source)))
+        archive = tmp_path / 'os-dhcp-interface-ha-26.7_1.pkg'
+        with tarfile.open(archive, 'w') as package:
+            package.add(version_file, arcname='usr/local/opnsense/version/dhcp-interface-ha')
+        check = command('verify-package', '--package', str(archive))
+        subprocess.run(check, check=True)
+        check[check.index('--source-commit') + 1] = control
+        rejected = subprocess.run(check, capture_output=True, text=True)
+        assert rejected.returncode != 0 and 'version hash differs' in rejected.stderr
 
 
 @pytest.mark.parametrize('fault', [None, 'member', 'control'])
@@ -189,21 +229,22 @@ def test_workflow_keeps_build_readonly_and_publishes_only_after_tests_and_verifi
     jobs = workflow_jobs(workflow)
     assert re.search(r'^  workflow_dispatch:', header, re.MULTILINE)
     assert re.search(r'^  push:\n    branches: \[master\]', header, re.MULTILINE)
-    assert "paths: ['net/dhcp-interface-ha/Makefile']" in header
+    assert "branches: ['release/dhcp-interface-ha/**']" in header
     assert not re.search(r'^  pull_request:', header, re.MULTILINE)
     assert "if: needs.profile.outputs.release == 'true'" in workflow.split('  profile:')[0]
     assert 'release: ' + '$' + '{{ needs.profile.outputs.freebsd_release }}' in jobs['build']
-    assert 'git show "$PROFILE_COMMIT:.resolver-plugins/upstream.json"' in jobs['build']
+    assert 'validate-source' in jobs['build']
+    assert '--source-commit' in jobs['build'] and 'selection_sha256' in jobs['build']
     for name, required in {'build': {'profile', 'test'}, 'publish': {'profile', 'sign', 'verify'},
                            'verify-published': {'profile', 'sign', 'publish'},
                            'source-release': {'profile', 'sign', 'verify-published'}}.items():
         declared = re.search(r'^    needs: \[([^\n]+)\]$', jobs[name], re.MULTILINE)[1]
         assert required <= {value.strip() for value in declared.split(',')}, name
     for name, job in jobs.items():
-        if name in ('profile', 'test'):
+        if name in ('select', 'profile', 'test'):
             continue
         expected = '$' + '{{ github.workflow_sha }}' if name in ('sign', 'publish', 'source-release') else (
-            '$' + '{{ needs.profile.outputs.source_commit }}')
+            '$' + '{{ needs.profile.outputs.control_commit }}')
         for step in workflow_steps(job):
             if 'uses: actions/checkout@' in step:
                 assert re.search(r'^          ref: ([^\n]+)$', step, re.MULTILINE)[1] == expected, name
@@ -236,13 +277,12 @@ def test_builder_retains_target_parser_and_native_installation_gates(tmp_path, m
     assert builder.index('test_ui_routes.php') < builder.index('cp "$package" "$output/"')
     verifier = (CI / 'ha_dhcp/verify-dhcp-interface-ha.sh').read_text()
     signer = workflow_jobs((ROOT / '.github/workflows/ha-dhcp-interface-release.yml').read_text())['sign']
+    assert builder.index('materialize --series') < builder.index('setup-opnsense-repository.sh')
     for script in (builder, verifier):
-        assert script.index('dhcp_interface_ha_release.py') < script.index('setup-opnsense-repository.sh')
-        assert 'export RP_OPNSENSE_SNAPSHOT' in script
+        assert 'unset RP_OPNSENSE_SNAPSHOT' in script
     native = next(step for step in workflow_steps(signer) if 'uses: vmactions/freebsd-vm@' in step)
     body = textwrap.dedent(re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', native, re.MULTILINE)[1])
-    assert body.index('snapshot --series') < body.index('authenticate-peers')
-    assert 'export RP_OPNSENSE_SNAPSHOT' in body
+    assert 'unset RP_OPNSENSE_SNAPSHOT' in body
     assert body.index('authenticate-peers') < body.index('base64 -d')
     from shared import package_catalogue
     calls = Mock()
@@ -267,7 +307,7 @@ def test_builder_retains_target_parser_and_native_installation_gates(tmp_path, m
             assert '--role reader' in line
             assert '--upstream "$RP_UPSTREAM_METADATA"' in line
     assert 'RP_TARGET_PKG_METADATA=$RP_READER_PKG_METADATA "$ci/shared/setup-opnsense-repository.sh"' in verifier
-    assert "printf 'repository_snapshot=%s\\n'" in builder
+    assert "printf 'repository_snapshot=latest\\n'" in builder
 
 @pytest.fixture
 def signed_channel(tmp_path):
@@ -275,9 +315,21 @@ def signed_channel(tmp_path):
 
 
 @pytest.fixture
-def signing_target(signed_channel, monkeypatch):
-    upstream = json.loads((signed_channel / 'upstream.json').read_text())
-    target_path = write_resolved_target(signed_channel.parent / 'creator-target.json', upstream)
+def incoming_channel(tmp_path):
+    return make_ha_channel(tmp_path / 'incoming', version='26.7_1', profile=COMMIT, snapshot='latest')
+
+
+@pytest.fixture
+def package_definition(tmp_path):
+    path = tmp_path / 'plugin-package.mk'
+    path.write_text('PLUGIN_NAME= dhcp-interface-ha\nPLUGIN_VERSION= 26.7\nPLUGIN_REVISION= 1\n')
+    return path
+
+
+@pytest.fixture
+def signing_target(incoming_channel):
+    upstream = json.loads((incoming_channel / 'upstream.json').read_text())
+    target_path = write_resolved_target(incoming_channel.parent / 'creator-target.json', upstream)
     return target_path
 
 
@@ -298,37 +350,37 @@ def test_signed_channel_rejects_tampered_assets_and_foreign_key(signed_channel):
         channel.validate(signed_channel)
 
 
-def test_signer_rejects_unreviewed_snapshot_without_invalidating_older_metadata(signed_channel, signing_target, tmp_path, monkeypatch):
-    build = signed_channel / "build-metadata.txt"
-    build.write_text(build.read_text().replace("repository_snapshot=26.7.4", "repository_snapshot=26.7.3"))
+def test_signer_rejects_unreviewed_snapshot_without_invalidating_older_metadata(incoming_channel, signing_target, tmp_path, monkeypatch, package_definition):
+    build = incoming_channel / "build-metadata.txt"
+    build.write_text(build.read_text().replace("repository_snapshot=latest", "repository_snapshot=26.7.3"))
     # Older current channels remain readable when a later source selects a new snapshot.
-    assert channel.metadata(signed_channel, "26.7", COMMIT, "b" * 40)["repository_snapshot"] == "26.7.3"
+    assert channel.metadata(incoming_channel, "26.7", COMMIT, COMMIT)["repository_snapshot"] == "26.7.3"
     sign = Mock()
     monkeypatch.setattr(channel.releases, "stage_selected_repository", sign)
     with pytest.raises(ValueError, match="provenance"):
-        channel.stage(signed_channel, tmp_path / "signed", "26.7", COMMIT, "b" * 40,
-                      signed_channel / "upstream.json", tmp_path / "key", signing_target)
+        channel.stage(incoming_channel, tmp_path / "signed", "26.7", COMMIT, COMMIT,
+                      incoming_channel / "upstream.json", tmp_path / "key", signing_target, package_definition)
     sign.assert_not_called()
 
 
-def test_signed_retry_reuses_exact_snapshot_and_rejects_source_mismatch(signed_channel, signing_target, tmp_path, monkeypatch):
+def test_signed_retry_reuses_exact_snapshot_and_rejects_source_mismatch(incoming_channel, signing_target, tmp_path, monkeypatch, package_definition):
     remote = tmp_path / 'remote'
-    shutil.copytree(signed_channel, remote)
+    shutil.copytree(incoming_channel, remote)
     snapshot = SimpleNamespace(existed=True, directory=remote)
     monkeypatch.setattr(channel.releases, 'snapshot_release', Mock(return_value=snapshot))
     output = tmp_path / 'reuse'
-    inputs = signed_channel / 'upstream.json', signing_target
-    assert channel.reuse('example/repository', signed_channel, output, '26.7', COMMIT, 'b' * 40, *inputs)
+    inputs = incoming_channel / 'upstream.json', signing_target, package_definition
+    assert channel.reuse('example/repository', incoming_channel, output, '26.7', COMMIT, COMMIT, *inputs)
     assert channel.releases.directory_checksums(output) == channel.releases.directory_checksums(remote)
     channel.validate(output, target_metadata=signing_target, trusted_upstream=inputs[0])
-    build = signed_channel / 'build-metadata.txt'
+    build = incoming_channel / 'build-metadata.txt'
     original = build.read_text()
-    build.write_text(original.replace(f'source_commit={COMMIT}', f"source_commit={'c' * 40}"))
+    build.write_text(original.replace(COMMIT, 'c' * 40))
     with pytest.raises(ValueError, match='different source/profile'):
-        channel.reuse('example/repository', signed_channel, tmp_path / 'reject', '26.7', 'c' * 40, 'b' * 40, *inputs)
+        channel.reuse('example/repository', incoming_channel, tmp_path / 'reject', '26.7', 'c' * 40, 'c' * 40, *inputs)
     build.write_text(original.replace('pkg_creator=2.3.1_1', 'pkg_creator=2.4.0'))
     with pytest.raises(ValueError, match='provenance'):
-        channel.reuse('example/repository', signed_channel, tmp_path / 'foreign', '26.7', COMMIT, 'b' * 40, *inputs)
+        channel.reuse('example/repository', incoming_channel, tmp_path / 'foreign', '26.7', COMMIT, COMMIT, *inputs)
     assert not (tmp_path / 'foreign').exists()
 
 
@@ -374,12 +426,38 @@ def test_forward_retry_after_rollback_retains_bytes_and_ancestry_guards(tmp_path
     assert publish.call_count == 2
 
 
-@pytest.mark.parametrize("fault", [None, "key", "identity"])
-def test_signer_verifies_package_and_public_key_before_signing(signed_channel, signing_target, tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("variant,fault", [
+    (False, None), (False, "key"), (False, "identity"),
+    (True, None), (True, "key"), (True, "identity"), (True, "inputs"), (True, "control"),
+])
+def test_signer_verifies_package_and_public_key_before_signing(incoming_channel, signing_target, tmp_path, monkeypatch, variant, fault, package_definition):
     target = channel.target_pkg.load_target(signing_target, "26.7")
+    options = {}
+    if variant:
+        upstream = json.loads((incoming_channel / 'upstream.json').read_text())
+        reader = write_resolved_target(tmp_path / 'reader-target.json', upstream, role='reader')
+        inputs = dict(schema=2, component='dhcp_interface_ha', series='26.7',
+            source_sha256='4' * 64, recipe_sha256='5' * 64, runtime_approval=None,
+            environment=dict(tools_tag=upstream['tools_tag'], tools_commit='b' * 40,
+                build_conf_sha256='c' * 64, freebsd_release=upstream['freebsd_release'],
+                core_commit=upstream['core_commit']),
+            package_targets=dict(creator=json.loads(signing_target.read_text()), reader=json.loads(reader.read_text())))
+        file = incoming_channel / channel.series_builds.INPUT_FILE
+        file.write_text(json.dumps(inputs))
+        trusted = tmp_path / 'trusted' / file.name
+        trusted.parent.mkdir()
+        trusted.write_bytes(file.read_bytes())
+        build = incoming_channel / 'build-metadata.txt'
+        build.write_text(build.read_text() + 'control_commit=' + 'd' * 40 + '\n' +
+            'build_fingerprint=' + channel.series_builds.fingerprint(inputs) + '\n')
+        options = dict(trusted_inputs=trusted, control_commit='d' * 40)
+        if fault == 'inputs':
+            file.write_text(json.dumps(dict(inputs, recipe_sha256='6' * 64)))
+        elif fault == 'control':
+            options['control_commit'] = 'e' * 40
     calls = Mock()
-    calls.check_output.side_effect = ["0.2_30\n", channel.PUBLIC_KEY.read_bytes() if fault != "key" else b"foreign key"]
-    calls.query_package.return_value = (("foreign-package" if fault == "identity" else channel.NAME, "0.2_30", f"opnsense/{channel.NAME}", target.identity.abi), set())
+    calls.check_output.side_effect = [channel.PUBLIC_KEY.read_bytes() if fault != "key" else b"foreign key"]
+    calls.query_package.return_value = (("foreign-package" if fault == "identity" else channel.NAME, "26.7_1", f"opnsense/{channel.NAME}", target.identity.abi), set())
     monkeypatch.setattr(channel.subprocess, "check_output", calls.check_output)
     monkeypatch.setattr(channel.releases, "query_package", calls.query_package)
     monkeypatch.setattr(channel.target_pkg, "verify_target_pkg", calls.verify_target_pkg)
@@ -393,19 +471,20 @@ def test_signer_verifies_package_and_public_key_before_signing(signed_channel, s
         (output / "packagesite.pkg").write_text("signed catalogue")
     calls.stage.side_effect = fake_catalog
     monkeypatch.setattr(channel.releases, "stage_selected_repository", calls.stage)
-    args = (signed_channel, tmp_path / "signed", "26.7", COMMIT, "b" * 40,
-            signed_channel / "upstream.json", tmp_path / "private-key", signing_target)
+    args = (incoming_channel, tmp_path / "signed", "26.7", COMMIT, COMMIT,
+            incoming_channel / "upstream.json", tmp_path / "private-key", signing_target, package_definition)
     if fault is None:
-        channel.stage(*args)
-        assert channel.validate(tmp_path / "signed", target_metadata=signing_target, trusted_upstream=signed_channel / "upstream.json")["plugin_version"] == "0.2_30"
-        calls.verify_archive.assert_called_once_with(channel.PKG, signed_channel / f"{channel.NAME}-0.2_30.pkg")
+        channel.stage(*args, **options)
+        assert channel.validate(tmp_path / "signed", target_metadata=signing_target, trusted_upstream=incoming_channel / "upstream.json")["plugin_version"] == "26.7_1"
+        calls.verify_archive.assert_called_once_with(channel.PKG, incoming_channel / f"{channel.NAME}-26.7_1.pkg")
         calls.verify_target_pkg.assert_called_once_with(target, 'pkg')
         names = [c[0] for c in calls.mock_calls]
         assert names.index("verify_target_pkg") < names.index("stage")
         assert names.index("verify_archive") < names.index("stage")
     else:
-        with pytest.raises(ValueError, match="package identity" if fault == "identity" else "signing key"):
-            channel.stage(*args)
+        error = "controller" if fault in ('inputs', 'control') else "package identity" if fault == "identity" else "signing key"
+        with pytest.raises(ValueError, match=error):
+            channel.stage(*args, **options)
         calls.stage.assert_not_called()
 
 

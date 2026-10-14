@@ -28,17 +28,35 @@ OPNsense plugins except for the fork's deliberate control-plane and
 package-identity changes.
 
 `release/bind-rp/<series>` branches are the per-OPNsense-series build sources.
-Their `.resolver-plugins/upstream.json` records immutable provenance for that
-series. This file lives only on release branches; builds extract it from the
-selected source commit. Treat a release branch as a stable, reviewed input to a
+They need no `.resolver-plugins` files. Controllers discover build inputs from
+official upstream refs and Git ancestry, then freeze their exact identities in
+the run's artifacts and published receipts. Treat a release branch as a stable, reviewed input to a
 package build; do not force-push or casually rewrite it. Each release branch
 carries a thin `.github/workflows/bind-tests.yml` caller that invokes the
 canonical read-only test workflow from `master`; new release bootstraps inherit
 it as an explicitly generated trusted caller.
+Preserve upstream ancestry by merging generated source reviews with their history;
+discovery uses that ancestry to identify the reviewed upstream baseline.
 
 The synchronizer creates `sync/bind/<series>/<upstream-prefix>-<input-hash-prefix>` and
 `sync/bootstrap/<series>/<upstream-prefix>-<input-hash-prefix>` branches when human review is necessary.
 They are generated review inputs, not places for unrelated development.
+
+HA DHCP follows the same source/control split. Its reviewed build sources live on
+`release/dhcp-interface-ha/<series>`. Its controllers use the same discovery helper
+without requiring source JSON. Package versions use the series and a plugin revision,
+starting with `26.7_1`. The package remains `os-dhcp-interface-ha`; its application
+and package policy are independent of BIND.
+
+The canonical HA suite lives in `net/dhcp-interface-ha/tests` on `master` and runs
+against every registered HA release source. HA branches carry only a thin caller
+of the master test workflow. Builds materialize the exact reviewed package and
+framework trees while keeping CI and tests from the control plane. Relevant
+master build changes and daily discovery check each registered series against its
+published build inputs; only changed series build. Merging a package
+change into a release source selects that series and exact merge commit. A manual
+master dispatch selects a registered series for recovery. HA does not invoke the
+BIND producers.
 
 ## Current distribution boundary
 
