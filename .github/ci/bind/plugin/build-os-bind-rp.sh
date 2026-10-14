@@ -137,6 +137,8 @@ fi
 set -- "$repository_root"/dns/bind/work/pkg/os-bind-rp-*.pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'package build must produce exactly one plugin archive'
 package=$1
+"$python_command" "$script_directory/../../shared/package_checksums.py" \
+    --scalar-file-checksums --pkg-command "$pkg_static" "$package"
 plugin_version=$("$pkg_static" query -F "$package" '%v')
 case "$plugin_version" in
     "$series"_[1-9]*)

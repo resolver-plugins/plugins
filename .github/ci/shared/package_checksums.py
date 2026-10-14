@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import io
+import json
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 
@@ -18,6 +22,41 @@ class PackageChecksumError(ValueError):
 CHECKSUM_PATTERN = re.compile(
     r"(?:1\$)?[0-9a-fA-F]{64}|2\$[ybndrfg8ejkmcpqxot1uwisza345h769]{103}"
 )
+
+
+def use_scalar_file_checksums(archive: Path) -> None:
+    """Preserve native digests in the scalar layout accepted by older readers.
+
+    pkg 2.3.1 drops object-valued sums whose length is not 64. Archive headers
+    already carry ownership and modes; preserve header attributes, payload and digests.
+    """
+    with tarfile.open(archive) as source:
+        if sum(member.name == '+MANIFEST' for member in source.getmembers()) != 1:
+            raise PackageChecksumError('package must contain one full manifest')
+        manifest = json.load(source.extractfile('+MANIFEST'))
+        files = manifest.get('files')
+        if not isinstance(files, dict) or not files:
+            raise PackageChecksumError('package has no file checksum map')
+        if not any(isinstance(value, dict) for value in files.values()):
+            return
+        sums = {path: value.get('sum') if isinstance(value, dict) else value
+                for path, value in files.items()}
+        if any(not path or not isinstance(value, str) or CHECKSUM_PATTERN.fullmatch(value) is None
+               for path, value in sums.items()):
+            raise PackageChecksumError('package has an invalid native file checksum')
+        manifest['files'] = sums
+        data = json.dumps(manifest, separators=(',', ':')).encode()
+        with tempfile.TemporaryDirectory(prefix='pkg-manifest-', dir=archive.parent) as temporary:
+            output = Path(temporary) / archive.name
+            with tarfile.open(output, 'w:xz') as target:
+                for member in source:
+                    if member.name == '+MANIFEST':
+                        member.size = len(data)
+                        member.pax_headers.pop('size', None)
+                        target.addfile(member, io.BytesIO(data))
+                    else:
+                        target.addfile(member, source.extractfile(member) if member.isfile() else None)
+            output.replace(archive)
 
 
 def archive_file_checksums(
@@ -58,10 +97,13 @@ def verify_archive(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pkg-command", default="pkg")
+    parser.add_argument("--scalar-file-checksums", action="store_true")
     parser.add_argument("archives", nargs="+", type=Path)
     arguments = parser.parse_args()
     try:
         for archive in arguments.archives:
+            if arguments.scalar_file_checksums:
+                use_scalar_file_checksums(archive)
             verify_archive(arguments.pkg_command, archive)
     except (PackageChecksumError, OSError, subprocess.CalledProcessError) as error:
         print(f"package checksum verification failed: {error}", file=sys.stderr)

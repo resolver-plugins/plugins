@@ -279,6 +279,15 @@ installed identity with the archive. Public native pkg qualification also checks
 the supported behavior of keeping a newer compatible upstream BIND pair.
 File checksum validation accepts SHA256 hex and BLAKE2b z-base32, as supported
 by the [minimum reader's checksum implementation](https://github.com/freebsd/pkg/blob/2.3.1/libpkg/pkg_checksum.c).
+Before sealing producer output, all three builders adapt object-valued file
+records from newer creators to the scalar checksum layout understood by the
+minimum reader. This preserves the original native digests, package metadata,
+payload bytes, archive ownership, permissions and link targets; only the full
+manifest's file-map representation changes. Scalar archives are kept byte for
+byte. The adapter is part of the recorded build recipe; signer and installation
+checks still require every checksum to be readable and correct with the selected
+minimum reader. Native creator `pkg info` may emit object-valued file records
+again, so manifest inspection reads their `sum` field without changing the archive.
 Own installed packages require complete native file checksums and a successful
 `pkg check -s`. The minimum reader can lose upstream object-valued BLAKE file
 digests while installing them. For a retained upstream pair, migration records

@@ -94,7 +94,7 @@ set -- "$ports_directory"/dns/bind-tools/work/pkg/bind-tools-"$package_version".
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind-tools package was not produced as expected'
 bind_tools_package=$1
 "$python_command" "$script_directory/../../shared/package_checksums.py" \
-    --pkg-command "$pkg_static" "$bind_tools_package"
+    --scalar-file-checksums --pkg-command "$pkg_static" "$bind_tools_package"
 "$pkg_command" add "$bind_tools_package"
 
 "$python_command" "$script_directory/../../shared/target_pkg.py" verify \
@@ -108,7 +108,7 @@ set -- "$ports_directory"/dns/bind920/work/pkg/bind920-"$package_version".pkg
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail 'bind920 package was not produced as expected'
 bind_package=$1
 "$python_command" "$script_directory/../../shared/package_checksums.py" \
-    --pkg-command "$pkg_static" "$bind_package"
+    --scalar-file-checksums --pkg-command "$pkg_static" "$bind_package"
 "$pkg_command" add "$bind_package"
 
 bind_version=$("$pkg_command" query -e '%n = bind920' '%v') || fail 'bind920 is not installed after package setup'

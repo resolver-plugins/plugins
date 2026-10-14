@@ -162,6 +162,9 @@ def read_package_manifest(package: Path, pkg_command: str) -> dict[str, object]:
     manifest = json.loads(result.stdout)
     if not isinstance(manifest, dict):
         raise ValueError(f"cannot read package manifest: {package.name}")
+    if isinstance(manifest.get("files"), dict):
+        manifest["files"] = {path: value.get("sum") if isinstance(value, dict) else value
+                             for path, value in manifest["files"].items()}
     return manifest
 
 
