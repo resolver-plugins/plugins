@@ -44,7 +44,7 @@ def series_repository(tmp_path):
         shutil.copytree(tools, output)
         tag, _commit, release = series_builds.upstream_inputs.tools_release_profile(output, series)
         return upstream_profile(series, base, tools_tag=tag, freebsd_release=release)
-    def resolve(upstream, series, architecture, output):
+    def resolve(upstream, series, architecture, output, *, tools_repository):
         profile = json.loads(upstream.read_text())
         for role in ('creator', 'reader'):
             write_resolved_target(output / f'{role}-target.json', profile, role=role,

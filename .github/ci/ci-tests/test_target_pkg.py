@@ -7,17 +7,21 @@ MODULE_PATH = CI / 'shared/target_pkg.py'
 target_pkg = load_module('target_pkg', MODULE_PATH, register=True)
 FIXTURE_ROOT = CI.parent / 'ci-local'
 
-def recipe_targets(tmp_path, series, *, zero_revision=False):
+def recipe_targets(tmp_path, series, *, zero_revision=False, dual_paths=False):
     ports = init_repository(tmp_path / 'ports')
     floor = '26.1.11' if series == '26.1' else series
     floor_version = '2.3.1_1' if series == '26.1' else '2.3.1'
-    floor_commit = commit(ports, {'ports-mgmt/pkg/Makefile':
-        'PORTNAME=pkg\nPORTVERSION=2.3.1\n' + ('PORTREVISION=1\n' if series == '26.1' else '')}, 'floor')
+    floor_files = {'ports-mgmt/pkg/Makefile':
+        'PORTNAME=pkg\nPORTVERSION=2.3.1\n' + ('PORTREVISION=1\n' if series == '26.1' else '')}
+    if dual_paths:
+        floor_files['opnsense/pkg/Makefile'] = 'PORTNAME=pkg\nDISTVERSION=7.7.7\n'
+    floor_commit = commit(ports, floor_files, 'floor')
     git(ports, 'tag', floor)
     release, creator_commit, origin, version = floor, floor_commit, 'ports-mgmt/pkg', floor_version
     if series != '26.1':
         release = f'{series}.{2 if zero_revision else 1}'
-        git(ports, 'rm', '-r', 'ports-mgmt/pkg')
+        if not dual_paths:
+            git(ports, 'rm', '-r', 'ports-mgmt/pkg')
         creator_commit = commit(ports, {'opnsense/pkg/Makefile':
             ('PORTNAME = pkg # literal\nPORTVERSION=2.5.0\nPORTREVISION=0\nPORTEPOCH=1\n'
              if zero_revision else 'PORTNAME=pkg\nDISTVERSION=2.4.0\nPORTREVISION=2\nPORTEPOCH=1\n')
@@ -29,6 +33,13 @@ def recipe_targets(tmp_path, series, *, zero_revision=False):
     profile = upstream_profile(series, tools_tag=release, freebsd_release='14.3' if series == '26.1' else '15.1')
     upstream = tmp_path / 'upstream.json'
     upstream.write_text(json.dumps(profile))
+    if dual_paths:
+        tools = init_repository(tmp_path / 'tools')
+        commit(tools, {f'config/{series}/build.conf': f"OS?= {profile['freebsd_release']}\n",
+                       f'config/{series}/ports.conf': 'ports-mgmt/pkg\n'}, 'reader origin')
+        git(tools, 'tag', floor)
+        commit(tools, {f'config/{series}/ports.conf': 'opnsense/pkg # official override\n'}, 'creator origin')
+        git(tools, 'tag', release)
     abi = 'FreeBSD:14:amd64' if series == '26.1' else 'FreeBSD:15:amd64'
     expected = {}
     for role, selected_release, selected_commit, selected_path, selected_version in [
@@ -42,18 +53,43 @@ def recipe_targets(tmp_path, series, *, zero_revision=False):
     return ports, upstream, expected
 
 
-@pytest.mark.parametrize('series,zero_revision', [('26.1', False), ('26.7', False), ('26.7', True), ('27.1', False)])
-def test_resolves_release_recipe_targets(tmp_path, monkeypatch, series, zero_revision):
-    ports, upstream, expected = recipe_targets(tmp_path, series, zero_revision=zero_revision)
+@pytest.mark.parametrize('series,zero_revision,dual_paths', [
+    ('26.1', False, False), ('26.7', False, False), ('26.7', True, False), ('27.1', False, False),
+    ('26.7', False, True),
+])
+def test_resolves_release_recipe_targets(tmp_path, monkeypatch, series, zero_revision, dual_paths):
+    ports, upstream, expected = recipe_targets(tmp_path, series, zero_revision=zero_revision, dual_paths=dual_paths)
     monkeypatch.setenv('OPNSENSE_PORTS_REPOSITORY', str(ports))
     monkeypatch.delenv('GIT_COMMAND', raising=False)
     output = tmp_path / 'targets'
+    context = []
+    if dual_paths:
+        frozen = tmp_path / 'frozen-tools'
+        git(tmp_path, 'init', '--bare', str(frozen))
+        release = expected['creator']['release']
+        git(frozen, 'fetch', '--depth=1', str(tmp_path / 'tools'), f'refs/tags/{release}:refs/tags/{release}')
+        monkeypatch.setenv('OPNSENSE_TOOLS_REPOSITORY', str(tmp_path / 'tools'))
+        commit(tmp_path / 'tools', {'config/26.7/ports.conf': 'opnsense/pkg\nports-mgmt/pkg\n'}, 'later moving creator tag')
+        git(tmp_path / 'tools', 'tag', '-f', release)
+        context = ['--tools-repository', str(frozen)]
     result = subprocess.run([sys.executable, str(MODULE_PATH), 'resolve', '--upstream', str(upstream),
-        '--series', series, '--architecture', 'x86_64', '--output-directory', str(output)],
+        '--series', series, '--architecture', 'x86_64', '--output-directory', str(output), *context],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert {role: json.loads((output / f'{role}-target.json').read_text())
             for role in ('creator', 'reader')} == expected
+
+
+@pytest.mark.parametrize('declaration', ['# no stable pkg origin\n', 'opnsense/pkg\nports-mgmt/pkg\n'])
+def test_dual_recipes_require_one_official_declared_origin(tmp_path, monkeypatch, declaration):
+    ports, upstream, expected = recipe_targets(tmp_path, '26.7', dual_paths=True)
+    tools = tmp_path / 'tools'
+    commit(tools, {'config/26.7/ports.conf': declaration}, 'invalid official declaration')
+    git(tools, 'tag', '-f', expected['creator']['release'])
+    monkeypatch.setenv('OPNSENSE_PORTS_REPOSITORY', str(ports))
+    with pytest.raises(target_pkg.TargetPackageError, match='missing or ambiguous pkg origin'):
+        target_pkg.resolve_targets(upstream, '26.7', 'x86_64', tmp_path / 'targets', tools_repository=tools)
+    assert not (tmp_path / 'targets').exists()
 
 
 @contextmanager
