@@ -53,6 +53,32 @@ Python logic in `.py` files rather than inline strings or shell heredocs.
 
 ## Local build
 
+### On-demand homelab plugin builders
+
+The BIND plugin producer and HA DHCP Interface build jobs use the dedicated
+Linux runner labelled `opnsense-dispatch`. Once an eligible job reaches its
+native build step, `.github/actions/freebsd-builder` restores and starts only
+the selected series' FreeBSD VM through `/home/runner/builderctl.py`. The guest
+must pass the startup delay, SSH readiness and sealed FreeBSD-release checks.
+The action copies the checkout into a fresh guest workspace, forwards only
+explicit build metadata, runs the existing build script and retrieves only
+that job's selected artifact directory.
+
+Cleanup runs after successful or failed builds and normally shuts down the
+guest before restoring its baseline. A runner-level job-completion hook retries
+cleanup after cancellation or an interrupted build step. The Linux runner
+remains online to receive jobs; both FreeBSD VMs remain off between builds.
+The current deployment has one runner instance, so jobs do not share a builder.
+A lost runner host or failed guest shutdown requires operational recovery;
+cleanup does not kill VM worker processes automatically.
+
+Discovery, signing, installation qualification and publication retain their
+hosted runners. Signing and publication credentials are not forwarded to the
+homelab guests. Existing source selection, sealed inputs, artifact identities
+and package publication gates remain mandatory. Changes to this transport do
+not select package rebuilds; validate them locally, without dispatching package
+or synchronization workflows.
+
 The [tools](../.github/workflows/bind-tools-release.yml) and
 [daemon](../.github/workflows/bind920-release.yml) workflows independently build
 and publish their own package. Each version-review PR runs unsigned native

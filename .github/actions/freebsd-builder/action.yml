@@ -1,0 +1,29 @@
+name: FreeBSD homelab builder
+description: Restore, start, use, and shut down a persistent FreeBSD build VM
+inputs:
+  series:
+    description: Selected OPNsense series
+    required: true
+  release:
+    description: FreeBSD release from the sealed controller profile
+    required: true
+  envs:
+    description: Explicit build metadata environment variables to forward
+    required: true
+  output:
+    description: New artifact directory to retrieve from the guest
+    required: true
+  run:
+    description: Existing POSIX shell build script
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RP_VM_SERIES: ${{ inputs.series }}
+        RP_VM_RELEASE: ${{ inputs.release }}
+        RP_VM_ENVS: ${{ inputs.envs }}
+        RP_VM_OUTPUT: ${{ inputs.output }}
+        RP_VM_SCRIPT: ${{ inputs.run }}
+      run: python3 -I "$GITHUB_ACTION_PATH/../../ci/shared/freebsd_builder.py"

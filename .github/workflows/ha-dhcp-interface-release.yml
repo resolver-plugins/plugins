@@ -135,7 +135,7 @@ jobs:
 
   build:
     needs: profile
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, opnsense-dispatch]
     timeout-minutes: 45
     outputs:
       producer_artifact_id: ${{ steps.producer.outputs.artifact-id }}
@@ -174,18 +174,16 @@ jobs:
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/creator-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role creator
           python3 .github/ci/shared/target_pkg.py field artifacts/trusted/reader-target.json "$SERIES" release --upstream artifacts/trusted/upstream.json --role reader
       - name: Build and verify in FreeBSD
-        uses: vmactions/freebsd-vm@v1
+        uses: ./.github/actions/freebsd-builder
         env:
           SERIES: ${{ needs.profile.outputs.series }}
           SOURCE_COMMIT: ${{ needs.profile.outputs.source_commit }}
           PROFILE_COMMIT: ${{ needs.profile.outputs.profile_commit }}
         with:
+          series: ${{ needs.profile.outputs.series }}
           release: ${{ needs.profile.outputs.freebsd_release }}
-          arch: x86_64
           envs: SERIES SOURCE_COMMIT PROFILE_COMMIT CONTROL_COMMIT RP_TRUSTED_DIRECTORY RP_SELECTION_SHA256 RP_TARGET_PKG_METADATA RP_READER_PKG_METADATA
-          usesh: true
-          disable-cache: true
-          copyback: true
+          output: artifacts/${{ needs.profile.outputs.series }}
           run: |
             set -eu
             export IGNORE_OSVERSION=yes

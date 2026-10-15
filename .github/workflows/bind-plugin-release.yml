@@ -146,7 +146,7 @@ jobs:
 
   producer:
     needs: [select, profile]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, opnsense-dispatch]
     timeout-minutes: 45
     permissions:
       contents: read
@@ -181,14 +181,12 @@ jobs:
             --series "$SERIES" --trusted-directory "$RP_TRUSTED_DIRECTORY" --selection-sha256 "$RP_SELECTION_SHA256" \
             --repository resolver-plugins/repository --output-directory "artifacts/$SERIES/intake"
       - name: Build or reuse only the plugin
-        uses: vmactions/freebsd-vm@v1
+        uses: ./.github/actions/freebsd-builder
         with:
+          series: ${{ needs.select.outputs.series }}
           release: ${{ needs.profile.outputs.freebsd_release }}
-          arch: x86_64
           envs: RP_TRUSTED_DIRECTORY RP_SELECTION_SHA256 SOURCE_COMMIT
-          usesh: true
-          disable-cache: true
-          copyback: true
+          output: artifacts/${{ needs.select.outputs.series }}/producer
           run: |
             set -eu
             export IGNORE_OSVERSION=yes

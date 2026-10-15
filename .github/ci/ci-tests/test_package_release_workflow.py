@@ -535,10 +535,25 @@ def needs_jobs(job):
 
 
 def vm_body(job):
-    steps = [step for step in workflow_steps(job) if 'uses: vmactions/freebsd-vm@' in step]
+    steps = [step for step in workflow_steps(job)
+             if 'uses: vmactions/freebsd-vm@' in step or 'uses: ./.github/actions/freebsd-builder' in step]
     assert len(steps) == 1
     match = re.search(r'^          run: \|\n((?: {12}[^\n]*\n|\n)*)', steps[0], re.MULTILINE)
     return steps[0], textwrap.dedent(match[1])
+
+
+@pytest.mark.parametrize('filename,producer', [('bind-plugin-release.yml', 'producer'),
+                                              ('ha-dhcp-interface-release.yml', 'build')])
+def test_homelab_build_transport_preserves_hosted_credential_boundaries(filename, producer):
+    jobs = workflow_jobs((REPOSITORY_ROOT / '.github/workflows' / filename).read_text())
+    for name, job in jobs.items():
+        if name == producer:
+            assert 'runs-on: [self-hosted, Linux, X64, opnsense-dispatch]' in job
+            assert 'uses: ./.github/actions/freebsd-builder' in job
+            assert 'RP_PKG_SIGNING_KEY' not in job and 'RP_DISTRIBUTION_APP_PRIVATE_KEY' not in job
+        else:
+            assert 'runs-on: ubuntu-24.04' in job
+            assert 'uses: ./.github/actions/freebsd-builder' not in job
 
 
 @pytest.mark.parametrize('component', ['bind_runtime', 'bind_plugin'])
