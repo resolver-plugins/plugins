@@ -1,10 +1,7 @@
 # Phase 1: Client series upgrade
 
-Status: plan approved 2026-10-19; stage 1.0 handoff written, not built. Stage 1.1's
-handoff and its drafted interface layer (uncommitted, on the release-based branch
-`ci-rebuild/bind-worker-26.7` in the main checkout) predate the move to `master`
-development; the handoff is rewritten for `master` after 1.0, and the draft is
-redone there.
+Status: plan approved 2026-10-19. Stage 1.0 built. Stage 1.1 handoff written for
+`master` and approved, not built.
 
 Each plugin carries its own clients across an OPNsense series or FreeBSD base
 boundary (design, "Client series upgrade"). BIND has a working path whose worker
@@ -111,28 +108,31 @@ Behavior:       On a pending reconcile, bindRepositoryReconcile.py installs the
                 all enabled repositories, and restarts BIND when the transaction
                 changes bind920.
 Contracts:      Worker acceptance and managed repository configuration (above);
-                the provider writes the content without priority and still
-                recognizes the priority shape as managed; pending marker, log,
-                lock and retry interface unchanged.
+                the os-bind-rp candidate is still read only from the
+                resolver-plugins repository after its forced refresh; the
+                refusal of an installed official os-bind stays; the provider
+                writes the content without priority and still recognizes the
+                priority shape as managed; pending marker, log, lock and retry
+                interface unchanged.
 External inputs: output of opnsense-version -a, pkg config ABI, pkg query and
                 rquery, and the pkg dry-run plan; the repository configuration
                 file. Keep the existing checks on these; add none.
-Files:          (on master after 1.0)
-                dns/bind/src/opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py
-                dns/bind/pkg-descr (one changelog line)
+Files:          dns/bind/src/opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py
                 dns/bind/src/opnsense/scripts/firmware/repos/ResolverPlugins.sh
+                dns/bind/pkg-descr (one line under the 1.36 changelog section)
 Done when:      The diff shows: no candidate lookup for bind920 or bind-tools;
-                the install and dry run no longer restrict to the
-                resolver-plugins repository; the dry-run check accepts any
-                additions and upgrades, refuses removals and downgrades, and
-                requires the os-bind-rp target identity; BIND restarts only when
-                bind920 changed; the marker clears only after the installed
-                os-bind-rp matches; the worker accepts the configuration with or
-                without the priority line; the provider writes it without, and
-                treats an existing priority-20 file at the target URL as needing
-                a rewrite. The worker is shorter than before.
-Out of scope:   Makefile version (set by the pipeline), the other hooks, tests
-                under dns/bind/tests, the release branches, HA.
+                the install and dry run no longer pass -r resolver-plugins; the
+                dry-run check accepts any additions and upgrades, refuses
+                removals and downgrades, and requires the os-bind-rp target
+                identity; BIND restarts only when bind920 changed; the marker
+                clears only after the installed os-bind-rp matches; the worker
+                accepts the configuration with or without the priority line;
+                the provider writes it without, and rewrites an existing
+                priority-20 file at the target URL, which like every rewrite
+                sets the pending marker (the worker then finds os-bind-rp
+                current and clears it). The worker is shorter than before.
+Out of scope:   Makefile version (set by the pipeline), the other hooks,
+                dns/bind/tests, the release branches, HA.
 Review:         per layer
 Open questions: none
 ```

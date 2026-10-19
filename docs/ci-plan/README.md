@@ -4,7 +4,7 @@ Builds the [design](../ci-rebuild-design.md) for the
 [specification](../ci-rebuild-spec.md). Planned with `plan-in-phases`, built with
 `implement-in-phases`.
 
-Status: design and plan approved 2026-10-19. Ready for implementation; stage 1.0
+Status: design and plan approved 2026-10-19. Stage 1.0 is built; stage 1.1
 is next.
 
 ## Rules for every stage
@@ -24,7 +24,7 @@ The specification's "Simplicity and limits", "Failed jobs stay failed" and
 
 | # | Phase | Delivers | Needs | Build status |
 | --- | --- | --- | --- | --- |
-| 1 | [Client series upgrade](01-client-series-upgrade.md) | `master` caught up; BIND worker and fresh install on native dependency resolution; HA upgrade hooks | none | not started (an old 1.1 draft is superseded) |
+| 1 | [Client series upgrade](01-client-series-upgrade.md) | `master` caught up; BIND worker and fresh install on native dependency resolution; HA upgrade hooks | none | in progress: 1.0 built |
 | 2 | [Build one target](02-build-one-target.md) | Entries with a production request; `prepare`, `build`, `qualify` | none | not started |
 | 3 | [Publication](03-publication.md) | `publish`, `sync-source` | 2 | not started |
 | 4 | [Index and retention](04-index-and-retention.md) | `repository-index.yml` called after `publish` | 3 | not started |
