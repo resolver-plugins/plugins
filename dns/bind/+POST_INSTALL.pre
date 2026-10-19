@@ -1,96 +1,148 @@
-os_bind_rp_repository_config=${OS_BIND_RP_REPOSITORY_CONFIG:-/usr/local/etc/pkg/repos/resolver-plugins.conf}
-os_bind_rp_repository_url='https://resolver-plugins.github.io/repository/pkg/${ABI}/latest'
+set -eu
 
-os_bind_rp_repository_warning()
-{
-    printf '%s\n' \
-        "WARNING: resolver-plugins.conf was not changed; manual migration: set its URL to ${os_bind_rp_repository_url} after reviewing the custom repository configuration." >&2
-}
+BIND_PACKAGE_NAMED_RC=${BIND_PACKAGE_NAMED_RC:-/usr/local/etc/rc.d/named}
+BIND_PACKAGE_START=${BIND_PACKAGE_START:-/usr/local/opnsense/scripts/OPNsense/Bind/bindStart.sh}
+BIND_PACKAGE_ZONE_HELPER=${BIND_PACKAGE_ZONE_HELPER:-/usr/local/opnsense/scripts/OPNsense/Bind/bindPackageZones.py}
+BIND_PACKAGE_SNAPSHOT_PARENT=${BIND_PACKAGE_SNAPSHOT_PARENT:-/var/cache/bind}
+BIND_PACKAGE_MKTEMP=${BIND_PACKAGE_MKTEMP:-mktemp}
+bind_package_was_running=no
+bind_package_snapshot_dir=
+bind_package_zones_restored=yes
 
-os_bind_rp_write_repository()
+bind_package_probe()
 {
-    os_bind_rp_write_url=$1
-    printf '%s\n' 'resolver-plugins: {'
-    printf '  url: "%s",\n' "${os_bind_rp_write_url}"
-    printf '%s\n' '  mirror_type: "none",'
-    printf '%s\n' '  signature_type: "pubkey",'
-    printf '%s\n' '  pubkey: "/usr/local/etc/pkg/keys/resolver-plugins.pub",'
-    printf '%s\n' '  enabled: yes'
-    printf '%s\n' '}'
-}
-
-os_bind_rp_migrate_repository()
-{
-    if [ -L "${os_bind_rp_repository_config}" ] || \
-        [ ! -f "${os_bind_rp_repository_config}" ]
+    if "${BIND_PACKAGE_NAMED_RC}" status >/dev/null 2>&1
     then
-        os_bind_rp_repository_warning
-        return 0
+        bind_package_named_status=0
+    else
+        bind_package_named_status=$?
     fi
-
-    case "${os_bind_rp_repository_config}" in
-        */*)
-            os_bind_rp_repository_directory=${os_bind_rp_repository_config%/*}
-            os_bind_rp_repository_name=${os_bind_rp_repository_config##*/}
+    case "${bind_package_named_status}" in
+        0|1)
+            return 0
             ;;
         *)
-            os_bind_rp_repository_directory=.
-            os_bind_rp_repository_name=${os_bind_rp_repository_config}
+            return "${bind_package_named_status}"
             ;;
     esac
-    if os_bind_rp_repository_temporary=$(mktemp \
-        "${os_bind_rp_repository_directory}/.${os_bind_rp_repository_name}.XXXXXX")
+}
+
+bind_package_discard_snapshot()
+{
+    [ -n "${bind_package_snapshot_dir}" ] || return 0
+    if "${BIND_PACKAGE_ZONE_HELPER}" discard "${bind_package_snapshot_dir}"
+    then
+        bind_package_snapshot_dir=
+        return 0
+    fi
+    bind_package_discard_status=$?
+    echo "BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+    return "${bind_package_discard_status}"
+}
+
+bind_package_restore()
+{
+    [ "${bind_package_was_running}" = yes ] || return 0
+    if [ "${bind_package_zones_restored}" = no ]
+    then
+        if "${BIND_PACKAGE_ZONE_HELPER}" restore "${bind_package_snapshot_dir}"
+        then
+            bind_package_zones_restored=yes
+        else
+            bind_package_restore_status=$?
+            echo "BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+            return "${bind_package_restore_status}"
+        fi
+    fi
+    if bind_package_probe
     then
         :
     else
-        os_bind_rp_repository_warning
-        return 0
+        return $?
     fi
-
-    os_bind_rp_write_repository "${os_bind_rp_repository_url}" \
-        > "${os_bind_rp_repository_temporary}"
-    if cmp "${os_bind_rp_repository_config}" \
-        "${os_bind_rp_repository_temporary}" >/dev/null 2>&1
+    if [ "${bind_package_named_status}" -eq 0 ]
     then
-        rm -f "${os_bind_rp_repository_temporary}"
-        return 0
+        bind_package_was_running=no
+        bind_package_discard_snapshot
+        return $?
     fi
 
-    os_bind_rp_repository_legacy=no
-    for os_bind_rp_repository_series in 26.1 26.7
-    do
-        os_bind_rp_write_repository \
-            "https://github.com/resolver-plugins/repository/releases/download/pkg-${os_bind_rp_repository_series}" \
-            > "${os_bind_rp_repository_temporary}"
-        if cmp "${os_bind_rp_repository_config}" \
-            "${os_bind_rp_repository_temporary}" >/dev/null 2>&1
+    if "${BIND_PACKAGE_START}"
+    then
+        bind_package_start_status=0
+    else
+        bind_package_start_status=$?
+    fi
+    if bind_package_probe
+    then
+        bind_package_probe_status=0
+        if [ "${bind_package_named_status}" -eq 0 ]
         then
-            os_bind_rp_repository_legacy=yes
-            break
+            bind_package_was_running=no
         fi
-    done
-
-    if [ "${os_bind_rp_repository_legacy}" != yes ]
-    then
-        rm -f "${os_bind_rp_repository_temporary}"
-        os_bind_rp_repository_warning
-        return 0
+    else
+        bind_package_probe_status=$?
     fi
-
-    if cp -p "${os_bind_rp_repository_config}" \
-        "${os_bind_rp_repository_temporary}" && \
-        os_bind_rp_write_repository "${os_bind_rp_repository_url}" \
-            > "${os_bind_rp_repository_temporary}" && \
-        mv -f "${os_bind_rp_repository_temporary}" \
-            "${os_bind_rp_repository_config}"
+    if [ "${bind_package_start_status}" -ne 0 ]
     then
-        os_bind_rp_repository_temporary=
-        return 0
+        if [ "${bind_package_was_running}" = no ]
+        then
+            bind_package_discard_snapshot || true
+        fi
+        return "${bind_package_start_status}"
     fi
-
-    rm -f "${os_bind_rp_repository_temporary}"
-    os_bind_rp_repository_warning
-    return 0
+    if [ "${bind_package_probe_status}" -ne 0 ]
+    then
+        return "${bind_package_probe_status}"
+    fi
+    [ "${bind_package_named_status}" -eq 0 ] || return 1
+    bind_package_discard_snapshot
+    return $?
 }
 
-os_bind_rp_migrate_repository
+bind_package_cleanup()
+{
+    bind_package_status=$?
+    trap - EXIT HUP INT TERM
+    set +e
+    bind_package_restore
+    bind_package_restore_status=$?
+    if [ "${bind_package_status}" -eq 0 ] && [ "${bind_package_restore_status}" -ne 0 ]
+    then
+        bind_package_status=${bind_package_restore_status}
+    fi
+    exit "${bind_package_status}"
+}
+
+trap bind_package_cleanup EXIT
+trap 'exit 128' HUP INT TERM
+
+if bind_package_probe
+then
+    :
+else
+    exit $?
+fi
+case "${bind_package_named_status}" in
+    0)
+        bind_package_was_running=yes
+        # First migrations without DHCP watcher state have no cache parent yet.
+        (umask 022; mkdir -p "${BIND_PACKAGE_SNAPSHOT_PARENT}")
+        bind_package_snapshot_dir=$("${BIND_PACKAGE_MKTEMP}" -d \
+            "${BIND_PACKAGE_SNAPSHOT_PARENT%/}/os-bind-rp-package.XXXXXX")
+        if "${BIND_PACKAGE_ZONE_HELPER}" prepare "${bind_package_snapshot_dir}"
+        then
+            bind_package_zones_restored=no
+        else
+            bind_package_prepare_status=$?
+            if ! rmdir "${bind_package_snapshot_dir}" 2>/dev/null
+            then
+                echo "incomplete BIND zone backup retained at ${bind_package_snapshot_dir}" >&2
+            fi
+            bind_package_snapshot_dir=
+            exit "${bind_package_prepare_status}"
+        fi
+        ;;
+    1)
+        ;;
+esac
