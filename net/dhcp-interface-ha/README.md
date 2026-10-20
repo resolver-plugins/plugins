@@ -247,3 +247,5 @@ Unit tests do not prove Volt rendering, package boot or external first-frame beh
 Native CARP split brain remains possible during a partition. The plugin adds
 no witness or second election. Session preservation requires a stable public
 lease and working pfsync. These limitations also require pair testing.
+
+<!-- Self-hosted runner candidate test; do not merge. -->
