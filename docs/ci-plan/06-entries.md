@@ -1,6 +1,6 @@
 # Phase 06: Entries
 
-Status: planned
+Status: built, awaiting user review (stages done: 06.1–06.3)
 Before: the lifecycle and index work (phases 02–05); both entry workflows are
 declared with stub bodies (phase 01).
 After: each plugin's entry runs daily discovery, accepts production and
@@ -33,9 +33,9 @@ stage edits both files the same way. Status context:
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 06.1 | PR status | haiku | low | first | planned |
-| 06.2 | Discovery | sonnet | medium | after 06.1 | planned |
-| 06.3 | Candidate and promotion requests | sonnet | medium | after 06.2 | planned |
+| 06.1 | PR status | haiku | low | first | done |
+| 06.2 | Discovery | sonnet | medium | after 06.1 | done |
+| 06.3 | Candidate and promotion requests | sonnet | medium | after 06.2 | done |
 
 ## 06.1 PR status
 
@@ -155,3 +155,8 @@ Out of scope:    Branch rules requiring the status (phase 09).
   to release branches (2026-10-19).
 - `gh pr view --json files` returns at most 100 files; a PR changing more files
   than that may be misjudged. Accepted as rare (2026-10-20).
+- Built 2026-10-20 in sequence by delegated agents (haiku for 06.1, sonnet for
+  06.2 and 06.3). The first 06.2 build stopped at 31 lines; the user chose a
+  separate active-series step. The phase review corrected discovery to read the
+  build record from `resolver-plugins/repository` instead of this repository
+  (2026-10-20).
