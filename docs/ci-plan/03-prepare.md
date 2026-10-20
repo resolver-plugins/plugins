@@ -260,10 +260,10 @@ Out of scope:    Downloading for publish (02.1 already declares run-id).
 
 ## Notes
 
-- Design correction, pending user confirmation: the design skips production when
-  the release branch head equals the record's `source_base`. After `sync-source`
-  the head is the record's `source_commit`, so that rule would rebuild every
-  day; the skip accepts either (2026-10-20).
+- Production skips when the release branch head equals the record's
+  `source_commit` (the normal state after `sync-source`) or `source_base` (a
+  sync that did not land), over the design's `source_base` alone, which would
+  rebuild every day after a successful sync (user decision, 2026-10-20).
 - The carry and the version change share one commit; the design's order (merge,
   carry, version commit) is kept (2026-10-20).
 - Conflicts confined to the `PLUGIN_VERSION` and `PLUGIN_REVISION` lines of the
