@@ -1,8 +1,8 @@
-# Phase 06: Index and retention
+# Phase 05: Index and retention
 
 Status: planned
-Before: publication works (phase 05); `repository-index.yml` is declared with
-stub bodies (phase 02), and its stage job's repository step is filled (04.1).
+Before: publication works (phase 04); `repository-index.yml` is declared with
+stub bodies (phase 01), and its stage job's repository step is filled (03.1).
 After: after a publication, the series feed is rebuilt from the current
 Releases it serves, signed, published to Pages in one commit and read back, and
 the release two versions back is removed.
@@ -10,12 +10,16 @@ the release two versions back is removed.
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines. Commit once per phase with
+inline or CI script exceeds 30 physical lines. Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design, "Index", "Data formats" (channel.json) and "Frozen,
 never written by the new CI"; spec, "Index and retention". Job and step names in
-[02-ci-structure.md](02-ci-structure.md#index-interface). The live feed's
+[01-ci-structure.md](01-ci-structure.md#index-interface). The live feed's
 `channel.json` is schema 2: `components.<name>` objects with `current_tag` and
 `packages` as an object of archive name to hash; schema 4 writes `packages` as a
 list. The 26.7 feed lists `bind_plugin`, `bind_runtime` (frozen,
@@ -27,12 +31,12 @@ base64 private key.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 06.1 | Select the feed contents | sonnet | high | first | planned |
-| 06.2 | Stage and sign | sonnet | medium | after 06.1 | planned |
-| 06.3 | Publish to Pages and read back | sonnet | medium | after 06.2 | planned |
-| 06.4 | Retention | sonnet | medium | after 06.3 | planned |
+| 05.1 | Select the feed contents | sonnet | high | first | planned |
+| 05.2 | Stage and sign | sonnet | medium | after 05.1 | planned |
+| 05.3 | Publish to Pages and read back | sonnet | medium | after 05.2 | planned |
+| 05.4 | Retention | sonnet | medium | after 05.3 | planned |
 
-## 06.1 Select
+## 05.1 Select
 
 ```
 Goal:            The select job writes the new channel.json from the feed's
@@ -70,10 +74,10 @@ Work:            select:
 External inputs: the existing channel.json, current Releases and records.
 Done when:       Frozen components keep their current_tag; nothing is written.
                  If the select body needs more than 30 lines, stop and ask.
-Out of scope:    Signing (06.2).
+Out of scope:    Signing (05.2).
 ```
 
-## 06.2 Stage and sign
+## 05.2 Stage and sign
 
 ```
 Goal:            The stage job downloads the archives, signs the catalogue in a
@@ -92,7 +96,7 @@ Work:            Download:
                  2. cp docs/package-repository/resolver-plugins.pub feed/.
                  VM (sh, set -eu):
                  3. Configure the OPNsense repository from .opnsense-pkg as in
-                    phase 04; pkg-static install -fy -r OPNsense pkg.
+                    phase 03; pkg-static install -fy -r OPNsense pkg.
                  4. umask 077; key=$(mktemp); trap removing it; printf '%s'
                     "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"; pkg repo feed
                     "$key"; pkg -v > .pkg-version (outside feed/).
@@ -103,10 +107,10 @@ Work:            Download:
 External inputs: the Release archives (pkg repo reads their manifests).
 Done when:       The key appears only in this VM step and is removed on exit;
                  the pkg version is in the job summary.
-Out of scope:    Pages (06.3).
+Out of scope:    Pages (05.3).
 ```
 
-## 06.3 Publish and read back
+## 05.3 Publish and read back
 
 ```
 Goal:            The publish job replaces the feed directory on gh-pages in one
@@ -135,7 +139,7 @@ Done when:       Only $FEED changes on gh-pages; readback compares every staged
 Out of scope:    Frozen feeds and other series' directories.
 ```
 
-## 06.4 Retention
+## 05.4 Retention
 
 ```
 Goal:            After a successful readback, retain deletes the release two

@@ -1,7 +1,7 @@
-# Phase 05: Publication
+# Phase 04: Publication
 
 Status: planned
-Before: a request produces the `qualified-` artifact (phase 04); publish and
+Before: a request produces the `qualified-` artifact (phase 03); publish and
 sync-source are stubs.
 After: production and promotion publish the versioned and current
 distribution Releases and land the prepared source on the release branch with
@@ -11,24 +11,28 @@ stub.
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines. Commit once per phase with
+inline or CI script exceeds 30 physical lines. Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design, "Publication" and "`sync-source`"; spec, "Signing
 and publication", "Source and distribution stay in step" and "Failed jobs stay
 failed" ("GitHub's rerun must work"). Step ids and env in
-[02-ci-structure.md](02-ci-structure.md#lifecycle-interface). The qualified
+[01-ci-structure.md](01-ci-structure.md#lifecycle-interface). The qualified
 artifact holds `<name>-<version>.pkg`, `build-record.json` and `source.bundle`
-(phase 04).
+(phase 03).
 
 ## Stages
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 05.1 | Versioned and current distribution Releases | sonnet | high | first | planned |
-| 05.2 | Source sync, tag and source Release | sonnet | medium | after 05.1 | planned |
+| 04.1 | Versioned and current distribution Releases | sonnet | high | first | planned |
+| 04.2 | Source sync, tag and source Release | sonnet | medium | after 04.1 | planned |
 
-## 05.1 Distribution Releases
+## 04.1 Distribution Releases
 
 ```
 Goal:            Steps `versioned` and `current` publish the versioned Release
@@ -79,10 +83,10 @@ Done when:       Draft, upload, publish order; leftover draft replaced;
                  published tag of the same source done and of another source
                  failing; current created, advanced, or left; no signing; no
                  Release listing.
-Out of scope:    The index (phase 06).
+Out of scope:    The index (phase 05).
 ```
 
-## 05.2 Source sync
+## 04.2 Source sync
 
 ```
 Goal:            The sync-source job fast-forwards the release branch to the
@@ -107,7 +111,7 @@ Work:            Push:
                  3. git push origin "$PREPARED_SHA:refs/tags/<tag>" (a no-op
                     when it exists there; rejected if it points elsewhere).
                  Source Release:
-                 4. The versioned pattern of 05.1 steps 1, 3 and 4 against the
+                 4. The versioned pattern of 04.1 steps 1, 3 and 4 against the
                     checked-out repository: done when published, delete a leftover
                     draft, create as draft with --verify-tag, then publish.
 External inputs: the release branch head and the existing tag and Release.

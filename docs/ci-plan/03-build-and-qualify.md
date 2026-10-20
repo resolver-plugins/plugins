@@ -1,7 +1,7 @@
-# Phase 04: Build and qualify
+# Phase 03: Build and qualify
 
 Status: planned
-Before: `prepare` works (phase 03); build and qualify are stubs.
+Before: `prepare` works (phase 02); build and qualify are stubs.
 After: a production or candidate request produces the
 `qualified-<component>-<series>-<source_sha>` artifact: the archive built in a
 FreeBSD VM of the series' release, its build record, and the source bundle,
@@ -10,13 +10,17 @@ installed and checked on a clean OPNsense. Publication is still a stub.
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines. Commit once per phase with
+inline or CI script exceeds 30 physical lines. Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design, "Lifecycle", "Artifacts between jobs", "Data
 formats", "Upstream discovery" (last bullet), and spec, "Signing and
 publication" (qualification) ([design](../ci-rebuild-design.md)); step names
-and env in [02-ci-structure.md](02-ci-structure.md#lifecycle-interface).
+and env in [01-ci-structure.md](01-ci-structure.md#lifecycle-interface).
 
 Facts the stages rely on (from the plugins framework in `Mk/`):
 `make package` writes `<source_directory>/work/pkg/<name>-<version>.pkg`;
@@ -34,11 +38,11 @@ OPNsense/WebGui`.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 04.1 | OPNsense repository configuration step | sonnet | low | first | planned |
-| 04.2 | Build job | sonnet | medium | after 04.1 | planned |
-| 04.3 | Qualify job | sonnet | medium | after 04.2 | planned |
+| 03.1 | OPNsense repository configuration step | sonnet | low | first | planned |
+| 03.2 | Build job | sonnet | medium | after 03.1 | planned |
+| 03.3 | Qualify job | sonnet | medium | after 03.2 | planned |
 
-## 04.1 OPNsense repository configuration
+## 03.1 OPNsense repository configuration
 
 ```
 Goal:            The three "Configure the OPNsense package repository" steps
@@ -75,14 +79,14 @@ Done when:       Three identical bodies of about ten lines, no hard-coded series
 Out of scope:    The VM steps.
 ```
 
-## 04.2 Build job
+## 03.2 Build job
 
 ```
 Goal:            The build job builds the prepared source with make package in
                  a FreeBSD VM of the series and uploads the archive with its
                  build record.
 Context:         Design, "Lifecycle": build runs make package from the prepared
-                 source, holds no secrets. Phase 02 declares the steps; 04.1
+                 source, holds no secrets. Phase 01 declares the steps; 03.1
                  fills the repository step. The source bundle has HEAD with
                  prerequisite source_base, which the full checkout contains.
 Contracts:       build-record.json fields, all strings: package, origin, version,
@@ -109,10 +113,10 @@ Work:            1. Check out: git fetch -q "$RUNNER_TEMP/source/source.bundle"
 External inputs: the OPNsense repository (pkg verifies it).
 Done when:       One VM step, no secrets, no checksum rewrite, every record
                  field filled, each body under 30 lines.
-Out of scope:    Qualification (04.3).
+Out of scope:    Qualification (03.3).
 ```
 
-## 04.3 Qualify job
+## 03.3 Qualify job
 
 ```
 Goal:            The qualify job installs the archive with its dependencies on a
@@ -130,7 +134,7 @@ Work:            1. Expected identity: echo "EXPECTED=$(jq -r '[.package,
                     .origin, .version, .abi] | join("|")'
                     dist/build-record.json)" >> "$GITHUB_ENV".
                  2. VM run (sh, set -eu): configure the OPNsense repository as in
-                    04.2; install pkg and opnsense; initialize core as listed at
+                    03.2; install pkg and opnsense; initialize core as listed at
                     the top of this file; pkg repo dist; write
                     /usr/local/etc/pkg/repos/candidate.conf with url
                     file://$PWD/dist and signature_type none; pkg update -f;

@@ -1,19 +1,23 @@
-# Phase 02: CI structure
+# Phase 01: CI structure
 
 Status: planned
 Before: `.github/workflows/` holds the old CI, including the old
 `bind-plugin-release.yml`, `ha-dhcp-interface-release.yml` and
-`repository-index.yml`. Phase 01 is built.
+`repository-index.yml`; none of the new CI exists yet.
 After: the four workflows of the design exist with their final triggers,
 inputs, outputs, job graph, conditions, concurrency, permissions, credential
 steps and artifact names. Every `run:` body is a stub that fails, so nothing can
-build or publish; phases 03–07 replace the stubs. The other old workflows stay
+build or publish; phases 02–06 replace the stubs. The other old workflows stay
 until phase 08.
 
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines. Commit once per phase with
+inline or CI script exceeds 30 physical lines. Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design sections "Components", "Entry inputs", "Entry jobs",
@@ -43,11 +47,11 @@ so steps run with `-eo pipefail`.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 02.1 | `plugin-target.yml` declared | sonnet | high | first, parallel with 02.2 and 02.3 | planned |
-| 02.2 | `repository-index.yml` declared | sonnet | medium | parallel with 02.1 and 02.3 | planned |
-| 02.3 | Both entry workflows declared | sonnet | medium | parallel with 02.1 and 02.2 | planned |
+| 01.1 | `plugin-target.yml` declared | sonnet | high | first, parallel with 01.2 and 01.3 | planned |
+| 01.2 | `repository-index.yml` declared | sonnet | medium | parallel with 01.1 and 01.3 | planned |
+| 01.3 | Both entry workflows declared | sonnet | medium | parallel with 01.1 and 01.2 | planned |
 
-## 02.1 Lifecycle workflow
+## 01.1 Lifecycle workflow
 
 ```
 Goal:            .github/workflows/plugin-target.yml exists as the reusable
@@ -105,23 +109,23 @@ Outputs:
 Steps (`id`: name, condition, extra env, filled by):
 
 1. `actions/checkout@v6` with `fetch-depth: 0`, if `inputs.purpose != 'promote'`.
-2. `active`: "Check the active series" — 03.1.
-3. `environment`: "Resolve the upstream environment", if purpose != promote — 03.1.
-4. `current`: "Read the current Release", env `CURRENT_TAG: ${{ inputs.current_tag }}` — 03.2.
+2. `active`: "Check the active series" — 02.1.
+3. `environment`: "Resolve the upstream environment", if purpose != promote — 02.1.
+4. `current`: "Read the current Release", env `CURRENT_TAG: ${{ inputs.current_tag }}` — 02.2.
 5. `candidate`: "Find the candidate", if purpose == promote, env
    `NAME: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}`,
-   `CURRENT_VERSION: ${{ steps.current.outputs.current_version }}` — 03.4.
-6. `base`: "Select the release branch base", if purpose != promote — 03.3.
+   `CURRENT_VERSION: ${{ steps.current.outputs.current_version }}` — 02.4.
+6. `base`: "Select the release branch base", if purpose != promote — 02.3.
 7. `merge`: "Merge upstream stable/${{ inputs.series }}", if
-   `inputs.purpose != 'promote' && (steps.base.outputs.new_series == 'true' || (inputs.follow_upstream && steps.environment.outputs.upstream_package_commit != steps.current.outputs.recorded_upstream))` — 03.3.
-8. `carry`: "Carry master changes", if purpose != promote — 03.3.
+   `inputs.purpose != 'promote' && (steps.base.outputs.new_series == 'true' || (inputs.follow_upstream && steps.environment.outputs.upstream_package_commit != steps.current.outputs.recorded_upstream))` — 02.3.
+8. `carry`: "Carry master changes", if purpose != promote — 02.3.
 9. `decide`: "Decide the operation", if purpose != promote, env `CARRIED`
    (carry.carried), `SOURCE_BASE` (base.source_base), `RECORDED_BASE`,
    `RECORDED_COMMIT` (current.recorded_base, current.recorded_commit),
-   `CURRENT_VERSION` (current.current_version) — 03.3.
+   `CURRENT_VERSION` (current.current_version) — 02.3.
 10. `version`: "Set the version and bundle the prepared source", if
     `steps.decide.outputs.operation == 'build'`, env `VERSION`
-    (current.version), `SOURCE_BASE` — 03.3.
+    (current.version), `SOURCE_BASE` — 02.3.
 11. `actions/upload-artifact@v4`, if operation == build: name
     `source-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}`,
     path `${{ runner.temp }}/source/source.bundle`, `retention-days: 1`.
@@ -135,16 +139,16 @@ Steps:
 1. `actions/checkout@v6` with `fetch-depth: 0`, `persist-credentials: false`.
 2. `actions/download-artifact@v4`: name `source-<component>-<series>-<run_id>`
    as above, path `${{ runner.temp }}/source`.
-3. "Check out the prepared source" — 04.2.
-4. "Configure the OPNsense package repository" — 04.1.
+3. "Check out the prepared source" — 03.2.
+4. "Configure the OPNsense package repository" — 03.1.
 5. "Build in FreeBSD ${{ needs.prepare.outputs.freebsd_release }}":
    `vmactions/freebsd-vm@v1` with `release` (prepare.freebsd_release),
    `arch: x86_64`, `usesh: true`, `copyback: true`, `disable-cache: true`,
-   `envs: SERIES SOURCE_DIRECTORY PREPARED_SHA`, `run:` stub — 04.2.
+   `envs: SERIES SOURCE_DIRECTORY PREPARED_SHA`, `run:` stub — 03.2.
 6. "Write the build record", env `ABI`, `FREEBSD_RELEASE`, `SOURCE_BASE`,
    `MASTER_COMMIT` (inputs.source_sha), `TOOLS_TAG`, `PLUGINS_COMMIT`,
    `UPSTREAM_PACKAGE_COMMIT`, `PREVIOUS_TAG` from prepare outputs, `RUN_URL`
-   `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}` — 04.2.
+   `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}` — 03.2.
 7. `actions/upload-artifact@v4`: name
    `build-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}`,
    paths `.build/*.pkg` and `.build/build-record.json`, `retention-days: 1`.
@@ -155,11 +159,11 @@ Steps:
 
 1. Download the `build-…` artifact to `dist`.
 2. Download the `source-…` artifact to `dist`.
-3. "Configure the OPNsense package repository" — 04.1.
-4. "Read the expected identity" — 04.3.
+3. "Configure the OPNsense package repository" — 03.1.
+4. "Read the expected identity" — 03.3.
 5. "Install on a clean FreeBSD ${{ needs.prepare.outputs.freebsd_release }}":
    `vmactions/freebsd-vm@v1`, same `with` as build but no `copyback`,
-   `envs: EXPECTED` — 04.3.
+   `envs: EXPECTED` — 03.3.
 6. `actions/upload-artifact@v4`: name
    `qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}`,
    paths `dist/*.pkg`, `dist/build-record.json`, `dist/source.bundle`,
@@ -187,8 +191,8 @@ resolver-plugins/repository`, `SERIES`, `VERSION`, `PREPARED_SHA`,
    ${{ vars.RP_DISTRIBUTION_APP_ID }}`, `private-key:
    ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}`, `owner: resolver-plugins`,
    `repositories: repository`, `permission-contents: write`.
-3. `versioned`: "Publish the versioned Release", env `GH_TOKEN` (token) — 05.1.
-4. `current`: "Advance the current Release", env `GH_TOKEN` (token) — 05.1.
+3. `versioned`: "Publish the versioned Release", env `GH_TOKEN` (token) — 04.1.
+4. `current`: "Advance the current Release", env `GH_TOKEN` (token) — 04.1.
 
 **Job `sync-source`** — name `Sync ${{ inputs.component }} ${{ needs.prepare.outputs.version }} source`,
 `needs: [prepare, publish]`,
@@ -203,8 +207,8 @@ resolver-plugins/repository`, `SERIES`, `VERSION`, `PREPARED_SHA`,
 2. `actions/checkout@v6` with `fetch-depth: 0` and that token.
 3. Download the `qualified-…` artifact to `${{ runner.temp }}/dist` with the
    same `run-id` and `github-token`.
-4. "Push the prepared commit and its tag" — 05.2.
-5. "Create the source Release", env `GH_TOKEN` (token) — 05.2.
+4. "Push the prepared commit and its tag" — 04.2.
+5. "Create the source Release", env `GH_TOKEN` (token) — 04.2.
 
 **Job `index`** — `needs: [prepare, publish]`,
 `if: ${{ !cancelled() && needs.publish.outputs.published == 'true' }}`,
@@ -214,7 +218,7 @@ and `queue: max` (as the existing index), so no publication's index is dropped,
 (prepare.abi), `component`, `current_tag` (publish.current_tag), `source_tag`
 (the input template); secrets: the three secrets passed by name.
 
-## 02.2 Index workflow
+## 01.2 Index workflow
 
 ```
 Goal:            .github/workflows/repository-index.yml is replaced by the
@@ -222,7 +226,7 @@ Goal:            .github/workflows/repository-index.yml is replaced by the
                  stubbed step bodies.
 Context:         Design, "Index": jobs select, stage (FreeBSD VM), publish,
                  readback, retain; the signing key only in stage. The caller
-                 holds the concurrency group package-repository-index (02.1).
+                 holds the concurrency group package-repository-index (01.1).
                  The old file is replaced in place.
 Contracts:       See "Index interface" below.
 Files:           .github/workflows/repository-index.yml (replaced)
@@ -245,9 +249,9 @@ Secrets (required): `RP_PKG_SIGNING_KEY`, `RP_DISTRIBUTION_APP_PRIVATE_KEY`,
 **Job `select`** — `timeout-minutes: 10`; outputs `changed`
 (steps.select), `freebsd_release`, `core_commit` (steps.environment); env
 `GH_TOKEN: ${{ github.token }}`, `SERIES`, `ABI`, `COMPONENT`, `CURRENT_TAG`.
-Steps: `select` "Select the current Releases the feed serves" — 06.1;
+Steps: `select` "Select the current Releases the feed serves" — 05.1;
 `environment` "Read the build environment from the published record", if
-`steps.select.outputs.changed == 'true'` — 06.1; upload-artifact (if changed)
+`steps.select.outputs.changed == 'true'` — 05.1; upload-artifact (if changed)
 name `channel-${{ inputs.series }}-${{ github.run_id }}`, path
 `${{ runner.temp }}/channel/channel.json`, retention 1.
 
@@ -255,29 +259,29 @@ name `channel-${{ inputs.series }}-${{ github.run_id }}`, path
 `timeout-minutes: 30`, env `GH_TOKEN`, `SERIES`, `CORE_COMMIT`
 (select.core_commit). Steps: checkout with `persist-credentials: false` and
 `sparse-checkout: docs/package-repository`; download `channel-…` to `feed`;
-"Download the current archives" — 06.2; "Configure the OPNsense package
-repository" — 04.1; "Sign the catalogue in FreeBSD …": `vmactions/freebsd-vm@v1`
+"Download the current archives" — 05.2; "Configure the OPNsense package
+repository" — 03.1; "Sign the catalogue in FreeBSD …": `vmactions/freebsd-vm@v1`
 with release (select.freebsd_release), `arch: x86_64`, `usesh`, `copyback`,
 `disable-cache`, step env `RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}`,
-`envs: RP_PKG_SIGNING_KEY`, run stub — 06.2; upload-artifact name
+`envs: RP_PKG_SIGNING_KEY`, run stub — 05.2; upload-artifact name
 `feed-${{ inputs.series }}-${{ github.run_id }}`, path `feed`, retention 1.
 
 **Job `publish`** — `needs: stage`, `timeout-minutes: 15`. Steps: distribution
-app token (as in 02.1); checkout `repository: resolver-plugins/repository`,
+app token (as in 01.1); checkout `repository: resolver-plugins/repository`,
 `ref: gh-pages`, that token, `sparse-checkout: ${{ env.FEED }}`, `path: pages`;
 download `feed-…` to `${{ runner.temp }}/feed`; "Replace the feed directory in
-one commit" with `working-directory: pages` — 06.3.
+one commit" with `working-directory: pages` — 05.3.
 
 **Job `readback`** — `needs: publish`, `timeout-minutes: 15`. Steps: download
-`feed-…` to `feed`; "Compare the public feed with the staged files" — 06.3.
+`feed-…` to `feed`; "Compare the public feed with the staged files" — 05.3.
 
 **Job `retain`** — `needs: readback`, `timeout-minutes: 10`, env `SERIES`,
 `CURRENT_TAG`, `SOURCE_TAG`. Steps: distribution app token id `distribution`;
 sync app token id `sync` (client-id, `repositories: plugins`,
 `permission-contents: write`); "Delete the release two versions back" with env
-`GH_TOKEN` (distribution token), `SYNC_TOKEN` (sync token) — 06.4.
+`GH_TOKEN` (distribution token), `SYNC_TOKEN` (sync token) — 05.4.
 
-## 02.3 Entry workflows
+## 01.3 Entry workflows
 
 ```
 Goal:            bind-plugin-release.yml and ha-dhcp-interface-release.yml are
@@ -297,7 +301,7 @@ Work:            Write one shape and fill each file's policy values.
 External inputs: none (structure only).
 Done when:       Both files match the interface; the policy values match the
                  table; every run body is a stub.
-Out of scope:    Real step bodies (phase 07).
+Out of scope:    Real step bodies (phase 06).
 ```
 
 ### Entry interface
@@ -334,10 +338,10 @@ branches `[master]`. Workflow `permissions: {}`; workflow env
 
 | Job | Condition | Permissions | Outputs | Env | Step (filled by) |
 | --- | --- | --- | --- | --- | --- |
-| `status` | `github.event_name == 'pull_request_target' && github.event.action != 'closed'` | `statuses: write`, `pull-requests: read` | — | `GH_TOKEN`, `PR` (event number), `HEAD_SHA` (event head sha) | "Write the package build status" (07.1) |
-| `discover` | `github.event_name == 'schedule' \|\| (github.event_name == 'workflow_dispatch' && inputs.pr == '')` | none | `applies`, `series` (steps.discover) | `GH_TOKEN`, `SERIES` (inputs.series), `CURRENT_TAG`, `FOLLOW_UPSTREAM` (policy) | id `discover` "Discover work for the active series" (07.2) |
-| `request` | `(github.event_name == 'workflow_dispatch' && inputs.pr != '') \|\| github.event.pull_request.merged` | `pull-requests: read` | `applies`, `purpose`, `series`, `source_sha`, `pr`, `group` (steps.request) | `GH_TOKEN`, `PR: ${{ inputs.pr \|\| github.event.pull_request.number }}`, `MERGED_HEAD` (event head sha) | id `request` "Resolve the request" (07.3) |
-| `candidate-status` | `${{ !cancelled() && needs.request.outputs.purpose == 'candidate' }}`, needs `[request, target]` | `statuses: write` | — | `GH_TOKEN`, `HEAD_SHA` (request.source_sha), `RESULT` (needs.target.result) | "Write the package build status on the built head" (07.3) |
+| `status` | `github.event_name == 'pull_request_target' && github.event.action != 'closed'` | `statuses: write`, `pull-requests: read` | — | `GH_TOKEN`, `PR` (event number), `HEAD_SHA` (event head sha) | "Write the package build status" (06.1) |
+| `discover` | `github.event_name == 'schedule' \|\| (github.event_name == 'workflow_dispatch' && inputs.pr == '')` | none | `applies`, `series` (steps.discover) | `GH_TOKEN`, `SERIES` (inputs.series), `CURRENT_TAG`, `FOLLOW_UPSTREAM` (policy) | id `discover` "Discover work for the active series" (06.2) |
+| `request` | `(github.event_name == 'workflow_dispatch' && inputs.pr != '') \|\| github.event.pull_request.merged` | `pull-requests: read` | `applies`, `purpose`, `series`, `source_sha`, `pr`, `group` (steps.request) | `GH_TOKEN`, `PR: ${{ inputs.pr \|\| github.event.pull_request.number }}`, `MERGED_HEAD` (event head sha) | id `request` "Resolve the request" (06.3) |
+| `candidate-status` | `${{ !cancelled() && needs.request.outputs.purpose == 'candidate' }}`, needs `[request, target]` | `statuses: write` | — | `GH_TOKEN`, `HEAD_SHA` (request.source_sha), `RESULT` (needs.target.result) | "Write the package build status on the built head" (06.3) |
 
 All step jobs run on `ubuntu-latest` with `timeout-minutes: 5`.
 

@@ -39,7 +39,7 @@ Context:         Spec, "Branches": before cutover, reconcile each existing plugi
                  rewriting history; CI entry points live only on master. Design:
                  the carry starts from the newest Master-Commit trailer on the
                  release branch. The master commit 8c640b214 ("Bring master's
-                 BIND plugin up to date with 26.7_9", phase 01's starting point)
+                 BIND plugin up to date with 26.7_9", phase 07's starting point)
                  is the point both
                  plugins' directories last matched their release branches, so it
                  is the first carried commit; it must stay reachable on master
@@ -117,7 +117,7 @@ Work:            1. Confirm master has not moved since the plan branch's base,
                     and the HA entry, and report the run URLs and outcomes.
 External inputs: the remote master.
 Done when:       The user confirms a production run published, synced and
-                 indexed for each plugin, carrying phase 01's client changes
+                 indexed for each plugin, carrying phase 07's client changes
                  into the 26.7 release branches.
 Out of scope:    Release cleanup (09.4).
 ```
@@ -152,7 +152,7 @@ Out of scope:    Frozen material.
 - Activation is one push after the branch rules exist, over enabling workflows
   separately, so old and new never run against the same change (2026-10-19).
 - The first trailer names master commit 8c640b214, so the first carry brings
-  phase 01's client changes into the 26.7 branches (2026-10-20).
+  phase 07's client changes into the 26.7 branches (2026-10-20).
 - `.github/workflows/` is removed from all three release branches by a new
   commit, over leaving retired 26.1 untouched, because the spec allows no
   workflow callers on release branches and 26.1's old `package-release.yml`

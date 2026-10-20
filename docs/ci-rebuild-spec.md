@@ -110,6 +110,15 @@ The CI builds these two plugins. It no longer builds BIND runtimes; see
   workflows, artifacts and job outputs. Use `git`, `gh`, `jq`, `make` and `pkg`
   for the operations themselves. Write custom code only for what these cannot
   express clearly.
+- **Built from scratch.** The new CI reuses no code from the old CI (the old
+  workflows and `.github/ci/**`). They stay in the tree only as reference until
+  cutover deletes them.
+- **Script files are the last resort.** A CI script file (any file a workflow
+  runs other than the workflow itself) needs a written justification before it
+  is created: the operation, each direct alternative (a workflow feature, an
+  existing action, one native command, a short inline step) and why each fails.
+  A reviewer rejects the justification while a simpler alternative remains, over
+  as many iterations as it takes, and the maintainer approves each script file.
 - Aim for a few hundred lines of custom CI glue in total, counting workflow
   scripts and helpers together. If the design grows toward thousands, simplify
   responsibilities.
@@ -503,6 +512,10 @@ feed readback after. Each runs once and its result is reused.
 
 ## Decisions
 
+- Build the new CI from scratch and admit script files only after every direct
+  alternative is shown to fail, over adapting the old helpers, because the old
+  CI grew into thousands of lines of scripts duplicating workflow features
+  (2026-10-20).
 - Promotion of an expired or overtaken candidate fails and the maintainer
   requests a new build, over in-pipeline version checks and Release fallbacks,
   because it removes a whole decision path (2026-10-19).

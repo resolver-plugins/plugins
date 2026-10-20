@@ -1,8 +1,8 @@
-# Phase 07: Entries
+# Phase 06: Entries
 
 Status: planned
-Before: the lifecycle and index work (phases 03–06); both entry workflows are
-declared with stub bodies (phase 02).
+Before: the lifecycle and index work (phases 02–05); both entry workflows are
+declared with stub bodies (phase 01).
 After: each plugin's entry runs daily discovery, accepts production and
 candidate requests, writes PR statuses, and promotes merged candidates. The new
 CI is complete on `master`; the old workflows still exist until phase 08.
@@ -10,13 +10,17 @@ CI is complete on `master`; the old workflows still exist until phase 08.
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines. Commit once per phase with
+inline or CI script exceeds 30 physical lines. Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design, "Entry jobs" and "Upstream discovery"; spec,
 "Delivery events", "Active series" and "PR builds and promotion". Job names,
 conditions, env and outputs in
-[02-ci-structure.md](02-ci-structure.md#entry-interface). Both entry files get
+[01-ci-structure.md](01-ci-structure.md#entry-interface). Both entry files get
 the same bodies; only the policy values (already in each file) differ, so each
 stage edits both files the same way. Status context:
 `Package build / $SOURCE_DIRECTORY`.
@@ -25,11 +29,11 @@ stage edits both files the same way. Status context:
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 07.1 | PR status | haiku | low | first | planned |
-| 07.2 | Discovery | sonnet | medium | after 07.1 | planned |
-| 07.3 | Candidate and promotion requests | sonnet | medium | after 07.2 | planned |
+| 06.1 | PR status | haiku | low | first | planned |
+| 06.2 | Discovery | sonnet | medium | after 06.1 | planned |
+| 06.3 | Candidate and promotion requests | sonnet | medium | after 06.2 | planned |
 
-## 07.1 PR status
+## 06.1 PR status
 
 ```
 Goal:            On a PR to master opened, updated or reopened, the status job
@@ -50,10 +54,10 @@ Work:            1. files = gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json
                     state -f context -f description.
 External inputs: the event payload and the changed-files response.
 Done when:       No checkout; body under 15 lines.
-Out of scope:    Candidate status (07.3).
+Out of scope:    Candidate status (06.3).
 ```
 
-## 07.2 Discovery
+## 06.2 Discovery
 
 ```
 Goal:            The discover job selects the active series when it needs a
@@ -67,7 +71,7 @@ Context:         Design, "Entry jobs": a target needs work when its current
 Contracts:       Outputs applies (true|false) and series. Reason in
                  $GITHUB_STEP_SUMMARY.
 Files:           both entry workflows (discover body)
-Work:            1. active series by the active series rule of 03.1 (usable
+Work:            1. active series by the active series rule of 02.1 (usable
                     series only).
                  2. SERIES set: applies=true with that series, reason
                     "Production build of <series> requested" (prepare rejects a
@@ -86,10 +90,10 @@ Work:            1. active series by the active series rule of 03.1 (usable
 External inputs: core tags, the current record, the upstream commits API.
 Done when:       No hard-coded series; no VM or target when nothing needs
                  work. If the body needs more than 30 lines, stop and ask.
-Out of scope:    Request handling (07.3).
+Out of scope:    Request handling (06.3).
 ```
 
-## 07.3 Candidate and promotion requests
+## 06.3 Candidate and promotion requests
 
 ```
 Goal:            The request job resolves a candidate request or a merged PR's
@@ -108,7 +112,7 @@ Contracts:       request outputs: applies, purpose (candidate|promote), series
                  <result>", with target_url the run URL.
 Files:           both entry workflows (request and candidate-status bodies)
 Work:            request:
-                 1. active series by the active series rule of 03.1.
+                 1. active series by the active series rule of 02.1.
                  2. pull_request_target: if the PR's files do not include the
                     plugin directory, applies=false and exit 0; else promote
                     with MERGED_HEAD and group plugin-<component>-<active>.

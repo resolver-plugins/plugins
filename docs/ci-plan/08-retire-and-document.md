@@ -1,8 +1,8 @@
 # Phase 08: Retire the old CI and document the new one
 
 Status: planned
-Before: the new CI is complete (phases 02–07) beside the old workflows,
-helpers and runtime package definitions; the guides describe the old CI.
+Before: the new CI (phases 01–06) and the client changes (phase 07) are built
+beside the old workflows, helpers and runtime package definitions; the guides describe the old CI.
 After: `.github/workflows/` holds exactly `bind-plugin-release.yml`,
 `ha-dhcp-interface-release.yml`, `plugin-target.yml` and
 `repository-index.yml`; `.github/ci/` and `packages/` are gone; the guides and
@@ -72,8 +72,10 @@ Work:            1. building.md, "Building and releasing": a table of the four
                     <series>_<n>; failures (stays failed, "Re-run failed jobs",
                     promotion failure means request production, conflicts fail
                     the target); local build `make -C dns/bind PLUGIN_DEVEL=
-                    PLUGIN_ABI=<series> package`; rules for changing CI (30
-                    lines, no tests in CI, [skip ci], nothing hard-coded).
+                    PLUGIN_ABI=<series> package`; rules for changing CI (built
+                    from scratch, workflow first, script files only after the
+                    written justification and approval, 30 lines, no tests in
+                    CI, [skip ci], nothing hard-coded).
                  2. upstream-sync.md, "Upstream changes": new series (previous
                     branch plus upstream merge, <series>_1); upstream BIND
                     changes (discovery compares the upstream path commit with
@@ -99,7 +101,7 @@ Out of scope:    package-repository.md and README.md (08.3), AGENTS.md (08.4),
 Goal:            docs/package-repository.md, README.md and the HA guides
                  describe the signed feed, Releases, host setup, series upgrades
                  and credentials as built.
-Context:         Phase 01 built the client changes; phases 05–06 the Releases
+Context:         Phase 07 built the client changes; phases 04–05 the Releases
                  and feed. The current package-repository.md describes runtime
                  channels, fingerprinted snapshots and the retired installer.
 Contracts:       Keep the anchor docs/package-repository.md#ha-dhcp-interface
@@ -155,7 +157,8 @@ Work:            1. Rewrite "Design at a glance": master development and CI,
                  3. Replace the CI rules with: develop on master and never push
                     to release/*; plugins stay independent; follow the CI spec
                     (workflow first, nothing hard-coded, no recovery jobs, stop
-                    before scripts over 30 lines); CI runs no test suites, plugin
+                    before scripts over 30 lines, script files only after the
+                    written justification and user approval); CI runs no test suites, plugin
                     suites run locally, review by diff, [skip ci].
                  4. Update "Documentation updates" to the new guide names.
 External inputs: none.

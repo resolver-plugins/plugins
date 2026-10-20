@@ -1,7 +1,7 @@
-# Phase 03: Prepare
+# Phase 02: Prepare
 
 Status: planned
-Before: `plugin-target.yml` is declared (phase 02) with stubbed steps.
+Before: `plugin-target.yml` is declared (phase 01) with stubbed steps.
 After: the `prepare` job works: it checks the active series, resolves the
 upstream environment, reads the current Release and record, prepares and
 bundles the source for production and candidates (or skips), and finds the
@@ -10,13 +10,17 @@ candidate for a promotion. Later jobs are still stubs.
 Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
-inline or CI script exceeds 30 physical lines (comments and blanks count).
+inline or CI script exceeds 30 physical lines (comments and blanks count). Add no script
+files: every operation is a workflow step using `git`, `gh`, `jq`, `make` or
+`pkg`. A script file needs the spec's written justification ("Script files are
+the last resort"), reviewed until no simpler alternative remains and approved
+by the user before it is created.
 Commit once per phase with `[skip ci]`; nothing is pushed or dispatched.
 
 Shared references: design, "`prepare` outputs", "Versions", "Upstream
 discovery" ([design](../ci-rebuild-design.md)); the step ids, conditions,
 step env and job outputs are declared in
-[02-ci-structure.md](02-ci-structure.md#lifecycle-interface). Each stage replaces
+[01-ci-structure.md](01-ci-structure.md#lifecycle-interface). Each stage replaces
 only the stub bodies it names and writes the step outputs listed, with
 `echo "key=value" >> "$GITHUB_OUTPUT"`. All four stages edit the same file, so
 they run in sequence.
@@ -25,12 +29,12 @@ they run in sequence.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 03.1 | Active series and upstream environment | sonnet | medium | first | planned |
-| 03.2 | Current Release and record | sonnet | medium | after 03.1 | planned |
-| 03.3 | Prepared source and decision | opus | high | after 03.2 | planned |
-| 03.4 | Promotion lookup | sonnet | medium | after 03.3 | planned |
+| 02.1 | Active series and upstream environment | sonnet | medium | first | planned |
+| 02.2 | Current Release and record | sonnet | medium | after 02.1 | planned |
+| 02.3 | Prepared source and decision | opus | high | after 02.2 | planned |
+| 02.4 | Promotion lookup | sonnet | medium | after 02.3 | planned |
 
-## 03.1 Active series and upstream environment
+## 02.1 Active series and upstream environment
 
 ```
 Goal:            Steps `active` and `environment` reject a non-active series and
@@ -50,10 +54,10 @@ Contracts:       environment outputs: freebsd_release, abi, tools_tag,
                  core_commit, plugins_commit, upstream_package_commit (empty for
                  HA, which upstream does not have). Upstream plugins
                  stable/<series> is fetched into
-                 refs/remotes/upstream/stable/<series> for steps in 03.3.
+                 refs/remotes/upstream/stable/<series> for steps in 02.3.
 Files:           .github/workflows/plugin-target.yml (bodies of `active` and
                  `environment`)
-Work:            active (the "active series rule", reused by 07.2 and 07.3):
+Work:            active (the "active series rule", reused by 06.2 and 06.3):
                  1. series list = the distinct X.Y of opnsense/core tags
                     matching ^[0-9]+\.[0-9]+(\.[0-9]+)?$ (git ls-remote --tags
                     --refs), newest first (sort -rV).
@@ -89,7 +93,7 @@ Done when:       No series, version or hash is hard-coded; failures name what
 Out of scope:    Other steps.
 ```
 
-## 03.2 Current Release and record
+## 02.2 Current Release and record
 
 ```
 Goal:            Step `current` outputs the next version and what the current
@@ -128,10 +132,10 @@ External inputs: the current Release's assets and record.
 Done when:       One targeted lookup, no listing; missing Release, foreign
                  version, old format and new format are covered. If the body
                  needs more than 30 lines, stop and ask.
-Out of scope:    Promotion's version comparison (03.4).
+Out of scope:    Promotion's version comparison (02.4).
 ```
 
-## 03.3 Prepared source and decision
+## 02.3 Prepared source and decision
 
 ```
 Goal:            Steps `base`, `merge`, `carry`, `decide` and `version` produce
@@ -145,7 +149,7 @@ Context:         Design, "`prepare` outputs": the prepared commit starts from th
                  the newest version commit on the release branch), and one
                  version commit with the trailer `Master-Commit: <source_sha>`.
                  A conflict fails the target. The `merge` step's condition is
-                 already declared (02.1). Release branches set PLUGIN_VERSION
+                 already declared (01.1). Release branches set PLUGIN_VERSION
                  and PLUGIN_REVISION to <series>/<n>, while upstream and master
                  keep upstream's values (26.7/9 against 1.34/4 and 1.34/5 at
                  planning), so upstream revision bumps and master version
@@ -220,10 +224,10 @@ Done when:       Candidates never skip; the carry excludes tests; a conflict
                  confined to the two version lines continues and any other
                  conflict fails; the carry and version change land in one
                  commit with the trailer; any body over 30 lines is a stop.
-Out of scope:    Promotion (03.4); pushing anything (phase 05).
+Out of scope:    Promotion (02.4); pushing anything (phase 04).
 ```
 
-## 03.4 Promotion lookup
+## 02.4 Promotion lookup
 
 ```
 Goal:            Step `candidate` finds the merged head's qualified artifact and
@@ -255,7 +259,7 @@ Work:            1. run_id = `gh api
                  4. Write the outputs with jq and echo.
 External inputs: the artifact listing and the candidate's record.
 Done when:       One lookup by name, the two failure messages, no rebuild path.
-Out of scope:    Downloading for publish (02.1 already declares run-id).
+Out of scope:    Downloading for publish (01.1 already declares run-id).
 ```
 
 ## Notes
