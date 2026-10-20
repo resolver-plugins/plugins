@@ -359,9 +359,9 @@ permissions `contents: read`, `actions: read`; concurrency group
 
 ## Notes
 
-- The design's `discover` outputs "a matrix of targets"; only the active series
-  is ever a target and an empty matrix fails its job, so `discover` outputs one
-  series and `target` is a single call (2026-10-20).
+- `discover` outputs one series and `target` is a single call, over a matrix,
+  because only the active series is ever a target and an empty matrix fails its
+  job (user decision, 2026-10-20).
 - One `request` job resolves candidates and promotions so the policy inputs
   appear in one call, over separate calls repeating them (2026-10-20).
 - The index receives the `source_tag` template because retention deletes the

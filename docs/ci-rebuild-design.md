@@ -54,7 +54,7 @@ Each entry passes these to `plugin-target.yml`; no other file names a package.
 
 | Event | Jobs |
 | --- | --- |
-| schedule, or `workflow_dispatch` without `pr` | `discover` (Ubuntu) → `target` (purpose `production`, matrix of targets needing work) |
+| schedule, or `workflow_dispatch` without `pr` | `discover` (Ubuntu) → `target` (purpose `production`, the active series when it needs work) |
 | `workflow_dispatch` with `pr` | `target` (purpose `candidate`) → `status` (success on the built head) |
 | `pull_request_target` opened, synchronize, reopened | `status` (pending, or success "not applicable") |
 | `pull_request_target` closed and merged, changing `source_directory` | `target` (purpose `promote`) |
