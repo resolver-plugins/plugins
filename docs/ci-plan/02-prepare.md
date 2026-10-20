@@ -292,3 +292,7 @@ Out of scope:    Downloading for publish (01.1 already declares run-id).
 - Until stage 09.1 adds the first `Master-Commit` trailer, the carry step fails
   with "No Master-Commit trailer" on the existing release branches, as designed
   (2026-10-20).
+- Corrected after the first production run (2026-10-20): tools' build.conf
+  writes `OS?=` followed by tabs (`OS?=\t\t15.1` at 26.7.7), so the environment
+  step allows whitespace after `OS?=`. The brief had assumed `OS?=X.Y`
+  (2026-10-20).
