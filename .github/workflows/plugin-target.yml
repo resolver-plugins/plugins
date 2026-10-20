@@ -571,7 +571,7 @@ jobs:
       SOURCE_TAG: ${{ inputs.source_tag }}
       PRERELEASE: ${{ inputs.prerelease }}
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
           client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}

@@ -137,3 +137,7 @@ Out of scope:    Branch rules (phase 09).
   new series has no branch yet. `gh release view` falls back to searching
   drafts when the tag lookup finds nothing, so leftover drafts are found; this
   is confirmed only by the first real run (2026-10-20).
+- Corrected after the fourth production run (2026-10-20): the sync app is
+  configured by client ID, which `actions/create-github-app-token@v2` does not
+  accept ("appId option is required"); the sync-app token steps in
+  `sync-source` and the index's `retain` use `@v3` (2026-10-20).
