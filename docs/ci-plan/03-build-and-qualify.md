@@ -1,6 +1,6 @@
 # Phase 03: Build and qualify
 
-Status: planned
+Status: built, awaiting user review (stages done: 03.1–03.3)
 Before: `prepare` works (phase 02); build and qualify are stubs.
 After: a production or candidate request produces the
 `qualified-<component>-<series>-<source_sha>` artifact: the archive built in a
@@ -42,9 +42,9 @@ OPNsense/WebGui`.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 03.1 | OPNsense repository configuration step | sonnet | low | first | planned |
-| 03.2 | Build job | sonnet | medium | after 03.1 | planned |
-| 03.3 | Qualify job | sonnet | medium | after 03.2 | planned |
+| 03.1 | OPNsense repository configuration step | sonnet | low | first | done |
+| 03.2 | Build job | sonnet | medium | after 03.1 | done |
+| 03.3 | Qualify job | sonnet | medium | after 03.2 | done |
 
 ## 03.1 OPNsense repository configuration
 
@@ -164,3 +164,7 @@ Out of scope:    Plugin test suites (spec forbids them in CI).
   name no packages, so there is no package-specific conflict test (2026-10-20).
 - Failure diagnostics are the normal Actions logs, which include the VM output;
   no extra diagnostics artifact is uploaded (2026-10-20).
+- Built 2026-10-20 in sequence by delegated sonnet agents. The phase review
+  removed a builder's check that `make package` produced exactly one archive
+  (internal data) and the build record step's unused `ABI` env, since the
+  record's `abi` comes from the archive (2026-10-20).

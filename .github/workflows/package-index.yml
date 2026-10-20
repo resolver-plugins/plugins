@@ -87,7 +87,17 @@ jobs:
       - name: Download the current archives
         run: echo "::error::Not implemented (stage 05.2)" && exit 1
       - name: Configure the OPNsense package repository
-        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+        run: |
+          core="$RUNNER_TEMP/core"
+          git init -q "$core"
+          git -C "$core" remote add origin https://github.com/opnsense/core.git
+          git -C "$core" fetch -q --depth 1 --filter=blob:none origin "$CORE_COMMIT"
+          git -C "$core" checkout -q FETCH_HEAD -- src/etc/pkg
+          mkdir -p .opnsense-pkg/repos
+          sed -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|' -e "s|%%CORE_ABI%%|$SERIES|" \
+            "$core/src/etc/pkg/repos/OPNsense.conf.shadow.in" > .opnsense-pkg/repos/OPNsense.conf
+          cp "$core/src/etc/pkg/repos/FreeBSD.conf.shadow" .opnsense-pkg/repos/FreeBSD.conf
+          cp -R "$core/src/etc/pkg/fingerprints" .opnsense-pkg/
       - name: Sign the catalogue in FreeBSD ${{ needs.select.outputs.freebsd_release }}
         uses: vmactions/freebsd-vm@v1
         env:

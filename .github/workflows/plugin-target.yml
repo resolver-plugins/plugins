@@ -325,10 +325,22 @@ jobs:
           path: ${{ runner.temp }}/source
 
       - name: Check out the prepared source
-        run: echo "::error::Not implemented (stage 03.2)" && exit 1
+        run: |
+          git fetch -q "$RUNNER_TEMP/source/source.bundle" HEAD
+          git checkout -q --detach "$PREPARED_SHA"
 
       - name: Configure the OPNsense package repository
-        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+        run: |
+          core="$RUNNER_TEMP/core"
+          git init -q "$core"
+          git -C "$core" remote add origin https://github.com/opnsense/core.git
+          git -C "$core" fetch -q --depth 1 --filter=blob:none origin "$CORE_COMMIT"
+          git -C "$core" checkout -q FETCH_HEAD -- src/etc/pkg
+          mkdir -p .opnsense-pkg/repos
+          sed -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|' -e "s|%%CORE_ABI%%|$SERIES|" \
+            "$core/src/etc/pkg/repos/OPNsense.conf.shadow.in" > .opnsense-pkg/repos/OPNsense.conf
+          cp "$core/src/etc/pkg/repos/FreeBSD.conf.shadow" .opnsense-pkg/repos/FreeBSD.conf
+          cp -R "$core/src/etc/pkg/fingerprints" .opnsense-pkg/
 
       - name: Build in FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
         uses: vmactions/freebsd-vm@v1
@@ -339,11 +351,21 @@ jobs:
           copyback: true
           disable-cache: true
           envs: SERIES SOURCE_DIRECTORY PREPARED_SHA
-          run: echo "::error::Not implemented (stage 03.2)" && exit 1
+          run: |
+            set -eu
+            mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/fingerprints
+            cp .opnsense-pkg/repos/* /usr/local/etc/pkg/repos/
+            cp -R .opnsense-pkg/fingerprints/OPNsense /usr/local/etc/pkg/fingerprints/
+            pkg-static install -fy -r OPNsense pkg
+            pkg install -y -r OPNsense opnsense
+            make -C "$SOURCE_DIRECTORY" PLUGIN_DEVEL= PLUGIN_ABI="$SERIES" PLUGIN_HASH="$PREPARED_SHA" package
+            mkdir .build
+            cp "$SOURCE_DIRECTORY"/work/pkg/*.pkg .build/
+            pkg query -F .build/*.pkg '%n|%o|%v|%q' > .build/identity
+            pkg -v > .build/pkg-version
 
       - name: Write the build record
         env:
-          ABI: ${{ needs.prepare.outputs.abi }}
           FREEBSD_RELEASE: ${{ needs.prepare.outputs.freebsd_release }}
           SOURCE_BASE: ${{ needs.prepare.outputs.source_base }}
           MASTER_COMMIT: ${{ inputs.source_sha }}
@@ -352,7 +374,17 @@ jobs:
           UPSTREAM_PACKAGE_COMMIT: ${{ needs.prepare.outputs.upstream_package_commit }}
           PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: echo "::error::Not implemented (stage 03.2)" && exit 1
+        run: |
+          IFS='|' read -r package origin version abi < .build/identity
+          jq -n \
+            --arg package "$package" --arg origin "$origin" --arg version "$version" --arg abi "$abi" \
+            --arg series "$SERIES" --arg freebsd_release "$FREEBSD_RELEASE" \
+            --arg source_base "$SOURCE_BASE" --arg master_commit "$MASTER_COMMIT" \
+            --arg source_commit "$PREPARED_SHA" --arg control_commit "$GITHUB_WORKFLOW_SHA" \
+            --arg tools_tag "$TOOLS_TAG" --arg core_commit "$CORE_COMMIT" \
+            --arg plugins_commit "$PLUGINS_COMMIT" --arg upstream_package_commit "$UPSTREAM_PACKAGE_COMMIT" \
+            --arg pkg_version "$(cat .build/pkg-version)" --arg previous_tag "$PREVIOUS_TAG" \
+            --arg run_url "$RUN_URL" '$ARGS.named' > .build/build-record.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -382,10 +414,21 @@ jobs:
           path: dist
 
       - name: Configure the OPNsense package repository
-        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+        run: |
+          core="$RUNNER_TEMP/core"
+          git init -q "$core"
+          git -C "$core" remote add origin https://github.com/opnsense/core.git
+          git -C "$core" fetch -q --depth 1 --filter=blob:none origin "$CORE_COMMIT"
+          git -C "$core" checkout -q FETCH_HEAD -- src/etc/pkg
+          mkdir -p .opnsense-pkg/repos
+          sed -e 's|%%CORE_PACKAGESITE%%|https://pkg.opnsense.org|' -e "s|%%CORE_ABI%%|$SERIES|" \
+            "$core/src/etc/pkg/repos/OPNsense.conf.shadow.in" > .opnsense-pkg/repos/OPNsense.conf
+          cp "$core/src/etc/pkg/repos/FreeBSD.conf.shadow" .opnsense-pkg/repos/FreeBSD.conf
+          cp -R "$core/src/etc/pkg/fingerprints" .opnsense-pkg/
 
       - name: Read the expected identity
-        run: echo "::error::Not implemented (stage 03.3)" && exit 1
+        run: |
+          echo "EXPECTED=$(jq -r '[.package, .origin, .version, .abi] | join("|")' dist/build-record.json)" >> "$GITHUB_ENV"
 
       - name: Install on a clean FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
         uses: vmactions/freebsd-vm@v1
@@ -395,7 +438,27 @@ jobs:
           usesh: true
           disable-cache: true
           envs: EXPECTED
-          run: echo "::error::Not implemented (stage 03.3)" && exit 1
+          run: |
+            set -eu
+            mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/fingerprints
+            cp .opnsense-pkg/repos/* /usr/local/etc/pkg/repos/
+            cp -R .opnsense-pkg/fingerprints/OPNsense /usr/local/etc/pkg/fingerprints/
+            pkg-static install -fy -r OPNsense pkg
+            pkg install -y -r OPNsense opnsense
+            install -d -m 0750 /conf
+            install -m 0640 /usr/local/etc/config.xml /conf/config.xml
+            sh /usr/local/etc/rc.subr.d/php
+            service configd onestart
+            /usr/local/opnsense/service/template_ctl.py OPNsense/WebGui
+            pkg repo dist
+            printf 'candidate: {\n  url: "file://%s/dist",\n  signature_type: "none",\n  enabled: yes\n}\n' "$PWD" \
+              > /usr/local/etc/pkg/repos/candidate.conf
+            pkg update -f
+            name=${EXPECTED%%|*}
+            pkg install -y "$name"
+            pkg check -s "$name"
+            test "$(pkg query '%n|%o|%v|%q' "$name")" = "$EXPECTED"
+            test "${EXPECTED##*|}" = "$(pkg config ABI)"
 
       - uses: actions/upload-artifact@v4
         with:
