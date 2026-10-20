@@ -1,6 +1,6 @@
 # Phase 08: Retire the old CI and document the new one
 
-Status: planned
+Status: built, awaiting user review (stages done: 08.1–08.4)
 Before: the new CI (phases 01–06) and the client changes (phase 07) are built
 beside the old workflows, helpers and runtime package definitions; the guides describe the old CI.
 After: `.github/workflows/` holds exactly `bind-plugin.yml`,
@@ -26,10 +26,10 @@ describes what the workflows actually do; read them before writing.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 08.1 | Remove the retired CI | haiku | low | first | planned |
-| 08.2 | Maintainer guides | sonnet | medium | after 08.1, parallel with 08.3 and 08.4 | planned |
-| 08.3 | User and package guides | sonnet | medium | after 08.1, parallel with 08.2 and 08.4 | planned |
-| 08.4 | Agent guide | sonnet | low | after 08.1, parallel with 08.2 and 08.3 | planned |
+| 08.1 | Remove the retired CI | haiku | low | first | done |
+| 08.2 | Maintainer guides | sonnet | medium | after 08.1, parallel with 08.3 and 08.4 | done |
+| 08.3 | User and package guides | sonnet | medium | after 08.1, parallel with 08.2 and 08.4 | done |
+| 08.4 | Agent guide | sonnet | low | after 08.1, parallel with 08.2 and 08.3 | done |
 
 ## 08.1 Remove the retired CI
 
@@ -175,3 +175,10 @@ Out of scope:    Other guides.
 ## Notes
 
 - `docs/plans/` is untracked and is not part of this phase (2026-10-20).
+- Built 2026-10-20: 08.1 directly (git rm of the ten old workflows,
+  `.github/ci/**` and `packages/`), 08.2–08.4 by parallel sonnet agents. The
+  rollback procedure in `package-repository.md` was derived from the workflows
+  (manual swap of the current Release's archive) and needs the user's review.
+  `AGENTS.md` dropped the old "do not weaken provenance, pin or fingerprint
+  checks" rule with the retired machinery; the `os-bind` conflict rule stays
+  (2026-10-20).

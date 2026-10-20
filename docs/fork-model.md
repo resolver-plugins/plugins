@@ -2,87 +2,53 @@
 
 ## Purpose
 
-Resolver Plugins maintains this fork to develop a small number of BIND
-features outside the official OPNsense plugin release process while retaining
-the ability to incorporate upstream OPNsense plugin updates.
+Resolver Plugins maintains this fork to develop BIND features and the HA DHCP
+Interface plugin outside the official OPNsense plugin release process while
+following upstream OPNsense plugin updates.
 
-The package produced by this fork is named `os-bind-rp`. It is intentionally
-distinct from OPNsense's official `os-bind` package and declares a package
-conflict with it. A system must have one or the other installed, never both.
+| Package | Origin | Source |
+| --- | --- | --- |
+| `os-bind-rp` | `opnsense/os-bind-rp` | `dns/bind` |
+| `os-dhcp-interface-ha` | `opnsense/os-dhcp-interface-ha` | `net/dhcp-interface-ha` |
 
-The package build requires OPNsense `26.1.11_10` or newer. That floor includes
-the BIND version carrying the named DoT-related fix relied on by this fork.
-Each runtime package owns its reviewed version and Ports pin in
-`packages/bind-tools/Makefile` or `packages/bind920/Makefile`. The plugin uses an
-ordinary authenticated OPNsense BIND build dependency, resolved from its frozen
-upstream recipe independently of either runtime package release. Candidate automation may
-prepare evidence and PRs, but signed package publication remains a separate
-maintainer-controlled boundary.
+`os-bind-rp` conflicts with OPNsense's `os-bind`; a system has one or the
+other. `os-dhcp-interface-ha` replaces `wan-ha-dhcp`. Both require OPNsense
+`26.1.11_10` or newer. BIND itself comes from OPNsense's packages and must meet
+the minimum declared by `PLUGIN_DEPEND_FORMULA`. Names and origins stay fixed
+across series.
 
-## Branch responsibilities
+## Branches
 
-`master` is the control plane. It holds shared CI scripts, GitHub Actions
-workflows, documentation, and the canonical BIND behavior suite in
-`dns/bind/tests`. Maintainers run that suite locally against the active release
-sources under `release/bind-rp/<series>` before approving source changes.
-It should stay aligned with upstream
-OPNsense plugins except for the fork's deliberate control-plane and
-package-identity changes.
+| Branch | Role |
+| --- | --- |
+| `master` | Development of both plugins, the CI and the documentation |
+| `release/bind-rp/<series>` | Pipeline-written build source of `os-bind-rp` for a series |
+| `release/dhcp-interface-ha/<series>` | Pipeline-written build source of `os-dhcp-interface-ha` for a series |
+| upstream `master` and `stable/<series>` | `opnsense/plugins`, read by the pipeline |
 
-`release/bind-rp/<series>` branches are the per-OPNsense-series build sources.
-They need no `.resolver-plugins` files. Controllers discover build inputs from
-official upstream refs and Git ancestry, then freeze their exact identities in
-the run's artifacts and published receipts. Treat a release branch as a stable, reviewed input to a
-package build; do not force-push or casually rewrite it. Test suites run locally;
-new source reviews contain no generated test-workflow caller. Historical source
-refs remain immutable, and their retired test workflows stay disabled in GitHub.
-Preserve upstream ancestry by merging generated source reviews with their history;
-discovery uses that ancestry to identify the reviewed upstream baseline.
+Develop on `master` through PRs and never push to a release branch. Release
+branches carry no workflows and are never rewritten.
 
-The synchronizer creates `sync/bind/<series>/<upstream-prefix>-<input-hash-prefix>` and
-`sync/bootstrap/<series>/<upstream-prefix>-<input-hash-prefix>` branches when human review is necessary.
-They are generated review inputs, not places for unrelated development.
+Each release branch holds the upstream `stable/<series>` merge plus the fork's
+plugin directory. When a change to the plugin directory reaches `master`, the
+pipeline carries it onto the active series' release branch: the directory's diff
+since the last carried `master` commit, recorded in the `Master-Commit` trailer
+of the branch's version commit. A version commit sets `PLUGIN_VERSION` and
+`PLUGIN_REVISION`, and a run publishes before it pushes, so a release branch
+holds only published versions.
 
-HA DHCP follows the same source/control split. Its reviewed build sources live on
-`release/dhcp-interface-ha/<series>`. Its controllers use the same discovery helper
-without requiring source JSON. Package versions use the series and a plugin revision,
-starting with `26.7_1`. The package remains `os-dhcp-interface-ha`; its application
-and package policy are independent of BIND.
+Tests live in each plugin's `tests` directory on `master` and run locally.
 
-The canonical HA suite lives in `net/dhcp-interface-ha/tests` on `master` and runs
-locally against registered HA release sources. Builds materialize the exact reviewed package and
-framework trees while keeping CI and tests from the control plane. Relevant
-package code changes select only the series whose own code differs from its
-published source. CI, framework and environment changes do not rebuild HA. Merging a package
-change into a release source selects that series and exact merge commit. A manual
-master dispatch selects a registered series for recovery. HA does not invoke the
-BIND producers.
+## Active series and retirement
 
-## Current distribution boundary
+Only the newest final Community series builds. A newer series retires its
+predecessor from automatic, manual and PR builds. Retired series keep their
+feed, current Release and one rollback for installed clients. Upstream decides
+retirement; this project keeps no list.
 
-The signed package repository is active and approved. Generated current and
-rollback channels are published as GitHub Releases in
-`resolver-plugins/repository`; human-facing source releases remain in
-`resolver-plugins/plugins` and contain only the plugin package and build
-metadata. A release-branch build remains a reviewed build input; it does not
-independently authorize publication or a change to the installation contract.
+## Independence
 
-`bind-tools`, `bind920`, `os-bind-rp`, and `os-dhcp-interface-ha` have independent
-builds, signed channels and immutable histories. Runtime version-update PRs
-build unsigned previews; their approved merges select only the package whose
-approval changed. Plugin source reviews select only their own changed series.
-No package pipeline dispatches, waits for, or requires another package release.
-The daily synchronizer creates plugin source reviews and never builds runtime packages.
-
-The plugin's native BIND dependency is frozen from the matching upstream Ports
-revision before building. A daemon build creates its tools prerequisite inside
-that same run for native qualification; it publishes only the daemon archive.
-Ordinary installation dependencies remain part of the native package contract.
-
-A separate repository-index workflow authenticates already published packages,
-preserves their original archives and metadata, and signs the shared catalogue.
-Missing unrelated packages are allowed. It alone owns the shared Pages write
-lock; index failure cannot undo or block an owned package publication. Existing
-client URLs and trust keys remain in use. Legacy paired runtime and complete
-BIND rollback releases are retained with their original bytes. Only plugin
-workflows create their respective source releases.
+The two plugins have independent entry workflows, release branches, versions
+(`<series>_<n>`), Releases and series-upgrade hooks. A pipeline for one never
+dispatches, waits for or requires the other. Releases and the signed feed are
+described in [package repository](package-repository.md).

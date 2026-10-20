@@ -16,8 +16,8 @@ Requires OPNsense `26.1.11_10` or newer on a supported repository series.
 Replaces the official `os-bind` package; the two packages cannot be
 installed together.
 
-The repository also supplies the BIND runtime packages, allowing reviewed
-BIND updates independently of OPNsense releases.
+BIND comes from OPNsense's own packages; `os-bind-rp` declares the minimum
+BIND version it needs.
 
 `os-bind-rp` keeps the upstream BIND plugin as its base and adds focused DNS
 management features:
