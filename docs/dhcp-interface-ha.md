@@ -111,9 +111,11 @@ Saving the Disabled interface selection first disables and verifies fencing, the
 restores the saved native assignment and original receive-mode setting before
 clearing local plugin configuration. A retry with settings already disabled still
 requires fresh verified fencing. Uncertain restoration retains the captured
-carrier for retry. Package removal refuses remaining assignments, foreign devices
-and unverified fencing. Upgrades preserve configuration and skip intentional
-removal. No OPNsense core files are patched.
+carrier for retry. `pkg` ignores a failing removal script, so package removal
+keeps an assigned device and the running controller with a warning. A foreign
+device or unverified fencing fails the script, but `pkg` still removes the files. This also makes a switch between the
+`-devel` and release packages behave as an upgrade. Upgrades preserve
+configuration and skip intentional removal. No OPNsense core files are patched.
 
 Events use native logging. Diagnostics distinguish configured intent, observed
 attachment, route selection and tested reachability; they do not claim peer
