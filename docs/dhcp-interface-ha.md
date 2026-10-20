@@ -134,9 +134,11 @@ Selection requires a fresh inventory in which every expected CARP instance is
 BACKUP, the VIP is not locally owned, and the managed WAN is verified fenced.
 The controller records ownership intent before changing the default and verifies
 the actual gateway, interface and source address afterward. A selected route is
-not proof of Internet connectivity. Native post-routing callbacks and periodic
-reconciliation maintain the path without creating an always-enabled internal
-gateway or changing gateway priorities.
+not proof of Internet connectivity. When the path is not selected, status names
+the first blocking condition, such as the CARP instances that are not BACKUP,
+and notes a remaining default on the fenced WAN. Native post-routing callbacks
+and periodic reconciliation maintain the path without creating an
+always-enabled internal gateway or changing gateway priorities.
 
 Promotion withdraws the owned standby route before WAN attachment. Demotion
 fences the WAN before selecting the standby path. Mixed/unknown roles, disable,
