@@ -1,17 +1,22 @@
 #!/bin/sh
 
-# Refuse an intentional uninstall while an OPNsense logical interface still
-# depends on dhcpha0lagg.  Package upgrades run the old pre-deinstall script too;
-# PKG_UPGRADE explicitly distinguishes that safe lifecycle path.
+# Package upgrades run the old pre-deinstall script too; PKG_UPGRADE
+# explicitly distinguishes that safe lifecycle path.
 if [ -n "${PKG_UPGRADE:-}" ]; then
     exit 0
 fi
 
+# pkg ignores a failing pre-deinstall script and deletes the files anyway, so
+# a refusal cannot stop removal. Replacing this package with its -devel or
+# release counterpart is a removal without PKG_UPGRADE. While an OPNsense
+# logical interface depends on dhcpha0lagg, keep the device and the running
+# controller as an upgrade does, and tell an uninstalling operator what is left.
 config="${PKG_ROOTDIR:-}/conf/config.xml"
 if [ -r "${config}" ] && grep -Eq '<if>[[:space:]]*dhcpha0lagg[[:space:]]*</if>' "${config}"; then
-    echo "os-dhcp-interface-ha: refusing removal while dhcpha0lagg is still assigned." >&2
-    echo "Reassign the managed OPNsense interface away from dhcpha0lagg, apply the change, then remove the plugin." >&2
-    exit 1
+    echo "os-dhcp-interface-ha: dhcpha0lagg is still assigned; leaving the device and controller in place." >&2
+    echo "This is expected when switching between os-dhcp-interface-ha and os-dhcp-interface-ha-devel." >&2
+    echo "To uninstall, reinstall the plugin, reassign the interface away from dhcpha0lagg, apply, then remove it." >&2
+    exit 0
 fi
 
 # Offline package roots have no live interface or service to remove.

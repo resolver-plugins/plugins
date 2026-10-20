@@ -252,16 +252,36 @@ class Controller:
                                      snapshot.settings.carrier)
 
     @staticmethod
-    def _standby_eligible(snapshot, path):
+    def _standby_blocker(snapshot, path):
+        """Return the first reason the standby path cannot be selected, or None."""
+        if not path['enabled']:
+            return 'Standby Internet is disabled.'
+        if path['error']:
+            return path['error']
+        if (not snapshot.settings.enabled or not snapshot.settings.managed_by_dhcpha
+                or snapshot.local_error or snapshot.stopped):
+            return 'The controller is disabled, stopped or reports a local error.'
+        if not snapshot.carp_aligned or not snapshot.observed.carp_allowed:
+            return 'CARP is disabled or its live instances do not match the configuration.'
+        if not snapshot.observed.carp_states:
+            return 'No CARP state is observed.'
+        others = [f"{item['interface']} vhid {item['vhid']} {item['status']}"
+                  for item in snapshot.live_carp_instances if item['status'] != 'BACKUP']
+        if others or any(state != 'BACKUP' for state in snapshot.observed.carp_states):
+            return 'Every CARP instance must be BACKUP; not BACKUP: ' + (', '.join(others) or 'unknown') + '.'
+        if (not snapshot.observed.dhcpha_owned or snapshot.observed.dhcpha.lagg_members
+                or snapshot.observed.carrier.up):
+            return 'The managed WAN is not verified fenced.'
         addresses, known = _ipv4_addresses(snapshot.inventory, path['device'])
-        return (path['enabled'] and not path['error'] and snapshot.settings.enabled
-                and snapshot.settings.managed_by_dhcpha and not snapshot.local_error and not snapshot.stopped
-                and snapshot.carp_aligned and snapshot.observed.carp_allowed
-                and bool(snapshot.observed.carp_states)
-                and all(state == 'BACKUP' for state in snapshot.observed.carp_states)
-                and snapshot.observed.dhcpha_owned and not snapshot.observed.dhcpha.lagg_members
-                and not snapshot.observed.carrier.up and known and path['source_address'] in addresses
-                and 'up' in snapshot.inventory.get(path['device'], {}).get('flags', []))
+        if not known or path['source_address'] not in addresses:
+            return 'The selected internal interface does not hold its configured IPv4 address.'
+        if 'up' not in snapshot.inventory.get(path['device'], {}).get('flags', []):
+            return 'The selected internal interface is down.'
+        return None
+
+    @classmethod
+    def _standby_eligible(cls, snapshot, path):
+        return cls._standby_blocker(snapshot, path) is None
 
     def _withdraw_standby_locked(self, restore=False):
         record = self._standby_record()
@@ -383,9 +403,13 @@ class Controller:
             elif record is not None:
                 result.update(state='unavailable', reason='Owned standby routing requires reconciliation.')
             elif path['enabled']:
+                reason = (self._standby_blocker(snapshot, path)
+                          or 'Standby path is not selected in the current role or configuration.')
+                if current is not None and current['netif'] == DHCPHA_DEVICE and not snapshot.observed.dhcpha.up:
+                    reason += ' The current IPv4 default uses the fenced WAN and cannot carry traffic.'
                 result.update(state='unavailable' if snapshot.observed.carp_states and
                               all(s == 'BACKUP' for s in snapshot.observed.carp_states) else 'inactive',
-                              reason=path['error'] or 'Standby path is not selected in the current role or configuration.')
+                              reason=reason)
         except Exception as error:
             result.update(state='unknown', reason=str(error))
         return result
