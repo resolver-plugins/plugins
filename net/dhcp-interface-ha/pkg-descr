@@ -15,6 +15,7 @@ Plugin Changelog
 
 26.7
 
+* Build and publish through the rebuilt release pipeline
 * Move the package feed and upgrade the plugin automatically across OPNsense series upgrades
 
 0.1
