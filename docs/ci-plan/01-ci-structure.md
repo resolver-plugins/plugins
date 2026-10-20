@@ -1,16 +1,21 @@
 # Phase 01: CI structure
 
 Status: planned
-Before: `.github/workflows/` holds the old CI, including the old
-`bind-plugin-release.yml`, `ha-dhcp-interface-release.yml` and
-`repository-index.yml`; none of the new CI exists yet.
+Before: `.github/workflows/` holds only the old CI; none of the new CI exists
+yet.
 After: the four workflows of the design exist with their final triggers,
 inputs, outputs, job graph, conditions, concurrency, permissions, credential
-steps and artifact names. Every `run:` body is a stub that fails, so nothing can
-build or publish; phases 02–06 replace the stubs. The other old workflows stay
-until phase 08.
+steps and artifact names, as four new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`).
+Every `run:` body is a stub that fails, so nothing can build or publish; phases
+02–06 replace the stubs. No old file is edited: the old CI stays untouched as
+reference until phase 08 deletes it.
 
-Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
 inline or CI script exceeds 30 physical lines. Add no script
@@ -48,7 +53,7 @@ so steps run with `-eo pipefail`.
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
 | 01.1 | `plugin-target.yml` declared | sonnet | high | first, parallel with 01.2 and 01.3 | planned |
-| 01.2 | `repository-index.yml` declared | sonnet | medium | parallel with 01.1 and 01.3 | planned |
+| 01.2 | `package-index.yml` declared | sonnet | medium | parallel with 01.1 and 01.3 | planned |
 | 01.3 | Both entry workflows declared | sonnet | medium | parallel with 01.1 and 01.2 | planned |
 
 ## 01.1 Lifecycle workflow
@@ -214,22 +219,22 @@ resolver-plugins/repository`, `SERIES`, `VERSION`, `PREPARED_SHA`,
 `if: ${{ !cancelled() && needs.publish.outputs.published == 'true' }}`,
 `concurrency` group `package-repository-index` with `cancel-in-progress: false`
 and `queue: max` (as the existing index), so no publication's index is dropped,
-`uses: ./.github/workflows/repository-index.yml` with `series`, `abi`
+`uses: ./.github/workflows/package-index.yml` with `series`, `abi`
 (prepare.abi), `component`, `current_tag` (publish.current_tag), `source_tag`
 (the input template); secrets: the three secrets passed by name.
 
 ## 01.2 Index workflow
 
 ```
-Goal:            .github/workflows/repository-index.yml is replaced by the
-                 reusable feed writer with its final interface and job graph and
+Goal:            .github/workflows/package-index.yml exists as the reusable
+                 feed writer with its final interface and job graph and
                  stubbed step bodies.
 Context:         Design, "Index": jobs select, stage (FreeBSD VM), publish,
                  readback, retain; the signing key only in stage. The caller
                  holds the concurrency group package-repository-index (01.1).
-                 The old file is replaced in place.
+                 It is a new file; the old repository-index.yml stays untouched.
 Contracts:       See "Index interface" below.
-Files:           .github/workflows/repository-index.yml (replaced)
+Files:           .github/workflows/package-index.yml (new)
 Work:            Replace the file with the specification below.
 External inputs: none (structure only).
 Done when:       Every input, secret, job, output, condition, step and artifact
@@ -284,8 +289,8 @@ sync app token id `sync` (client-id, `repositories: plugins`,
 ## 01.3 Entry workflows
 
 ```
-Goal:            bind-plugin-release.yml and ha-dhcp-interface-release.yml are
-                 replaced by thin entries with their final events, jobs,
+Goal:            bind-plugin.yml and ha-dhcp-interface-plugin.yml exist as thin
+                 entries with their final events, jobs,
                  conditions and the one call to plugin-target.yml, with stubbed
                  step bodies.
 Context:         Design, "Entry inputs" and "Entry jobs". Each entry resolves
@@ -295,8 +300,8 @@ Context:         Design, "Entry inputs" and "Entry jobs". Each entry resolves
                  empty secrets.
 Contracts:       See "Entry interface" below; the two files differ only in the
                  policy values.
-Files:           .github/workflows/bind-plugin-release.yml (replaced)
-                 .github/workflows/ha-dhcp-interface-release.yml (replaced)
+Files:           .github/workflows/bind-plugin.yml (new)
+                 .github/workflows/ha-dhcp-interface-plugin.yml (new)
 Work:            Write one shape and fill each file's policy values.
 External inputs: none (structure only).
 Done when:       Both files match the interface; the policy values match the
@@ -362,6 +367,11 @@ permissions `contents: read`, `actions: read`; concurrency group
 `${{ needs.request.outputs.purpose != 'candidate' && secrets.<NAME> || '' }}`.
 
 ## Notes
+
+- The new CI is four new files (`bind-plugin.yml`, `ha-dhcp-interface-plugin.yml`,
+  `plugin-target.yml`, `package-index.yml`), over replacing the old entries and
+  index in place, so no old CI file is edited before cutover (user decision,
+  2026-10-20).
 
 - `discover` outputs one series and `target` is a single call, over a matrix,
   because only the active series is ever a target and an empty matrix fails its

@@ -7,7 +7,11 @@ After: each plugin's entry runs daily discovery, accepts production and
 candidate requests, writes PR statuses, and promotes merged candidates. The new
 CI is complete on `master`; the old workflows still exist until phase 08.
 
-Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
 inline or CI script exceeds 30 physical lines. Add no script
@@ -45,8 +49,8 @@ Context:         Spec: opening or updating a PR runs only a cheap status job;
                  --json files`.
 Contracts:       pending description "Request a package build for this head";
                  success description "Not applicable"; written to HEAD_SHA.
-Files:           .github/workflows/bind-plugin-release.yml,
-                 .github/workflows/ha-dhcp-interface-release.yml (status body)
+Files:           .github/workflows/bind-plugin.yml,
+                 .github/workflows/ha-dhcp-interface-plugin.yml (status body)
 Work:            1. files = gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json
                     files --jq '.files[].path'.
                  2. grep -q "^$SOURCE_DIRECTORY/" decides the state.

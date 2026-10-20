@@ -3,12 +3,15 @@
 Status: planned
 Before: the new CI (phases 01–06) and the client changes (phase 07) are built
 beside the old workflows, helpers and runtime package definitions; the guides describe the old CI.
-After: `.github/workflows/` holds exactly `bind-plugin-release.yml`,
-`ha-dhcp-interface-release.yml`, `plugin-target.yml` and
-`repository-index.yml`; `.github/ci/` and `packages/` are gone; the guides and
+After: `.github/workflows/` holds exactly `bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml` and `package-index.yml`; `.github/ci/` and `packages/` are gone; the guides and
 `AGENTS.md` describe the new CI. Everything is still local.
 
-Rules: the specification's "Simplicity and limits", "Testing decisions" and
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Testing decisions" and
 "Cutover" apply ([spec](../ci-rebuild-spec.md)). Nothing is run: review by
 reading the diff and `git diff --check`. Commit once per phase with
 `[skip ci]`; nothing is pushed or dispatched. `.github/ci-local/` is ignored
@@ -33,12 +36,14 @@ describes what the workflows actually do; read them before writing.
 ```
 Goal:            Only the four design workflows remain, and nothing refers to a
                  removed CI file from a workflow.
-Context:         Design, "Retirement map": upstream-sync.yml, the runtime
-                 workflows, packages/, repository-index-series.yml,
-                 pr-release-cleanup.yml and .github/ci/** are retired. Mk/devel.mk
+Context:         Design, "Retirement map": every old workflow, packages/ and
+                 .github/ci/** are retired; the new CI was built in new files
+                 beside them, so nothing old was replaced in place. Mk/devel.mk
                  is upstream framework code and stays.
 Contracts:       none.
-Files:           git rm: .github/workflows/bind-runtime-package.yml,
+Files:           git rm: .github/workflows/bind-plugin-release.yml,
+                 ha-dhcp-interface-release.yml, repository-index.yml,
+                 bind-runtime-package.yml,
                  bind-tools-release.yml, bind920-candidate.yml,
                  bind920-release.yml, pr-release-cleanup.yml,
                  repository-index-series.yml, upstream-sync.yml (all under

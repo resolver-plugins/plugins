@@ -6,12 +6,12 @@ each part belong to its implementation stage in the [plan](ci-plan/).
 ## Overview
 
 ```
-bind-plugin-release.yml ─┐                       ┌─ prepare  (Ubuntu)
+bind-plugin.yml ─────────┐                       ┌─ prepare  (Ubuntu)
                           ├─ plugin-target.yml ───┤  build    (FreeBSD VM)
 ha-dhcp-interface-        │   one plugin, one     │  qualify  (clean FreeBSD VM)
-  release.yml ───────────┘   series              │  publish  (Ubuntu)
+  plugin.yml ────────────┘   series              │  publish  (Ubuntu)
                                                   ├─ sync-source (Ubuntu)
-                                                  └─ index: repository-index.yml
+                                                  └─ index: package-index.yml
                                                        stage (FreeBSD VM), publish,
                                                        readback, retain
 ```
@@ -24,12 +24,13 @@ index after a successful publication. Nothing dispatches another workflow.
 
 | File (`.github/workflows/`) | Role | Triggers |
 | --- | --- | --- |
-| `bind-plugin-release.yml` | BIND entry | schedule (daily), `workflow_dispatch`, `pull_request_target` on `master` |
-| `ha-dhcp-interface-release.yml` | HA entry | same |
+| `bind-plugin.yml` | BIND entry | schedule (daily), `workflow_dispatch`, `pull_request_target` on `master` |
+| `ha-dhcp-interface-plugin.yml` | HA entry | same |
 | `plugin-target.yml` | Lifecycle for one plugin and series | `workflow_call` only |
-| `repository-index.yml` | Sole feed writer and retention | `workflow_call` only |
+| `package-index.yml` | Sole feed writer and retention | `workflow_call` only |
 
-The entries keep their current file names, so cutover replaces them in place.
+All four are new files beside the old CI, which stays untouched as reference
+until cutover deletes it.
 Everything else under `.github/workflows/` and `.github/ci/` is retired.
 
 ### Entry inputs (the package policy)
@@ -88,7 +89,7 @@ Jobs run in order and each needs the previous one's success.
 | `qualify` | clean FreeBSD VM | Install the archive on a fresh OPNsense of the series | none |
 | `publish` | Ubuntu | Versioned and current distribution Releases | distribution app |
 | `sync-source` | Ubuntu | Put the prepared commit on the release branch; tag it and create the source Release | sync app |
-| `index` | `repository-index.yml` | Refresh the series feed, then retention | signing key, distribution app, sync app |
+| `index` | `package-index.yml` | Refresh the series feed, then retention | signing key, distribution app, sync app |
 
 `index` and `sync-source` both need only `publish`, so a failed source sync does
 not block the feed. Candidates stop after `qualify`; promotion skips `build` and
@@ -202,7 +203,7 @@ stays in the 26.1 and 26.7 feeds.
 These are read with `git ls-remote`, `git fetch` and `gh api`, once in `prepare`
 (and `discover`), and fail clearly on an unexpected format.
 
-## Index (`repository-index.yml`)
+## Index (`package-index.yml`)
 
 Inputs: `series`, `abi`, `component`, `current_tag`, `source_tag` (the
 template, so retention can name the source Release). Concurrency group
@@ -253,10 +254,10 @@ from all enabled repositories.
 
 | Existing | Disposition |
 | --- | --- |
-| `bind-plugin-release.yml`, `ha-dhcp-interface-release.yml` | Replaced in place by the new entries |
+| `bind-plugin-release.yml`, `ha-dhcp-interface-release.yml` | Retired; replaced by `bind-plugin.yml` and `ha-dhcp-interface-plugin.yml` |
 | `upstream-sync.yml` and its sync/bootstrap PR machinery | Replaced by `discover` and `prepare` |
 | `bind-runtime-package.yml`, `bind920-release.yml`, `bind-tools-release.yml`, `bind920-candidate.yml`, `packages/` | Retired with the runtime builds |
-| `repository-index.yml`, `repository-index-series.yml` | Replaced by the new `repository-index.yml` |
+| `repository-index.yml`, `repository-index-series.yml` | Retired; replaced by `package-index.yml` |
 | `pr-release-cleanup.yml` and development Releases | Retired; candidates are artifacts |
 | `.github/ci/**` (helpers, profiles, seals, tests) | Retired |
 

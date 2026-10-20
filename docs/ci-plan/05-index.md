@@ -1,13 +1,17 @@
 # Phase 05: Index and retention
 
 Status: planned
-Before: publication works (phase 04); `repository-index.yml` is declared with
+Before: publication works (phase 04); `package-index.yml` is declared with
 stub bodies (phase 01), and its stage job's repository step is filled (03.1).
 After: after a publication, the series feed is rebuilt from the current
 Releases it serves, signed, published to Pages in one commit and read back, and
 the release two versions back is removed.
 
-Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
 inline or CI script exceeds 30 physical lines. Add no script
@@ -52,7 +56,7 @@ Contracts:       Output changed=true|false. $RUNNER_TEMP/channel/channel.json =
                  build-record.json, else null), "packages": [<.pkg asset
                  names>]}}}. environment outputs freebsd_release and core_commit
                  from the input component's current Release record.
-Files:           .github/workflows/repository-index.yml (bodies of `select` and
+Files:           .github/workflows/package-index.yml (bodies of `select` and
                  `environment`)
 Work:            select:
                  1. Read $FEED/channel.json from gh-pages with gh api raw; on
@@ -87,7 +91,7 @@ Context:         Design: stage downloads the archives and runs pkg repo with the
                  channel.json. Spec: the key is exposed only to the signing job.
 Contracts:       feed/ holds the archives, channel.json, resolver-plugins.pub and
                  pkg repo's catalogue files; uploaded as feed-<series>-<run_id>.
-Files:           .github/workflows/repository-index.yml ("Download the current
+Files:           .github/workflows/package-index.yml ("Download the current
                  archives" body, the VM run, and a new "Record the pkg version"
                  step after the VM)
 Work:            Download:
@@ -121,7 +125,7 @@ Context:         Spec: publish complete signed catalogues in one Git update;
                  the staged ones, retrying briefly while Pages deploys.
 Contracts:       Commit message "Index <FEED>"; author github-actions[bot];
                  public URL https://resolver-plugins.github.io/repository/<FEED>.
-Files:           .github/workflows/repository-index.yml (publish and readback
+Files:           .github/workflows/package-index.yml (publish and readback
                  bodies)
 Work:            Publish (in pages/):
                  1. Set the git identity; rm -rf "$FEED"; mkdir -p; cp -R the
@@ -154,7 +158,7 @@ Contracts:       Distribution token in GH_TOKEN (resolver-plugins/repository);
                  Release tag <SOURCE_TAG with {series}>-<version of the dropped
                  tag>, where the version is the dropped tag minus
                  "<CURRENT_TAG>-".
-Files:           .github/workflows/repository-index.yml (retain body)
+Files:           .github/workflows/package-index.yml (retain body)
 Work:            1. previous = previous_tag of CURRENT_TAG's record; dropped =
                     previous_tag of previous's record (a small shell function;
                     missing Release, asset or field yields empty).

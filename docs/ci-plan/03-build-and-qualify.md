@@ -7,7 +7,11 @@ After: a production or candidate request produces the
 FreeBSD VM of the series' release, its build record, and the source bundle,
 installed and checked on a clean OPNsense. Publication is still a stub.
 
-Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
 inline or CI script exceeds 30 physical lines. Add no script
@@ -54,14 +58,14 @@ Context:         Design, "Upstream discovery": the OPNsense package repository
                  FreeBSD.conf.shadow disables the FreeBSD repositories for the
                  series; its fingerprints directory holds the trust anchors.
                  The step appears in build and qualify (plugin-target.yml) and
-                 in the index's stage job (repository-index.yml), each with
+                 in the index's stage job (package-index.yml), each with
                  SERIES and CORE_COMMIT in the job env.
 Contracts:       .opnsense-pkg/repos/OPNsense.conf, .opnsense-pkg/repos/FreeBSD.conf,
                  .opnsense-pkg/fingerprints/OPNsense/{trusted,revoked}/…
                  Each VM copies repos/* to /usr/local/etc/pkg/repos/ and
                  fingerprints/OPNsense to /usr/local/etc/pkg/fingerprints/.
 Files:           .github/workflows/plugin-target.yml (build and qualify steps)
-                 .github/workflows/repository-index.yml (stage step)
+                 .github/workflows/package-index.yml (stage step)
 Work:            The same body in all three:
                  1. git init -q $RUNNER_TEMP/core; add remote origin
                     https://github.com/opnsense/core.git; git fetch -q --depth 1

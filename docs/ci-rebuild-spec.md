@@ -110,9 +110,10 @@ The CI builds these two plugins. It no longer builds BIND runtimes; see
   workflows, artifacts and job outputs. Use `git`, `gh`, `jq`, `make` and `pkg`
   for the operations themselves. Write custom code only for what these cannot
   express clearly.
-- **Built from scratch.** The new CI reuses no code from the old CI (the old
-  workflows and `.github/ci/**`). They stay in the tree only as reference until
-  cutover deletes them.
+- **Built from scratch.** The new CI is written in new files beside the old CI
+  and reuses none of its code. No old CI file (the old workflows,
+  `.github/ci/**`, `packages/`) is edited, renamed or reused; they stay
+  untouched in the tree only as reference until cutover deletes them.
 - **Script files are the last resort.** A CI script file (any file a workflow
   runs other than the workflow itself) needs a written justification before it
   is created: the operation, each direct alternative (a workflow feature, an

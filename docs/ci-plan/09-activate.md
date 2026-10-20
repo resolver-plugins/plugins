@@ -9,7 +9,11 @@ trailer, branch rules enforce the PR and release-branch model, `master` runs
 the new CI, a first production run has published and indexed, and the old
 pipeline's leftover Releases are cleaned up.
 
-Rules: every stage here changes GitHub. **Each stage needs its own explicit
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. Every stage here changes GitHub. **Each stage needs its own explicit
 user request.** Before that request, the agent may only read (git fetch, gh
 api GET) and prepare the exact commands; it then stops and shows them. Never
 force-push or rewrite history. The specification's "Cutover" section applies
@@ -113,7 +117,7 @@ Files:           none.
 Work:            1. Confirm master has not moved since the plan branch's base,
                     or merge master into the plan branch locally first.
                  2. Show the push command; push after the request.
-                 3. On request, dispatch `gh workflow run bind-plugin-release.yml`
+                 3. On request, dispatch `gh workflow run bind-plugin.yml`
                     and the HA entry, and report the run URLs and outcomes.
 External inputs: the remote master.
 Done when:       The user confirms a production run published, synced and

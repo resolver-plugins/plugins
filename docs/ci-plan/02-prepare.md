@@ -7,7 +7,11 @@ upstream environment, reads the current Release and record, prepares and
 bundles the source for production and candidates (or skips), and finds the
 candidate for a promotion. Later jobs are still stubs.
 
-Rules: the specification's "Simplicity and limits", "Failed jobs stay failed"
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. The specification's "Simplicity and limits", "Failed jobs stay failed"
 and "Testing decisions" apply ([spec](../ci-rebuild-spec.md)). Nothing is run:
 review by reading the diff and `git diff --check`. Stop and ask before any
 inline or CI script exceeds 30 physical lines (comments and blanks count). Add no script

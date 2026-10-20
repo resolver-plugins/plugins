@@ -12,7 +12,11 @@ or FreeBSD base upgrade with short POSIX `sh` workers that rely on `pkg` for
 signatures, ABI and dependencies, including BIND; the managed configuration has
 no priority line; fresh install is `install-repository.sh` plus `pkg install`.
 
-Rules: this phase changes plugin code, not CI, and is the last build phase
+Rules: the new CI lives only in new files (`bind-plugin.yml`,
+`ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
+old CI file (the old workflows, `.github/ci/**`, `packages/`) is edited,
+renamed or reused; the old CI stays untouched as reference until stage 08.1
+deletes it. This phase changes plugin code, not CI, and is the last build phase
 because CI is the primary work. Keep the code minimal and let `pkg` do what it already does: check
 the catalogue signature, select packages for the running ABI, resolve
 dependencies and refuse what it cannot install. Nothing is run: review by
