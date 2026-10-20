@@ -508,13 +508,52 @@ jobs:
         id: versioned
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: echo "::error::Not implemented (stage 04.1)" && exit 1
+        run: |
+          tag="${CURRENT_TAG//'{series}'/$SERIES}-$VERSION"
+          err="$RUNNER_TEMP/versioned.err"
+          if draft=$(gh release view "$tag" --repo "$REPOSITORY" --json isDraft --jq .isDraft 2>"$err"); then :
+          elif grep -q "release not found" "$err"; then draft=
+          else cat "$err"; exit 1; fi
+          if [ "$draft" = false ]; then
+            gh release download "$tag" --repo "$REPOSITORY" --pattern build-record.json --dir "$RUNNER_TEMP/published" --clobber
+            if [ "$(jq -r .source_commit "$RUNNER_TEMP/published/build-record.json")" != "$PREPARED_SHA" ]; then
+              echo "::error::$tag is already published from another source; rerun the run that published it"
+              exit 1
+            fi
+            echo "$tag is already published from this source; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$draft" = true ]; then gh release delete "$tag" --repo "$REPOSITORY" --yes; fi
+          gh release create "$tag" dist/*.pkg dist/build-record.json --repo "$REPOSITORY" --draft \
+            --title "$tag" --notes "$VERSION for OPNsense $SERIES" --prerelease="$PRERELEASE"
+          gh release edit "$tag" --repo "$REPOSITORY" --draft=false
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       - name: Advance the current Release
         id: current
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: echo "::error::Not implemented (stage 04.1)" && exit 1
+        run: |
+          tag="${CURRENT_TAG//'{series}'/$SERIES}"
+          echo "current_tag=$tag" >> "$GITHUB_OUTPUT"
+          err="$RUNNER_TEMP/current.err"
+          if ! assets=$(gh release view "$tag" --repo "$REPOSITORY" --json assets --jq '.assets[].name' 2>"$err"); then
+            grep -q "release not found" "$err" || { cat "$err"; exit 1; }
+            gh release create "$tag" dist/*.pkg dist/build-record.json --repo "$REPOSITORY" \
+              --title "$tag" --notes "$VERSION for OPNsense $SERIES" --prerelease="$PRERELEASE"
+            echo "advanced=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          revision=$({ grep -E -- "-${SERIES//./\\.}_[0-9]+\.pkg$" <<<"$assets" || true; } | sed -E 's/.*_([0-9]+)\.pkg$/\1/')
+          if [ "${VERSION##*_}" -le "${revision:-0}" ]; then
+            echo "$tag does not advance: $VERSION is not newer than revision ${revision:-0}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          archive=$(basename dist/*.pkg)
+          gh release upload "$tag" "dist/$archive" dist/build-record.json --repo "$REPOSITORY" --clobber
+          { grep -vx -e "$archive" -e build-record.json <<<"$assets" || true; } |
+            while read -r asset; do gh release delete-asset "$tag" "$asset" --repo "$REPOSITORY" --yes; done
+          echo "advanced=true" >> "$GITHUB_OUTPUT"
 
   sync-source:
     name: Sync ${{ inputs.component }} ${{ needs.prepare.outputs.version }} source
@@ -552,12 +591,33 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Push the prepared commit and its tag
-        run: echo "::error::Not implemented (stage 04.2)" && exit 1
+        run: |
+          tag="${SOURCE_TAG//'{series}'/$SERIES}-$VERSION"
+          git fetch -q "$RUNNER_TEMP/dist/source.bundle" HEAD
+          if git rev-parse -q --verify "origin/$BRANCH" >/dev/null && git merge-base --is-ancestor "$PREPARED_SHA" "origin/$BRANCH"; then
+            echo "$BRANCH already holds $PREPARED_SHA; push skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git push origin "$PREPARED_SHA:refs/heads/$BRANCH"
+          fi
+          git push origin "$PREPARED_SHA:refs/tags/$tag"
 
       - name: Create the source Release
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: echo "::error::Not implemented (stage 04.2)" && exit 1
+        run: |
+          tag="${SOURCE_TAG//'{series}'/$SERIES}-$VERSION"
+          err="$RUNNER_TEMP/source-release.err"
+          if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>"$err"); then :
+          elif grep -q "release not found" "$err"; then draft=
+          else cat "$err"; exit 1; fi
+          if [ "$draft" = false ]; then
+            echo "$tag is already published; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$draft" = true ]; then gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes; fi
+          gh release create "$tag" "$RUNNER_TEMP"/dist/*.pkg "$RUNNER_TEMP/dist/build-record.json" --repo "$GITHUB_REPOSITORY" --draft \
+            --verify-tag --title "$tag" --notes "Source of $VERSION for OPNsense $SERIES" --prerelease="$PRERELEASE"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
 
   index:
     needs: [prepare, publish]

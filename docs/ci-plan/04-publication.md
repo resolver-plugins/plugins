@@ -1,6 +1,6 @@
 # Phase 04: Publication
 
-Status: planned
+Status: built, awaiting user review (stages done: 04.1–04.2)
 Before: a request produces the `qualified-` artifact (phase 03); publish and
 sync-source are stubs.
 After: production and promotion publish the versioned and current
@@ -33,8 +33,8 @@ artifact holds `<name>-<version>.pkg`, `build-record.json` and `source.bundle`
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 04.1 | Versioned and current distribution Releases | sonnet | high | first | planned |
-| 04.2 | Source sync, tag and source Release | sonnet | medium | after 04.1 | planned |
+| 04.1 | Versioned and current distribution Releases | sonnet | high | first | done |
+| 04.2 | Source sync, tag and source Release | sonnet | medium | after 04.1 | done |
 
 ## 04.1 Distribution Releases
 
@@ -131,3 +131,9 @@ Out of scope:    Branch rules (phase 09).
 - A versioned tag already published from a different `source_commit` fails
   instead of completing, so a later run cannot claim another build's version
   (2026-10-20).
+- Built 2026-10-20 in sequence by delegated sonnet agents. Stale current
+  assets are removed with `gh release delete-asset`; source sync checks that
+  the branch exists before asking whether it already holds the commit, since a
+  new series has no branch yet. `gh release view` falls back to searching
+  drafts when the tag lookup finds nothing, so leftover drafts are found; this
+  is confirmed only by the first real run (2026-10-20).
