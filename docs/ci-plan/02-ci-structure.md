@@ -365,8 +365,8 @@ permissions `contents: read`, `actions: read`; concurrency group
 - One `request` job resolves candidates and promotions so the policy inputs
   appear in one call, over separate calls repeating them (2026-10-20).
 - The index receives the `source_tag` template because retention deletes the
-  source Release `<source_tag>-<version>` and may not scan Releases. The design's
-  index input list lacks it; pending user confirmation (2026-10-20).
+  source Release `<source_tag>-<version>` and may not scan Releases; the design's
+  index inputs now include it (user decision, 2026-10-20).
 - The index concurrency group sits on the calling job, which covers the whole
   called workflow, and keeps the existing `queue: max` (2026-10-20).
 - The sync app gets only `contents: write`, as the existing workflows use;

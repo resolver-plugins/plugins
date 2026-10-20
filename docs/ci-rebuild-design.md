@@ -204,7 +204,8 @@ These are read with `git ls-remote`, `git fetch` and `gh api`, once in `prepare`
 
 ## Index (`repository-index.yml`)
 
-Inputs: `series`, `abi`, `component`, `current_tag`. Concurrency group
+Inputs: `series`, `abi`, `component`, `current_tag`, `source_tag` (the
+template, so retention can name the source Release). Concurrency group
 `package-repository-index` (existing name), whole workflow.
 
 | Job | Runs on | Does |
