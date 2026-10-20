@@ -84,6 +84,16 @@ workspace back when `copyback` is set, then shuts the builder down and restores
 the baseline again, even when the step fails. A series whose FreeBSD release has
 no builder fails at the start of `build`.
 
+## Actions policy
+
+The repository Actions policy "Allow the CI workflows' events" (id 8127, under
+Settings → Actions → Rules) lists the events the four CI workflows may run on:
+`schedule`, `workflow_dispatch`, `pull_request_target` and `workflow_call`. It
+replaces GitHub's default policy that blocks `pull_request_target` in public
+repositories from November 2, 2026. The PR status and promotion jobs need
+`pull_request_target` and never check out or run PR code. A new trigger in one of
+these workflows must also be added to the policy.
+
 ## Versions
 
 Both plugins use `<series>_<n>`, for example `26.7_1`. `n` is the current
