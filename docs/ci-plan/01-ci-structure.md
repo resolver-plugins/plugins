@@ -1,6 +1,6 @@
 # Phase 01: CI structure
 
-Status: planned
+Status: built, awaiting user review (stages done: 01.1–01.3)
 Before: `.github/workflows/` holds only the old CI; none of the new CI exists
 yet.
 After: the four workflows of the design exist with their final triggers,
@@ -52,9 +52,9 @@ so steps run with `-eo pipefail`.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 01.1 | `plugin-target.yml` declared | sonnet | high | first, parallel with 01.2 and 01.3 | planned |
-| 01.2 | `package-index.yml` declared | sonnet | medium | parallel with 01.1 and 01.3 | planned |
-| 01.3 | Both entry workflows declared | sonnet | medium | parallel with 01.1 and 01.2 | planned |
+| 01.1 | `plugin-target.yml` declared | sonnet | high | first, parallel with 01.2 and 01.3 | done |
+| 01.2 | `package-index.yml` declared | sonnet | medium | parallel with 01.1 and 01.3 | done |
+| 01.3 | Both entry workflows declared | sonnet | medium | parallel with 01.1 and 01.2 | done |
 
 ## 01.1 Lifecycle workflow
 
@@ -386,3 +386,11 @@ permissions `contents: read`, `actions: read`; concurrency group
 - The sync app gets only `contents: write`, as the existing workflows use;
   upstream `stable/*` has no workflow files and phase 09 removes them from the
   release branches (2026-10-20).
+- Built 2026-10-20 by three parallel sonnet agents. Interpretations where the
+  interface was silent: unnamed checkout, download and upload steps; env values
+  taken from the same-named inputs or event fields; `discover` gets
+  `permissions: {}`; `plugin-target.yml` gets `name: Plugin target` and the
+  index `name: Package index` (2026-10-20).
+- The first build overwrote the three old workflows in place; the user stopped
+  it, the content moved to the new files and the old files were restored
+  unchanged (2026-10-20).

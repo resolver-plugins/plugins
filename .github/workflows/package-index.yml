@@ -1,0 +1,178 @@
+name: Package index
+
+on:
+  workflow_call:
+    inputs:
+      series:
+        type: string
+        required: true
+      abi:
+        type: string
+        required: true
+      component:
+        type: string
+        required: true
+      current_tag:
+        type: string
+        required: true
+      source_tag:
+        type: string
+        required: true
+    secrets:
+      RP_PKG_SIGNING_KEY:
+        required: true
+      RP_DISTRIBUTION_APP_PRIVATE_KEY:
+        required: true
+      RP_SYNC_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  REPOSITORY: resolver-plugins/repository
+  FEED: pkg/${{ inputs.abi }}/${{ inputs.series }}/latest
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.select.outputs.changed }}
+      freebsd_release: ${{ steps.environment.outputs.freebsd_release }}
+      core_commit: ${{ steps.environment.outputs.core_commit }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERIES: ${{ inputs.series }}
+      ABI: ${{ inputs.abi }}
+      COMPONENT: ${{ inputs.component }}
+      CURRENT_TAG: ${{ inputs.current_tag }}
+    steps:
+      - name: Select the current Releases the feed serves
+        id: select
+        run: echo "::error::Not implemented (stage 05.1)" && exit 1
+      - name: Read the build environment from the published record
+        id: environment
+        if: steps.select.outputs.changed == 'true'
+        run: echo "::error::Not implemented (stage 05.1)" && exit 1
+      - if: steps.select.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-${{ inputs.series }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/channel/channel.json
+          retention-days: 1
+
+  stage:
+    needs: select
+    if: needs.select.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERIES: ${{ inputs.series }}
+      CORE_COMMIT: ${{ needs.select.outputs.core_commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/package-repository
+      - uses: actions/download-artifact@v4
+        with:
+          name: channel-${{ inputs.series }}-${{ github.run_id }}
+          path: feed
+      - name: Download the current archives
+        run: echo "::error::Not implemented (stage 05.2)" && exit 1
+      - name: Configure the OPNsense package repository
+        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+      - name: Sign the catalogue in FreeBSD ${{ needs.select.outputs.freebsd_release }}
+        uses: vmactions/freebsd-vm@v1
+        env:
+          RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+        with:
+          release: ${{ needs.select.outputs.freebsd_release }}
+          arch: x86_64
+          usesh: true
+          copyback: true
+          disable-cache: true
+          envs: RP_PKG_SIGNING_KEY
+          run: echo "::error::Not implemented (stage 05.2)" && exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feed-${{ inputs.series }}-${{ github.run_id }}
+          path: feed
+          retention-days: 1
+
+  publish:
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: repository
+          permission-contents: write
+      - uses: actions/checkout@v6
+        with:
+          repository: resolver-plugins/repository
+          ref: gh-pages
+          token: ${{ steps.token.outputs.token }}
+          sparse-checkout: ${{ env.FEED }}
+          path: pages
+      - uses: actions/download-artifact@v4
+        with:
+          name: feed-${{ inputs.series }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/feed
+      - name: Replace the feed directory in one commit
+        working-directory: pages
+        run: echo "::error::Not implemented (stage 05.3)" && exit 1
+
+  readback:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: feed-${{ inputs.series }}-${{ github.run_id }}
+          path: feed
+      - name: Compare the public feed with the staged files
+        run: echo "::error::Not implemented (stage 05.3)" && exit 1
+
+  retain:
+    needs: readback
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SERIES: ${{ inputs.series }}
+      CURRENT_TAG: ${{ inputs.current_tag }}
+      SOURCE_TAG: ${{ inputs.source_tag }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: distribution
+        with:
+          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: repository
+          permission-contents: write
+      - uses: actions/create-github-app-token@v2
+        id: sync
+        with:
+          client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: plugins
+          permission-contents: write
+      - name: Delete the release two versions back
+        env:
+          GH_TOKEN: ${{ steps.distribution.outputs.token }}
+          SYNC_TOKEN: ${{ steps.sync.outputs.token }}
+        run: echo "::error::Not implemented (stage 05.4)" && exit 1

@@ -1,0 +1,130 @@
+name: HA DHCP Interface plugin
+run-name: >-
+  HA DHCP Interface plugin ${{ github.event_name == 'pull_request_target'
+  && format('PR #{0} {1}', github.event.pull_request.number, github.event.action)
+  || inputs.pr && format('candidate PR #{0}', inputs.pr)
+  || format('production {0}', inputs.series || github.event_name) }}
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      series:
+        description: Series for a production build (default the active series)
+        type: string
+        default: ''
+      pr:
+        description: PR number for a candidate build
+        type: string
+        default: ''
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+    branches: [master]
+
+permissions: {}
+
+env:
+  SOURCE_DIRECTORY: net/dhcp-interface-ha
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  status:
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Write the package build status
+        run: echo "::error::Not implemented (stage 06.1)" && exit 1
+
+  discover:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      applies: ${{ steps.discover.outputs.applies }}
+      series: ${{ steps.discover.outputs.series }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERIES: ${{ inputs.series }}
+      CURRENT_TAG: pkg-dhcp-interface-ha-{series}
+      FOLLOW_UPSTREAM: false
+    steps:
+      - name: Discover work for the active series
+        id: discover
+        run: echo "::error::Not implemented (stage 06.2)" && exit 1
+
+  request:
+    if: (github.event_name == 'workflow_dispatch' && inputs.pr != '') || github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      applies: ${{ steps.request.outputs.applies }}
+      purpose: ${{ steps.request.outputs.purpose }}
+      series: ${{ steps.request.outputs.series }}
+      source_sha: ${{ steps.request.outputs.source_sha }}
+      pr: ${{ steps.request.outputs.pr }}
+      group: ${{ steps.request.outputs.group }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+      MERGED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Resolve the request
+        id: request
+        run: echo "::error::Not implemented (stage 06.3)" && exit 1
+
+  target:
+    needs: [discover, request]
+    if: >-
+      !cancelled() && (needs.discover.outputs.applies == 'true' || needs.request.outputs.applies == 'true')
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: ${{ needs.request.outputs.group || format('plugin-dhcp-{0}', needs.discover.outputs.series) }}
+    uses: ./.github/workflows/plugin-target.yml
+    with:
+      component: dhcp
+      source_directory: net/dhcp-interface-ha
+      branch_prefix: release/dhcp-interface-ha
+      current_tag: pkg-dhcp-interface-ha-{series}
+      source_tag: dhcp-interface-ha-{series}
+      follow_upstream: false
+      prerelease: true
+      series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}
+      purpose: ${{ needs.request.outputs.purpose || 'production' }}
+      source_sha: ${{ needs.request.outputs.source_sha || github.sha }}
+      pr: ${{ needs.request.outputs.pr }}
+    secrets:
+      RP_DISTRIBUTION_APP_PRIVATE_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY || '' }}
+      RP_SYNC_APP_PRIVATE_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_SYNC_APP_PRIVATE_KEY || '' }}
+      RP_PKG_SIGNING_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_PKG_SIGNING_KEY || '' }}
+
+  candidate-status:
+    needs: [request, target]
+    if: ${{ !cancelled() && needs.request.outputs.purpose == 'candidate' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ needs.request.outputs.source_sha }}
+      RESULT: ${{ needs.target.result }}
+    steps:
+      - name: Write the package build status on the built head
+        run: echo "::error::Not implemented (stage 06.3)" && exit 1

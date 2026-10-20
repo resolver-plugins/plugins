@@ -1,0 +1,362 @@
+name: Plugin target
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        type: string
+        required: true
+      source_directory:
+        type: string
+        required: true
+      branch_prefix:
+        type: string
+        required: true
+      current_tag:
+        type: string
+        required: true
+      source_tag:
+        type: string
+        required: true
+      series:
+        type: string
+        required: true
+      purpose:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+      follow_upstream:
+        type: boolean
+        required: true
+      prerelease:
+        type: boolean
+        required: true
+      pr:
+        type: string
+        default: ''
+    secrets:
+      RP_DISTRIBUTION_APP_PRIVATE_KEY:
+        required: false
+      RP_SYNC_APP_PRIVATE_KEY:
+        required: false
+      RP_PKG_SIGNING_KEY:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Prepare ${{ inputs.component }} ${{ inputs.series }} (${{ inputs.purpose }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERIES: ${{ inputs.series }}
+      SOURCE_DIRECTORY: ${{ inputs.source_directory }}
+      BRANCH_PREFIX: ${{ inputs.branch_prefix }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PURPOSE: ${{ inputs.purpose }}
+    outputs:
+      operation: ${{ steps.decide.outputs.operation || steps.candidate.outputs.operation }}
+      reason: ${{ steps.decide.outputs.reason || steps.candidate.outputs.reason }}
+      freebsd_release: ${{ steps.environment.outputs.freebsd_release }}
+      tools_tag: ${{ steps.environment.outputs.tools_tag }}
+      core_commit: ${{ steps.environment.outputs.core_commit }}
+      plugins_commit: ${{ steps.environment.outputs.plugins_commit }}
+      upstream_package_commit: ${{ steps.environment.outputs.upstream_package_commit }}
+      abi: ${{ steps.environment.outputs.abi || steps.candidate.outputs.abi }}
+      version: ${{ steps.candidate.outputs.version || steps.current.outputs.version }}
+      previous_tag: ${{ steps.candidate.outputs.previous_tag || steps.current.outputs.previous_tag }}
+      source_base: ${{ steps.base.outputs.source_base || steps.candidate.outputs.source_base }}
+      prepared_sha: ${{ steps.version.outputs.prepared_sha || steps.candidate.outputs.prepared_sha }}
+      artifact_run_id: ${{ steps.candidate.outputs.artifact_run_id || github.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        if: inputs.purpose != 'promote'
+        with:
+          fetch-depth: 0
+
+      - name: Check the active series
+        id: active
+        run: echo "::error::Not implemented (stage 02.1)" && exit 1
+
+      - name: Resolve the upstream environment
+        id: environment
+        if: inputs.purpose != 'promote'
+        run: echo "::error::Not implemented (stage 02.1)" && exit 1
+
+      - name: Read the current Release
+        id: current
+        env:
+          CURRENT_TAG: ${{ inputs.current_tag }}
+        run: echo "::error::Not implemented (stage 02.2)" && exit 1
+
+      - name: Find the candidate
+        id: candidate
+        if: inputs.purpose == 'promote'
+        env:
+          NAME: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}
+          CURRENT_VERSION: ${{ steps.current.outputs.current_version }}
+        run: echo "::error::Not implemented (stage 02.4)" && exit 1
+
+      - name: Select the release branch base
+        id: base
+        if: inputs.purpose != 'promote'
+        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+
+      - name: Merge upstream stable/${{ inputs.series }}
+        id: merge
+        if: inputs.purpose != 'promote' && (steps.base.outputs.new_series == 'true' || (inputs.follow_upstream && steps.environment.outputs.upstream_package_commit != steps.current.outputs.recorded_upstream))
+        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+
+      - name: Carry master changes
+        id: carry
+        if: inputs.purpose != 'promote'
+        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+
+      - name: Decide the operation
+        id: decide
+        if: inputs.purpose != 'promote'
+        env:
+          CARRIED: ${{ steps.carry.outputs.carried }}
+          SOURCE_BASE: ${{ steps.base.outputs.source_base }}
+          RECORDED_BASE: ${{ steps.current.outputs.recorded_base }}
+          RECORDED_COMMIT: ${{ steps.current.outputs.recorded_commit }}
+          CURRENT_VERSION: ${{ steps.current.outputs.current_version }}
+        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+
+      - name: Set the version and bundle the prepared source
+        id: version
+        if: steps.decide.outputs.operation == 'build'
+        env:
+          VERSION: ${{ steps.current.outputs.version }}
+          SOURCE_BASE: ${{ steps.base.outputs.source_base }}
+        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+
+      - uses: actions/upload-artifact@v4
+        if: steps.decide.outputs.operation == 'build'
+        with:
+          name: source-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/source/source.bundle
+          retention-days: 1
+
+  build:
+    name: Build ${{ inputs.component }} ${{ needs.prepare.outputs.version }}
+    needs: prepare
+    if: needs.prepare.outputs.operation == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SERIES: ${{ inputs.series }}
+      SOURCE_DIRECTORY: ${{ inputs.source_directory }}
+      PREPARED_SHA: ${{ needs.prepare.outputs.prepared_sha }}
+      CORE_COMMIT: ${{ needs.prepare.outputs.core_commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/source
+
+      - name: Check out the prepared source
+        run: echo "::error::Not implemented (stage 03.2)" && exit 1
+
+      - name: Configure the OPNsense package repository
+        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+
+      - name: Build in FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ needs.prepare.outputs.freebsd_release }}
+          arch: x86_64
+          usesh: true
+          copyback: true
+          disable-cache: true
+          envs: SERIES SOURCE_DIRECTORY PREPARED_SHA
+          run: echo "::error::Not implemented (stage 03.2)" && exit 1
+
+      - name: Write the build record
+        env:
+          ABI: ${{ needs.prepare.outputs.abi }}
+          FREEBSD_RELEASE: ${{ needs.prepare.outputs.freebsd_release }}
+          SOURCE_BASE: ${{ needs.prepare.outputs.source_base }}
+          MASTER_COMMIT: ${{ inputs.source_sha }}
+          TOOLS_TAG: ${{ needs.prepare.outputs.tools_tag }}
+          PLUGINS_COMMIT: ${{ needs.prepare.outputs.plugins_commit }}
+          UPSTREAM_PACKAGE_COMMIT: ${{ needs.prepare.outputs.upstream_package_commit }}
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: echo "::error::Not implemented (stage 03.2)" && exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
+          path: |
+            .build/*.pkg
+            .build/build-record.json
+          retention-days: 1
+
+  qualify:
+    name: Qualify ${{ inputs.component }} ${{ needs.prepare.outputs.version }}
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SERIES: ${{ inputs.series }}
+      CORE_COMMIT: ${{ needs.prepare.outputs.core_commit }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
+          path: dist
+
+      - name: Configure the OPNsense package repository
+        run: echo "::error::Not implemented (stage 03.1)" && exit 1
+
+      - name: Read the expected identity
+        run: echo "::error::Not implemented (stage 03.3)" && exit 1
+
+      - name: Install on a clean FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ needs.prepare.outputs.freebsd_release }}
+          arch: x86_64
+          usesh: true
+          disable-cache: true
+          envs: EXPECTED
+          run: echo "::error::Not implemented (stage 03.3)" && exit 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}
+          path: |
+            dist/*.pkg
+            dist/build-record.json
+            dist/source.bundle
+          retention-days: 30
+
+  publish:
+    name: Publish ${{ inputs.component }} ${{ needs.prepare.outputs.version }}
+    needs: [prepare, qualify]
+    if: >-
+      !cancelled() && inputs.purpose != 'candidate' && needs.prepare.result == 'success' &&
+      (needs.qualify.result == 'success' || needs.prepare.outputs.operation == 'promote')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      published: ${{ steps.versioned.outputs.created == 'true' || steps.current.outputs.advanced == 'true' }}
+      current_tag: ${{ steps.current.outputs.current_tag }}
+    env:
+      REPOSITORY: resolver-plugins/repository
+      SERIES: ${{ inputs.series }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PREPARED_SHA: ${{ needs.prepare.outputs.prepared_sha }}
+      CURRENT_TAG: ${{ inputs.current_tag }}
+      PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}
+          path: dist
+          run-id: ${{ needs.prepare.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.RP_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: repository
+          permission-contents: write
+
+      - name: Publish the versioned Release
+        id: versioned
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: echo "::error::Not implemented (stage 04.1)" && exit 1
+
+      - name: Advance the current Release
+        id: current
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: echo "::error::Not implemented (stage 04.1)" && exit 1
+
+  sync-source:
+    name: Sync ${{ inputs.component }} ${{ needs.prepare.outputs.version }} source
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BRANCH: ${{ inputs.branch_prefix }}/${{ inputs.series }}
+      SERIES: ${{ inputs.series }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PREPARED_SHA: ${{ needs.prepare.outputs.prepared_sha }}
+      SOURCE_TAG: ${{ inputs.source_tag }}
+      PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}
+          owner: resolver-plugins
+          repositories: plugins
+          permission-contents: write
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/dist
+          run-id: ${{ needs.prepare.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Push the prepared commit and its tag
+        run: echo "::error::Not implemented (stage 04.2)" && exit 1
+
+      - name: Create the source Release
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: echo "::error::Not implemented (stage 04.2)" && exit 1
+
+  index:
+    needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.outputs.published == 'true' }}
+    concurrency:
+      group: package-repository-index
+      cancel-in-progress: false
+      queue: max
+    uses: ./.github/workflows/package-index.yml
+    with:
+      series: ${{ inputs.series }}
+      abi: ${{ needs.prepare.outputs.abi }}
+      component: ${{ inputs.component }}
+      current_tag: ${{ needs.publish.outputs.current_tag }}
+      source_tag: ${{ inputs.source_tag }}
+    secrets:
+      RP_PKG_SIGNING_KEY: ${{ secrets.RP_PKG_SIGNING_KEY }}
+      RP_DISTRIBUTION_APP_PRIVATE_KEY: ${{ secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY }}
+      RP_SYNC_APP_PRIVATE_KEY: ${{ secrets.RP_SYNC_APP_PRIVATE_KEY }}
