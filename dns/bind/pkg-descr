@@ -9,6 +9,7 @@ Plugin Changelog
 
 1.36
 
+* Build and publish through the rebuilt release pipeline
 * Take BIND from any enabled repository when upgrading the plugin after a series upgrade
 * Prefer signed Resolver packages for fresh plugin dependency installation
 * Check minimum BIND and OPNsense versions and refuse incompatible plugin names
