@@ -1,6 +1,6 @@
 # Phase 07: Client series upgrade
 
-Status: planned
+Status: built, awaiting user review (stages done: 07.1–07.5)
 Before: the new CI is built (phases 01–06). `master`'s `dns/bind` holds the
 published 26.7_9 BIND plugin (commit `8c640b214`). Its Python worker
 `bindRepositoryReconcile.py` (274 lines) requires this project's `bind920` and
@@ -78,11 +78,11 @@ in the background through `daemon`, so boot never waits: up to three attempts,
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 07.1 | BIND provider writes the configuration without priority | haiku | low | first, parallel with 07.2 and 07.5 | planned |
-| 07.2 | BIND worker rewritten in sh on pkg | sonnet | medium | first, parallel with 07.1 and 07.5 | planned |
-| 07.3 | HA upgrade hooks and provider | sonnet | low | after 07.1 and 07.2 | planned |
-| 07.4 | HA worker | sonnet | low | after 07.2, parallel with 07.3 | planned |
-| 07.5 | Fresh install without runtime packages | haiku | low | first, parallel with 07.1 and 07.2 | planned |
+| 07.1 | BIND provider writes the configuration without priority | haiku | low | first, parallel with 07.2 and 07.5 | done |
+| 07.2 | BIND worker rewritten in sh on pkg | sonnet | medium | first, parallel with 07.1 and 07.5 | done |
+| 07.3 | HA upgrade hooks and provider | sonnet | low | after 07.1 and 07.2 | done |
+| 07.4 | HA worker | sonnet | low | after 07.2, parallel with 07.3 | done |
+| 07.5 | Fresh install without runtime packages | haiku | low | first, parallel with 07.1 and 07.2 | done |
 
 ## 07.1 BIND provider without priority
 
@@ -141,7 +141,7 @@ Files:           dns/bind/src/opnsense/scripts/OPNsense/Bind/bindRepositoryRecon
                  dns/bind/src/opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py (delete)
                  dns/bind/src/etc/rc.syshook.d/start/50-bind-rp-repository
                  dns/bind/pkg-descr
-Work:            1. Write the sh worker: set -eu, a fail() function that logs
+Work:            1. Write the sh worker: set -u, a fail() function that logs
                     and exits 1, then the contract steps in order.
                  2. Start hook: drop the OS_BIND_RP_* overrides (fixed paths);
                     when the marker exists, run in the background `daemon sh -c
@@ -283,3 +283,7 @@ Out of scope:    docs/package-repository.md (phase 08).
   `test_repository_migration.py` assert the old worker's behavior. Updating
   plugin tests is not part of this plan; the carry excludes tests (phase 02),
   so the maintainer can update them on `master` at any time (2026-10-20).
+- Built 2026-10-20 by delegated agents (haiku for 07.1 and 07.5, sonnet for
+  07.2–07.4) in the table's order. The BIND worker is 44 lines and the HA
+  worker 36, replacing 274 lines of Python. The 07.4 agent could not set the
+  worker's mode with its editor, so the review set 0755 (2026-10-20).

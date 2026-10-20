@@ -13,6 +13,10 @@ the prototype tests documented in docs/dhcp-interface-ha.md.
 Plugin Changelog
 ================
 
+26.7
+
+* Move the package feed and upgrade the plugin automatically across OPNsense series upgrades
+
 0.1
 
 * Experimental carrier controller with native CARP and DHCP integration.
