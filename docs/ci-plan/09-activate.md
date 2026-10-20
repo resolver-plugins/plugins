@@ -1,6 +1,6 @@
 # Phase 09: Activate
 
-Status: in progress (stages done: 09.1, 09.2)
+Status: in progress (stages done: 09.1–09.4)
 Before: phases 01–08 are committed locally on the plan branch; GitHub still
 runs the old CI from `master`, and the release branches have no
 `Master-Commit` trailer.
@@ -29,8 +29,8 @@ Shared references: design, "Frozen, never written by the new CI" and
 | --- | --- | --- | --- | --- | --- |
 | 09.1 | Reconcile release branches | opus | high | first, on request | done |
 | 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | done |
-| 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | planned |
-| 09.4 | Branch rules | sonnet | medium | after 09.3, on request | planned |
+| 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | done |
+| 09.4 | Branch rules | sonnet | medium | after 09.3, on request | done |
 | 09.5 | First production runs | sonnet | medium | after 09.4, on request | planned |
 | 09.6 | Legacy Release cleanup | sonnet | medium | after 09.5, on request | planned |
 
@@ -228,3 +228,21 @@ Out of scope:    Frozen material.
   CI. The squash is harmless there, but PR 2 must use "Create a merge commit"
   so 8c640b214 stays on master; the repository allows all three methods
   (2026-10-20).
+- 09.3: PR #131 merged 2026-10-20 by merge commit `e5203f6d6`; 8c640b214 is on
+  master. The merge put the new entries on master, so the PR's closed event ran
+  them: BIND's promotion failed at "Find the candidate" (no qualified
+  candidate for that head) and published nothing; HA's request did not apply,
+  because `gh pr view --json files` returns at most 100 files and the PR had
+  115. The PR description's "nothing runs on merge" was wrong (2026-10-20).
+- Between 09.3 and 09.4 the user moved every job to the temporary self-hosted
+  runner `[self-hosted, opnsense-dispatch]` (PRs #132, #134), with
+  `.github/actions/freebsd-builder` replacing `vmactions/freebsd-vm`. Its
+  hard-coded FreeBSD-release-to-builder mapping is accepted while the runners
+  are temporary; the CI returns to GitHub runners once it works (user
+  decision, 2026-10-20).
+- 09.4 applied 2026-10-20: `protect_master` (id 20460521) gained required
+  status checks `Package build / dns/bind` and `Package build /
+  net/dhcp-interface-ha` with up-to-date branches; new `protect_release_branches`
+  (id 25486383) on `refs/heads/release/**/*` blocks creation, update, deletion
+  and force pushes except for the sync app (app 5317745). The first pattern,
+  `refs/heads/release/**`, matched nothing (2026-10-20).
