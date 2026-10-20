@@ -108,7 +108,7 @@ jobs:
         if: inputs.purpose != 'promote'
         run: |
           tools_tag=$(git ls-remote --tags --refs https://github.com/opnsense/tools.git | cut -f2 | sed -nE "s|^refs/tags/(${SERIES//./[.]}(\.[0-9]+)?)$|\1|p" | sort -V | tail -n 1)
-          os=$(gh api -H 'Accept: application/vnd.github.raw' "repos/opnsense/tools/contents/config/$SERIES/build.conf?ref=$tools_tag" | sed -nE '/^OS\?=/{s/^OS\?=([0-9]+\.[0-9]+).*/\1/p;q}')
+          os=$(gh api -H 'Accept: application/vnd.github.raw' "repos/opnsense/tools/contents/config/$SERIES/build.conf?ref=$tools_tag" | sed -nE '/^OS\?=/{s/^OS\?=[[:space:]]*([0-9]+\.[0-9]+).*/\1/p;q}')
           core_commit=$(git ls-remote https://github.com/opnsense/core.git "refs/heads/stable/$SERIES" | cut -f1)
           if [ -z "$tools_tag" ] || [ -z "$os" ] || [ -z "$core_commit" ]; then
             echo "::error::Series $SERIES: need an opnsense/tools tag (got '$tools_tag') whose build.conf has OS?=X.Y (got '$os') and an opnsense/core stable/$SERIES head (got '$core_commit')"
