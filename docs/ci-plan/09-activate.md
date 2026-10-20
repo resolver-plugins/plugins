@@ -246,3 +246,13 @@ Out of scope:    Frozen material.
   (id 25486383) on `refs/heads/release/**/*` blocks creation, update, deletion
   and force pushes except for the sync app (app 5317745). The first pattern,
   `refs/heads/release/**`, matched nothing (2026-10-20).
+- 09.5 first successful publication 2026-10-20 (runs 39462726125 and
+  39462729320): BIND 26.7_10 and HA 26.7_1 were built, qualified, published and
+  indexed, but `sync-source` and `retain` failed on the sync-app token (fixed in
+  PR #138). A re-run replays the original workflow and a new production run
+  skips (the branch head equals the record's `source_base`), so the user
+  accepted that 26.7_10 and 26.7_1 have no source commit, tag or source Release
+  on the branches; the next publication of each carries the same content and
+  syncs normally (user decision, 2026-10-20).
+- To exercise candidate and promotion, one small PR per plugin adds a changelog
+  line, gets a requested candidate and is merged by merge commit (2026-10-20).
