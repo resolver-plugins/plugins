@@ -1,6 +1,6 @@
 # Phase 09: Activate
 
-Status: in progress (stages done: 09.1–09.4)
+Status: in progress (stages done: 09.1–09.5)
 Before: phases 01–08 are committed locally on the plan branch; GitHub still
 runs the old CI from `master`, and the release branches have no
 `Master-Commit` trailer.
@@ -31,7 +31,7 @@ Shared references: design, "Frozen, never written by the new CI" and
 | 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | done |
 | 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | done |
 | 09.4 | Branch rules | sonnet | medium | after 09.3, on request | done |
-| 09.5 | First production runs | sonnet | medium | after 09.4, on request | planned |
+| 09.5 | First production runs | sonnet | medium | after 09.4, on request | done |
 | 09.6 | Legacy Release cleanup | sonnet | medium | after 09.5, on request | planned |
 
 ## 09.1 Reconcile release branches
@@ -256,3 +256,13 @@ Out of scope:    Frozen material.
   syncs normally (user decision, 2026-10-20).
 - To exercise candidate and promotion, one small PR per plugin adds a changelog
   line, gets a requested candidate and is merged by merge commit (2026-10-20).
+- 09.5 completed 2026-10-20 after four minor fixes (PRs #135–#138: build.conf
+  tabs, hidden `.build/` upload, `configd` already running, sync-app token
+  `@v3`). PR #139 exercised BIND's candidate and promotion (26.7_11: published,
+  synced to `867c98f05`, indexed, retained) and PR #140 HA's (26.7_2: synced to
+  `33ccf930b`). Every path passed for both plugins (2026-10-20).
+- GitHub's default policy blocks `pull_request_target` in public repositories
+  from November 2, 2026; repository Actions policy 8127 allows `schedule`,
+  `workflow_dispatch`, `pull_request_target` and `workflow_call` for the four CI
+  workflows, keeping the PR status and promotion jobs, which never check out PR
+  code (user decision, 2026-10-20).
