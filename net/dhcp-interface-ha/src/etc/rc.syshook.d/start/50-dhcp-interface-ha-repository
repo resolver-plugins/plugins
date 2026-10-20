@@ -1,0 +1,6 @@
+#!/bin/sh
+
+[ -f /var/db/os-dhcp-interface-ha/repository-reconcile.pending ] || exit 0
+
+daemon sh -c 'for attempt in 1 2 3; do lockf -t 0 /var/run/os-dhcp-interface-ha-reconcile.lock /usr/local/opnsense/scripts/dhcp_interface_ha/repository_reconcile.sh && exit 0; sleep 30; done; exit 1' >/dev/null 2>&1
+exit 0
