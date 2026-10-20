@@ -235,9 +235,11 @@ Actions settings:
 | `RP_SYNC_APP_CLIENT_ID` | variable | the client ID of the sync GitHub App |
 | `RP_SYNC_APP_PRIVATE_KEY` | secret | the PEM private key of the sync App |
 
-- The signing key is decoded only inside the disposable FreeBSD VM of the index
-  `stage` job, written to a temporary file with mode 0600 or tighter, used by
-  `pkg repo` and removed. The committed public key is
+- The signing key passes through the self-hosted runner in a mode 0600 file
+  that is removed after the step, and is decoded only inside the self-hosted
+  FreeBSD builder of the index `stage` job, written to a temporary file with mode
+  0600 or tighter, used by `pkg repo` and removed. The builder is restored to its
+  baseline afterwards (see [Runners](building.md#runners)). The committed public key is
   `docs/package-repository/resolver-plugins.pub`.
 - The distribution App is installed only on `resolver-plugins/repository` with
   `Contents: write`. Its short-lived token creates and edits the Releases, writes

@@ -70,6 +70,20 @@ Promotion skips `build` and `qualify`. A concurrency group per plugin and series
 ones; a running publication is never cancelled. The index has its own group
 `package-repository-index`.
 
+## Runners
+
+Every job runs on the self-hosted Linux runner labelled `opnsense-dispatch`,
+which runs one job at a time. Before each job a runner hook empties the
+workspace, so jobs start from a clean checkout as on GitHub-hosted runners.
+
+`build`, `qualify` and `stage` use `.github/actions/freebsd-builder` instead of
+a disposable cloud VM. It restores the persistent builder for the FreeBSD
+release (14.3 for 26.1, 15.1 for 26.7) to its baseline and starts it, copies the
+workspace in, runs the step's script with the named variables, copies the
+workspace back when `copyback` is set, then shuts the builder down and restores
+the baseline again, even when the step fails. A series whose FreeBSD release has
+no builder fails at the start of `build`.
+
 ## Versions
 
 Both plugins use `<series>_<n>`, for example `26.7_1`. `n` is the current

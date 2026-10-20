@@ -55,7 +55,7 @@ defaults:
 jobs:
   prepare:
     name: Prepare ${{ inputs.component }} ${{ inputs.series }} (${{ inputs.purpose }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, opnsense-dispatch]
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
@@ -306,7 +306,7 @@ jobs:
     name: Build ${{ inputs.component }} ${{ needs.prepare.outputs.version }}
     needs: prepare
     if: needs.prepare.outputs.operation == 'build'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, opnsense-dispatch]
     timeout-minutes: 90
     env:
       SERIES: ${{ inputs.series }}
@@ -343,13 +343,10 @@ jobs:
           cp -R "$core/src/etc/pkg/fingerprints" .opnsense-pkg/
 
       - name: Build in FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
-        uses: vmactions/freebsd-vm@v1
+        uses: ./.github/actions/freebsd-builder
         with:
           release: ${{ needs.prepare.outputs.freebsd_release }}
-          arch: x86_64
-          usesh: true
           copyback: true
-          disable-cache: true
           envs: SERIES SOURCE_DIRECTORY PREPARED_SHA
           run: |
             set -eu
@@ -397,12 +394,17 @@ jobs:
   qualify:
     name: Qualify ${{ inputs.component }} ${{ needs.prepare.outputs.version }}
     needs: [prepare, build]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, opnsense-dispatch]
     timeout-minutes: 60
     env:
       SERIES: ${{ inputs.series }}
       CORE_COMMIT: ${{ needs.prepare.outputs.core_commit }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
       - uses: actions/download-artifact@v4
         with:
           name: build-${{ inputs.component }}-${{ inputs.series }}-${{ github.run_id }}
@@ -431,12 +433,9 @@ jobs:
           echo "EXPECTED=$(jq -r '[.package, .origin, .version, .abi] | join("|")' dist/build-record.json)" >> "$GITHUB_ENV"
 
       - name: Install on a clean FreeBSD ${{ needs.prepare.outputs.freebsd_release }}
-        uses: vmactions/freebsd-vm@v1
+        uses: ./.github/actions/freebsd-builder
         with:
           release: ${{ needs.prepare.outputs.freebsd_release }}
-          arch: x86_64
-          usesh: true
-          disable-cache: true
           envs: EXPECTED
           run: |
             set -eu
@@ -475,7 +474,7 @@ jobs:
     if: >-
       !cancelled() && inputs.purpose != 'candidate' && needs.prepare.result == 'success' &&
       (needs.qualify.result == 'success' || needs.prepare.outputs.operation == 'promote')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, opnsense-dispatch]
     timeout-minutes: 15
     outputs:
       published: ${{ steps.versioned.outputs.created == 'true' || steps.current.outputs.advanced == 'true' }}
@@ -559,7 +558,7 @@ jobs:
     name: Sync ${{ inputs.component }} ${{ needs.prepare.outputs.version }} source
     needs: [prepare, publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, opnsense-dispatch]
     timeout-minutes: 15
     env:
       BRANCH: ${{ inputs.branch_prefix }}/${{ inputs.series }}
