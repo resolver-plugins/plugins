@@ -72,20 +72,29 @@ Context:         Design, "Entry jobs": a target needs work when its current
                  record, or when the dispatch asked for that series. Spec:
                  cheap selection happens before any VM; master changes are not
                  discovered (promotion and production requests carry them).
-Contracts:       Outputs applies (true|false) and series. Reason in
-                 $GITHUB_STEP_SUMMARY.
-Files:           both entry workflows (discover body)
-Work:            1. active series by the active series rule of 02.1 (usable
-                    series only).
-                 2. SERIES set: applies=true with that series, reason
+Contracts:       Job outputs applies (true|false) and series. Reason in
+                 $GITHUB_STEP_SUMMARY. The job has two steps: "Resolve the
+                 active series" (id active, output series) and "Discover work
+                 for the active series" (id discover, env ACTIVE:
+                 ${{ steps.active.outputs.series }}).
+Files:           both entry workflows (discover job: the new active step and
+                 the discover body)
+Work:            active step:
+                 1. The active series rule of 02.1 (the `active` step of
+                    plugin-target.yml's prepare job), writing series=<active>
+                    to $GITHUB_OUTPUT instead of comparing with SERIES.
+                 discover step:
+                 2. SERIES set: applies=true with series=$SERIES (the requested
+                    series, not the active one), reason
                     "Production build of <series> requested" (prepare rejects a
                     non-active one).
                  3. Otherwise: current = CURRENT_TAG with {series} replaced by
-                    the active series; record = its build-record.json (gh
-                    release download --output -); "release not found" or "no
+                    $ACTIVE; record = its build-record.json (gh
+                    release download --repo resolver-plugins/repository
+                    --output -); "release not found" or "no
                     assets match" means {} (no record), any other error fails.
                  4. upstream = for FOLLOW_UPSTREAM=true, `gh api
-                    "repos/opnsense/plugins/commits?sha=stable/$active&path=$SOURCE_DIRECTORY&per_page=1"
+                    "repos/opnsense/plugins/commits?sha=stable/$ACTIVE&path=$SOURCE_DIRECTORY&per_page=1"
                     --jq '.[0].sha // empty'`, else empty.
                  5. No work when the record exists and upstream equals its
                     upstream_package_commit (HA: both empty): applies=false and
@@ -93,7 +102,7 @@ Work:            1. active series by the active series rule of 02.1 (usable
                     record, or upstream changed).
 External inputs: core tags, the current record, the upstream commits API.
 Done when:       No hard-coded series; no VM or target when nothing needs
-                 work. If the body needs more than 30 lines, stop and ask.
+                 work; each body within 30 lines (stop and ask otherwise).
 Out of scope:    Request handling (06.3).
 ```
 
@@ -114,9 +123,12 @@ Contracts:       request outputs: applies, purpose (candidate|promote), series
                  plugin-<component>-<series>). candidate-status writes success
                  "Candidate built and qualified" or failure "Candidate build
                  <result>", with target_url the run URL.
-Files:           both entry workflows (request and candidate-status bodies)
+Files:           both entry workflows (request job: a new active step before
+                 the request step, the request body; candidate-status body)
 Work:            request:
-                 1. active series by the active series rule of 02.1.
+                 1. A "Resolve the active series" step (id active), identical
+                    to 06.2's; the request step gets env ACTIVE:
+                    ${{ steps.active.outputs.series }}.
                  2. pull_request_target: if the PR's files do not include the
                     plugin directory, applies=false and exit 0; else promote
                     with MERGED_HEAD and group plugin-<component>-<active>.
@@ -134,6 +146,10 @@ Out of scope:    Branch rules requiring the status (phase 09).
 ```
 
 ## Notes
+
+- `discover` and `request` resolve the active series in their own first step,
+  as `prepare` does, over one 31-line body, because the active series rule and
+  the work decision are separate operations (user decision, 2026-10-20).
 
 - PRs go to `master` and are carried into the active release branch, over PRs
   to release branches (2026-10-19).
