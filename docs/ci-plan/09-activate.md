@@ -57,8 +57,12 @@ Work:            1. For each branch, find its published source commit and check
                     result.
                  2. Where it is not an ancestor, prepare a merge of the
                     published source into the branch (merge commit).
-                 3. On the 26.7 branches, prepare a commit removing
-                    .github/workflows/ if present.
+                 3. On all three branches, prepare a commit "Remove workflow
+                    files from the release branch" deleting .github/workflows/
+                    (26.7: the test callers bind-tests.yml and
+                    ha-dhcp-interface-tests.yml; 26.1: bind-tests.yml and the
+                    old package-release.yml, which holds RP_PKG_SIGNING_KEY and
+                    contents: write behind pull_request_target).
                  4. On the 26.7 branches, prepare the trailer commit.
                  5. Show the user the commits and the push commands; push only
                     after the request, with the maintainer's credentials (the
@@ -149,6 +153,8 @@ Out of scope:    Frozen material.
   separately, so old and new never run against the same change (2026-10-19).
 - The first trailer names master commit 8c640b214, so the first carry brings
   phase 01's client changes into the 26.7 branches (2026-10-20).
-- Open question for the user: removing `.github/workflows/` from the 26.7
-  release branches in 09.1 follows "release branches carry no workflow
-  callers"; confirm before 09.1 (2026-10-20).
+- `.github/workflows/` is removed from all three release branches by a new
+  commit, over leaving retired 26.1 untouched, because the spec allows no
+  workflow callers on release branches and 26.1's old `package-release.yml`
+  would publish with the signing key on a merged PR; a removal commit is not a
+  build, so the lock on 26.1 holds (user decision, 2026-10-20).
