@@ -1,6 +1,6 @@
 # Phase 09: Activate
 
-Status: planned
+Status: in progress (stages done: 09.1)
 Before: phases 01–08 are committed locally on the plan branch; GitHub still
 runs the old CI from `master`, and the release branches have no
 `Master-Commit` trailer.
@@ -27,7 +27,7 @@ Shared references: design, "Frozen, never written by the new CI" and
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 09.1 | Reconcile release branches | opus | high | first, on request | planned |
+| 09.1 | Reconcile release branches | opus | high | first, on request | done |
 | 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | planned |
 | 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | planned |
 | 09.4 | Branch rules | sonnet | medium | after 09.3, on request | planned |
@@ -218,3 +218,9 @@ Out of scope:    Frozen material.
   (26.1_7 `31b351a47` and 26.7_9 `1c241209d` are the heads; HA 0.2_45
   `8e29ddd85` is an ancestor of the prepared 26.7_1 head), so only the workflow
   removal and trailer commits were needed (2026-10-20).
+- 09.1 pushed 2026-10-20 on the user's request, all fast-forwards:
+  release/bind-rp/26.1 `31b351a47..ce7842255`, release/bind-rp/26.7
+  `1c241209d..b699b0105`, release/dhcp-interface-ha/26.7
+  `5c4888962..d623c501a`. Each branch has no `.github/workflows/`; both 26.7
+  heads carry `Master-Commit: 8c640b2141e760ce57f07b386a20559bb3ad9491`
+  (2026-10-20).
