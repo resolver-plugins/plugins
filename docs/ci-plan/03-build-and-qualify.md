@@ -168,3 +168,7 @@ Out of scope:    Plugin test suites (spec forbids them in CI).
   removed a builder's check that `make package` produced exactly one archive
   (internal data) and the build record step's unused `ABI` env, since the
   record's `abi` comes from the archive (2026-10-20).
+- Corrected after the second production run (2026-10-20): `upload-artifact`
+  skips hidden directories by default, so the build job's `.build/` upload
+  found nothing and qualify had no artifact; the upload sets
+  `include-hidden-files: true` (2026-10-20).

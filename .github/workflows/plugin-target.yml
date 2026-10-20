@@ -391,6 +391,7 @@ jobs:
           path: |
             .build/*.pkg
             .build/build-record.json
+          include-hidden-files: true
           retention-days: 1
 
   qualify:
