@@ -86,18 +86,75 @@ jobs:
 
       - name: Check the active series
         id: active
-        run: echo "::error::Not implemented (stage 02.1)" && exit 1
+        run: |
+          series=$(git ls-remote --tags --refs https://github.com/opnsense/core.git | cut -f2 | sed -nE 's|^refs/tags/([0-9]+\.[0-9]+)(\.[0-9]+)?$|\1|p' | sort -urV)
+          [ -n "$series" ] || { echo "::error::No final X.Y or X.Y.Z tags found in opnsense/core"; exit 1; }
+          tools=$(git ls-remote --tags --refs https://github.com/opnsense/tools.git | cut -f2)
+          active=
+          for s in $series; do
+            tag=$(echo "$tools" | sed -nE "s|^refs/tags/(${s//./[.]}(\.[0-9]+)?)$|\1|p" | sort -V | tail -n 1)
+            [ -n "$tag" ] || continue
+            err=$(gh api "repos/opnsense/tools/contents/config/$s/build.conf?ref=$tag" 2>&1 >/dev/null) && { active=$s; break; }
+            case $err in
+              *"HTTP 404"*) ;;
+              *) echo "::error::Reading config/$s/build.conf at opnsense/tools tag $tag failed: $err"; exit 1 ;;
+            esac
+          done
+          [ -n "$active" ] || { echo "::error::No opnsense/core series has an opnsense/tools tag with config/<series>/build.conf"; exit 1; }
+          [ "$SERIES" = "$active" ] || { echo "::error::Series $SERIES is not the active series $active; only the active series builds"; exit 1; }
 
       - name: Resolve the upstream environment
         id: environment
         if: inputs.purpose != 'promote'
-        run: echo "::error::Not implemented (stage 02.1)" && exit 1
+        run: |
+          tools_tag=$(git ls-remote --tags --refs https://github.com/opnsense/tools.git | cut -f2 | sed -nE "s|^refs/tags/(${SERIES//./[.]}(\.[0-9]+)?)$|\1|p" | sort -V | tail -n 1)
+          os=$(gh api -H 'Accept: application/vnd.github.raw' "repos/opnsense/tools/contents/config/$SERIES/build.conf?ref=$tools_tag" | sed -nE '/^OS\?=/{s/^OS\?=([0-9]+\.[0-9]+).*/\1/p;q}')
+          core_commit=$(git ls-remote https://github.com/opnsense/core.git "refs/heads/stable/$SERIES" | cut -f1)
+          if [ -z "$tools_tag" ] || [ -z "$os" ] || [ -z "$core_commit" ]; then
+            echo "::error::Series $SERIES: need an opnsense/tools tag (got '$tools_tag') whose build.conf has OS?=X.Y (got '$os') and an opnsense/core stable/$SERIES head (got '$core_commit')"
+            exit 1
+          fi
+          git fetch -q --no-tags https://github.com/opnsense/plugins.git "+refs/heads/stable/$SERIES:refs/remotes/upstream/stable/$SERIES"
+          plugins_commit=$(git rev-parse "refs/remotes/upstream/stable/$SERIES")
+          upstream_package_commit=$(git log -1 --format=%H "refs/remotes/upstream/stable/$SERIES" -- "$SOURCE_DIRECTORY")
+          {
+            echo "freebsd_release=$os"
+            echo "abi=FreeBSD:${os%%.*}:amd64"
+            echo "tools_tag=$tools_tag"
+            echo "core_commit=$core_commit"
+            echo "plugins_commit=$plugins_commit"
+            echo "upstream_package_commit=$upstream_package_commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Read the current Release
         id: current
         env:
           CURRENT_TAG: ${{ inputs.current_tag }}
-        run: echo "::error::Not implemented (stage 02.2)" && exit 1
+        run: |
+          current=${CURRENT_TAG//'{series}'/$SERIES}
+          err=$RUNNER_TEMP/current.err
+          if ! assets=$(gh release view "$current" --repo resolver-plugins/repository --json assets --jq '.assets[].name' 2>"$err"); then
+            grep -q 'release not found' "$err" || { echo "::error::Reading Release $current failed: $(cat "$err")"; exit 1; }
+            echo "version=${SERIES}_1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          archives=$(grep -E -- "-${SERIES//./[.]}_[0-9]+\.pkg$" <<< "$assets" || true)
+          if [ -z "$archives" ]; then
+            echo "version=${SERIES}_1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ "$(wc -l <<< "$archives")" -eq 1 ] || { echo "::error::Release $current has more than one ${SERIES}_<n> archive: $archives"; exit 1; }
+          revision=${archives%.pkg}; revision=${revision##*_}
+          current_version=${SERIES}_$revision
+          if grep -qx 'build-record.json' <<< "$assets"; then
+            gh release download "$current" --repo resolver-plugins/repository --pattern build-record.json --dir "$RUNNER_TEMP/current"
+            {
+              echo "previous_tag=$current-$current_version"
+              jq -r '"recorded_base=\(.source_base)", "recorded_commit=\(.source_commit)", "recorded_upstream=\(.upstream_package_commit)"' "$RUNNER_TEMP/current/build-record.json"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "current_version=$current_version"
+            echo "version=${SERIES}_$((revision + 1))"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Find the candidate
         id: candidate
@@ -105,22 +162,99 @@ jobs:
         env:
           NAME: qualified-${{ inputs.component }}-${{ inputs.series }}-${{ inputs.source_sha }}
           CURRENT_VERSION: ${{ steps.current.outputs.current_version }}
-        run: echo "::error::Not implemented (stage 02.4)" && exit 1
+        run: |
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          [ -n "$run_id" ] || { echo "::error::No unexpired $NAME; request a production build (gh workflow run <entry> -f series=$SERIES)"; exit 1; }
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$NAME" --dir "$RUNNER_TEMP/candidate"
+          record=$RUNNER_TEMP/candidate/build-record.json
+          version=$(jq -r .version "$record")
+          if [ -n "$CURRENT_VERSION" ] && [ "${version##*_}" -le "${CURRENT_VERSION##*_}" ]; then
+            echo "::error::Candidate $version is not newer than current $CURRENT_VERSION; request a production build (-f series=$SERIES)"
+            exit 1
+          fi
+          {
+            echo "operation=promote"
+            echo "reason=Promote candidate $version built from $SOURCE_SHA"
+            echo "artifact_run_id=$run_id"
+            jq -r '"version=\(.version)", "previous_tag=\(.previous_tag // "")", "prepared_sha=\(.source_commit)", "source_base=\(.source_base)", "abi=\(.abi)"' "$record"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Select the release branch base
         id: base
         if: inputs.purpose != 'promote'
-        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          base=refs/remotes/origin/$BRANCH_PREFIX/$SERIES
+          if git show-ref --verify -q "$base"; then
+            new_series=false
+          else
+            previous=$({ git for-each-ref --format='%(refname:lstrip=-1)' "refs/remotes/origin/$BRANCH_PREFIX/*"; echo "$SERIES"; } |
+              sed -nE '/^[0-9]+\.[0-9]+$/p' | sort -V | awk -v s="$SERIES" '$0 == s { exit } { p = $0 } END { print p }')
+            [ -n "$previous" ] || { echo "::error::Series $SERIES has no $BRANCH_PREFIX/$SERIES branch and no earlier $BRANCH_PREFIX/<series> branch to start from"; exit 1; }
+            base=refs/remotes/origin/$BRANCH_PREFIX/$previous
+            new_series=true
+          fi
+          git checkout -q --detach "$base"
+          {
+            echo "new_series=$new_series"
+            echo "source_base=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Merge upstream stable/${{ inputs.series }}
         id: merge
         if: inputs.purpose != 'promote' && (steps.base.outputs.new_series == 'true' || (inputs.follow_upstream && steps.environment.outputs.upstream_package_commit != steps.current.outputs.recorded_upstream))
-        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+        run: |
+          makefile=$SOURCE_DIRECTORY/Makefile
+          if ! git -c merge.conflictStyle=merge merge --no-edit -m "Merge upstream stable/$SERIES into $BRANCH_PREFIX/$SERIES" "upstream/stable/$SERIES"; then
+            # Version-line rule: a conflict confined to the PLUGIN_VERSION and PLUGIN_REVISION
+            # lines of the Makefile keeps the release side; the version commit rewrites both.
+            if [ "$(git diff --name-only --diff-filter=U)" != "$makefile" ] ||
+              ! awk '/^<<<<<<< / { h = 1; n++; next }
+                h == 1 && /^=======$/ { h = 2; next }
+                h == 2 && /^>>>>>>> / { h = 0; next }
+                h && !/^PLUGIN_(VERSION|REVISION)=/ { bad = 1; exit }
+                h != 2
+                END { exit bad || !n }' "$makefile" > "$RUNNER_TEMP/Makefile"; then
+              echo "::error::Merging upstream stable/$SERIES conflicts beyond the version lines of $makefile"
+              exit 1
+            fi
+            mv "$RUNNER_TEMP/Makefile" "$makefile"
+            git add -- "$makefile"
+            git commit -q --no-edit --cleanup=strip
+          fi
 
       - name: Carry master changes
         id: carry
         if: inputs.purpose != 'promote'
-        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+        run: |
+          last=$(git log -1 --grep='^Master-Commit: ' --format='%(trailers:key=Master-Commit,valueonly)' HEAD)
+          [ -n "$last" ] || { echo "::error::No Master-Commit trailer on the release branch history"; exit 1; }
+          git fetch -q --no-tags origin "$last" "$SOURCE_SHA"
+          patch=$RUNNER_TEMP/carry.patch
+          git diff --binary "$last" "$SOURCE_SHA" -- "$SOURCE_DIRECTORY" ":(exclude)$SOURCE_DIRECTORY/tests" > "$patch"
+          if [ ! -s "$patch" ]; then
+            echo "carried=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          makefile=$SOURCE_DIRECTORY/Makefile
+          if ! git -c merge.conflictStyle=merge apply --3way "$patch"; then
+            # Version-line rule: a conflict confined to the PLUGIN_VERSION and PLUGIN_REVISION
+            # lines of the Makefile keeps the release side; the version commit rewrites both.
+            if [ "$(git diff --name-only --diff-filter=U)" != "$makefile" ] ||
+              ! awk '/^<<<<<<< / { h = 1; n++; next }
+                h == 1 && /^=======$/ { h = 2; next }
+                h == 2 && /^>>>>>>> / { h = 0; next }
+                h && !/^PLUGIN_(VERSION|REVISION)=/ { bad = 1; exit }
+                h != 2
+                END { exit bad || !n }' "$makefile" > "$RUNNER_TEMP/Makefile"; then
+              echo "::error::Carrying master $last..$SOURCE_SHA conflicts beyond the version lines of $makefile"
+              exit 1
+            fi
+            mv "$RUNNER_TEMP/Makefile" "$makefile"
+            git add -- "$makefile"
+          fi
+          echo "carried=true" >> "$GITHUB_OUTPUT"
 
       - name: Decide the operation
         id: decide
@@ -131,7 +265,20 @@ jobs:
           RECORDED_BASE: ${{ steps.current.outputs.recorded_base }}
           RECORDED_COMMIT: ${{ steps.current.outputs.recorded_commit }}
           CURRENT_VERSION: ${{ steps.current.outputs.current_version }}
-        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+        run: |
+          if [ "$PURPOSE" = production ] && [ "$CARRIED" = false ] && [ "$(git rev-parse HEAD)" = "$SOURCE_BASE" ] &&
+            { [ "$SOURCE_BASE" = "$RECORDED_COMMIT" ] || [ "$SOURCE_BASE" = "$RECORDED_BASE" ]; }; then
+            operation=skip
+            reason="Nothing changed since $CURRENT_VERSION"
+          else
+            operation=build
+            reason="Build $SOURCE_DIRECTORY $PURPOSE for $SERIES from $SOURCE_SHA"
+          fi
+          {
+            echo "operation=$operation"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          echo "$reason" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set the version and bundle the prepared source
         id: version
@@ -139,7 +286,14 @@ jobs:
         env:
           VERSION: ${{ steps.current.outputs.version }}
           SOURCE_BASE: ${{ steps.base.outputs.source_base }}
-        run: echo "::error::Not implemented (stage 02.3)" && exit 1
+        run: |
+          sed -i -E -e "s/^(PLUGIN_VERSION=[[:space:]]*).*/\1${VERSION%_*}/" \
+            -e "s/^(PLUGIN_REVISION=[[:space:]]*).*/\1${VERSION##*_}/" "$SOURCE_DIRECTORY/Makefile"
+          git add -A -- "$SOURCE_DIRECTORY"
+          git commit -q -m "Set $SOURCE_DIRECTORY to $VERSION" -m "Master-Commit: $SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/source"
+          git bundle create "$RUNNER_TEMP/source/source.bundle" HEAD "^$SOURCE_BASE"
+          echo "prepared_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         if: steps.decide.outputs.operation == 'build'

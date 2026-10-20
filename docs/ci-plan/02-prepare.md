@@ -1,6 +1,6 @@
 # Phase 02: Prepare
 
-Status: planned
+Status: built, awaiting user review (stages done: 02.1–02.4)
 Before: `plugin-target.yml` is declared (phase 01) with stubbed steps.
 After: the `prepare` job works: it checks the active series, resolves the
 upstream environment, reads the current Release and record, prepares and
@@ -33,10 +33,10 @@ they run in sequence.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 02.1 | Active series and upstream environment | sonnet | medium | first | planned |
-| 02.2 | Current Release and record | sonnet | medium | after 02.1 | planned |
-| 02.3 | Prepared source and decision | opus | high | after 02.2 | planned |
-| 02.4 | Promotion lookup | sonnet | medium | after 02.3 | planned |
+| 02.1 | Active series and upstream environment | sonnet | medium | first | done |
+| 02.2 | Current Release and record | sonnet | medium | after 02.1 | done |
+| 02.3 | Prepared source and decision | opus | high | after 02.2 | done |
+| 02.4 | Promotion lookup | sonnet | medium | after 02.3 | done |
 
 ## 02.1 Active series and upstream environment
 
@@ -282,3 +282,13 @@ Out of scope:    Downloading for publish (01.1 already declares run-id).
 - The carry excludes `<source_directory>/tests`, so tests stay on `master`
   only; they are not packaged and the release branches lack most of them (user
   decision, 2026-10-20).
+- Built 2026-10-20 in sequence by delegated agents (sonnet for 02.1, 02.2 and
+  02.4; opus for 02.3). Choices inside the briefs: tag filtering uses `sed -n`
+  so an empty match does not fail under pipefail; a 404 for a series'
+  `build.conf` means "not usable yet" and any other API error fails; the merge
+  commit after a version-line resolution uses `--cleanup=strip`; the
+  version-line awk also refuses a conflict without hunks; `gh run download`
+  names the repository because promotion skips the checkout (2026-10-20).
+- Until stage 09.1 adds the first `Master-Commit` trailer, the carry step fails
+  with "No Master-Commit trailer" on the existing release branches, as designed
+  (2026-10-20).
