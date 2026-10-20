@@ -21,8 +21,10 @@ and env in [02-ci-structure.md](02-ci-structure.md#lifecycle-interface).
 Facts the stages rely on (from the plugins framework in `Mk/`):
 `make package` writes `<source_directory>/work/pkg/<name>-<version>.pkg`;
 without `PLUGIN_DEVEL=` the framework builds a `-devel` package; plugin
-manifests declare `abi: "FreeBSD:*:*"`, so the archive does not carry the
-target ABI; `make package` installs `PLUGIN_DEPENDS` with `pkg install -yA`.
+manifests declare `abi: "FreeBSD:*:*"`, which `pkg create` replaces with the
+build machine's ABI (the published 26.7_9 lists `FreeBSD:15:amd64`), so an
+archive built in the series' FreeBSD VM carries the target ABI; `make package`
+installs `PLUGIN_DEPENDS` with `pkg install -yA`.
 The old qualification initialized core with: install `/usr/local/etc/config.xml`
 as `/conf/config.xml` (dir 0750, file 0640), `sh /usr/local/etc/rc.subr.d/php`,
 `service configd onestart`, `/usr/local/opnsense/service/template_ctl.py
@@ -83,9 +85,9 @@ Context:         Design, "Lifecycle": build runs make package from the prepared
                  source, holds no secrets. Phase 02 declares the steps; 04.1
                  fills the repository step. The source bundle has HEAD with
                  prerequisite source_base, which the full checkout contains.
-Contracts:       build-record.json fields, all strings: package, origin, version
-                 (from `pkg query -F <archive> '%n|%o|%v'`), series, abi
-                 (prepare's target ABI), freebsd_release, source_base,
+Contracts:       build-record.json fields, all strings: package, origin, version,
+                 abi (from `pkg query -F <archive> '%n|%o|%v|%q'`), series,
+                 freebsd_release, source_base,
                  master_commit (inputs.source_sha), source_commit
                  (prepared_sha), control_commit ($GITHUB_WORKFLOW_SHA),
                  tools_tag, core_commit, plugins_commit,
@@ -117,25 +119,24 @@ Goal:            The qualify job installs the archive with its dependencies on a
                  clean OPNsense of the series and checks it against the record.
 Context:         Spec, "Signing and publication": qualify the actual archive
                  once in a clean matching environment and reuse that result.
-                 Design, "Lifecycle": clean VM, no secrets. Because the
-                 manifest's ABI is a wildcard, installing on a VM of the series'
-                 FreeBSD release is what shows ABI compatibility.
-Contracts:       EXPECTED = "<package>|<origin>|<version>" from the record. The
+                 Design, "Lifecycle": clean VM, no secrets. The spec's
+                 qualification covers identity, version and ABI.
+Contracts:       EXPECTED = "<package>|<origin>|<version>|<abi>" from the record. The
                  archive is served from an unsigned local repository named
                  `candidate` so pkg resolves dependencies from OPNsense.
 Files:           .github/workflows/plugin-target.yml (qualify bodies: "Read the
                  expected identity", the VM run)
 Work:            1. Expected identity: echo "EXPECTED=$(jq -r '[.package,
-                    .origin, .version] | join("|")' dist/build-record.json)" >>
-                    "$GITHUB_ENV".
+                    .origin, .version, .abi] | join("|")'
+                    dist/build-record.json)" >> "$GITHUB_ENV".
                  2. VM run (sh, set -eu): configure the OPNsense repository as in
                     04.2; install pkg and opnsense; initialize core as listed at
                     the top of this file; pkg repo dist; write
                     /usr/local/etc/pkg/repos/candidate.conf with url
                     file://$PWD/dist and signature_type none; pkg update -f;
                     name=${EXPECTED%%|*}; pkg install -y "$name"; pkg check -s
-                    "$name"; test "$(pkg query '%n|%o|%v' "$name")" =
-                    "$EXPECTED".
+                    "$name"; test "$(pkg query '%n|%o|%v|%q' "$name")" =
+                    "$EXPECTED"; test "${EXPECTED##*|}" = "$(pkg config ABI)".
 External inputs: the OPNsense repository.
 Done when:       One clean VM, no copyback, no secrets, install by name, pkg
                  check -s, identity compared, VM body under 30 lines.
@@ -147,8 +148,10 @@ Out of scope:    Plugin test suites (spec forbids them in CI).
 - Build, qualify and the index's stage job each carry the same short
   repository step, over a shared helper, because the design has no helper
   component (2026-10-20).
-- The record's `abi` is the target ABI from `prepare`, since the archive's own
-  ABI is the framework's wildcard (2026-10-20).
+- The record's `abi` is the archive's own ABI, which `pkg create` sets from the
+  build VM; qualify checks it equals the clean VM's `pkg config ABI`. Confirmed
+  on opnsense-ha-2 (OPNsense 26.7.5, pkg 2.8.4): the published 26.7 catalogue
+  and the installed os-bind-rp report `FreeBSD:15:amd64` (2026-10-20).
 - Conflict behavior is qualified by `pkg` itself during the install; workflows
   name no packages, so there is no package-specific conflict test (2026-10-20).
 - Failure diagnostics are the normal Actions logs, which include the VM output;

@@ -253,11 +253,11 @@ Out of scope:    docs/package-repository.md (phase 08) and old CI callers of the
   still has the runtime packages (2026-10-19).
 - HA copies BIND's provider shape and managed-URL list, over sharing one file,
   so neither package owns a file the other needs (2026-10-19).
-- Open question for the user: plugin manifests declare `abi: "FreeBSD:*:*"`
-  (Mk/plugins.mk). Both workers compare the candidate's `%q` with `pkg config
-  ABI`; if pkg reports the wildcard, every series upgrade is refused. The
-  existing BIND check is kept unchanged until this is confirmed on a client;
-  decide before building 01.2 and 01.4 (2026-10-20).
+- The workers' ABI check stays: although plugin manifests declare
+  `abi: "FreeBSD:*:*"`, `pkg create` records the build machine's ABI. On
+  opnsense-ha-2 (OPNsense 26.7.5, pkg 2.8.4) the published 26.7 catalogue lists
+  os-bind-rp 26.7_9 and os-dhcp-interface-ha 0.2_45 as `FreeBSD:15:amd64`, and
+  the installed os-bind-rp reports the same (2026-10-20).
 - `dns/bind/tests/test_repository_reconciliation.py` and
   `test_repository_migration.py` still assert the old priority and runtime
   behavior. Updating plugin tests is not part of this plan; the carry excludes
