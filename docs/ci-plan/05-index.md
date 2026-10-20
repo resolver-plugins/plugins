@@ -1,6 +1,6 @@
 # Phase 05: Index and retention
 
-Status: planned
+Status: built, awaiting user review (stages done: 05.1–05.4)
 Before: publication works (phase 04); `package-index.yml` is declared with
 stub bodies (phase 01), and its stage job's repository step is filled (03.1).
 After: after a publication, the series feed is rebuilt from the current
@@ -35,10 +35,10 @@ base64 private key.
 
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
-| 05.1 | Select the feed contents | sonnet | high | first | planned |
-| 05.2 | Stage and sign | sonnet | medium | after 05.1 | planned |
-| 05.3 | Publish to Pages and read back | sonnet | medium | after 05.2 | planned |
-| 05.4 | Retention | sonnet | medium | after 05.3 | planned |
+| 05.1 | Select the feed contents | sonnet | high | first | done |
+| 05.2 | Stage and sign | sonnet | medium | after 05.1 | done |
+| 05.3 | Publish to Pages and read back | sonnet | medium | after 05.2 | done |
+| 05.4 | Retention | sonnet | medium | after 05.3 | done |
 
 ## 05.1 Select
 
@@ -177,3 +177,8 @@ Out of scope:    Legacy Releases (phase 09).
 
 - Readback compares public files byte for byte, over a FreeBSD VM running
   `pkg update`, because signatures were made in `stage` (2026-10-19).
+- Built 2026-10-20 in sequence by delegated sonnet agents. `select` reads the
+  feed and Releases with the run's token, assuming `resolver-plugins/repository`
+  stays public; `environment` fails when the published record lacks
+  `freebsd_release` or `core_commit`; the phase review replaced retain's local
+  repository variable with the workflow's `REPOSITORY` (2026-10-20).

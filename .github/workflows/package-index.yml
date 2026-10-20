@@ -54,11 +54,40 @@ jobs:
     steps:
       - name: Select the current Releases the feed serves
         id: select
-        run: echo "::error::Not implemented (stage 05.1)" && exit 1
+        run: |
+          old="$RUNNER_TEMP/old.json"
+          mkdir -p "$RUNNER_TEMP/channel"
+          err=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/$REPOSITORY/contents/$FEED/channel.json?ref=gh-pages" 2>&1 >"$old") || {
+            case $err in *"HTTP 404"*) echo '{}' >"$old" ;; *) echo "$err"; exit 1 ;; esac
+          }
+          tags=$(jq -r --arg c "$COMPONENT" --arg t "$CURRENT_TAG" \
+            '(.components // {}) + {($c): {current_tag: $t}} | to_entries[] | "\(.key)=\(.value.current_tag)"' "$old")
+          comps='{}'
+          while IFS== read -r name tag; do
+            rel=$(gh release view "$tag" --repo "$REPOSITORY" --json assets 2>&1) || {
+              case $rel in *"release not found"*) continue ;; *) echo "$rel"; exit 1 ;; esac
+            }
+            assets=$(jq -c '[.assets[].name]' <<<"$rel")
+            version=null
+            if jq -e 'any(.[]; . == "build-record.json")' <<<"$assets" >/dev/null; then
+              version=$(gh release download "$tag" --repo "$REPOSITORY" --pattern build-record.json --output - | jq -c '.version')
+            fi
+            comps=$(jq -c --arg n "$name" --arg t "$tag" --argjson v "$version" --argjson a "$assets" \
+              '.[$n] = {current_tag: $t, version: $v, packages: [$a[] | select(endswith(".pkg"))]}' <<<"$comps")
+          done <<<"$tags"
+          oldnames=$(jq -c '[(.components // {})[] | (.packages // []) | if type == "object" then keys else . end | .[]] | sort' "$old")
+          newnames=$(jq -c '[.[].packages[]] | sort' <<<"$comps")
+          jq -n --argjson c "$comps" --arg s "$SERIES" --arg a "$ABI" \
+            '{schema: 4, series: $s, package_abi: $a, components: $c}' >"$RUNNER_TEMP/channel/channel.json"
+          echo "changed=$([ "$oldnames" = "$newnames" ] && echo false || echo true)" >>"$GITHUB_OUTPUT"
       - name: Read the build environment from the published record
         id: environment
         if: steps.select.outputs.changed == 'true'
-        run: echo "::error::Not implemented (stage 05.1)" && exit 1
+        run: |
+          gh release download "$CURRENT_TAG" --repo "$REPOSITORY" --pattern build-record.json --output - |
+            jq -r '"freebsd_release=\(.freebsd_release // error("freebsd_release missing"))",
+                   "core_commit=\(.core_commit // error("core_commit missing"))"' >>"$GITHUB_OUTPUT"
       - if: steps.select.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -85,7 +114,12 @@ jobs:
           name: channel-${{ inputs.series }}-${{ github.run_id }}
           path: feed
       - name: Download the current archives
-        run: echo "::error::Not implemented (stage 05.2)" && exit 1
+        run: |
+          jq -r '.components[].current_tag' feed/channel.json |
+            while read -r tag; do
+              gh release download "$tag" --repo "$REPOSITORY" --pattern '*.pkg' --dir feed
+            done
+          cp docs/package-repository/resolver-plugins.pub feed/
       - name: Configure the OPNsense package repository
         run: |
           core="$RUNNER_TEMP/core"
@@ -109,7 +143,20 @@ jobs:
           copyback: true
           disable-cache: true
           envs: RP_PKG_SIGNING_KEY
-          run: echo "::error::Not implemented (stage 05.2)" && exit 1
+          run: |
+            set -eu
+            mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/fingerprints
+            cp .opnsense-pkg/repos/* /usr/local/etc/pkg/repos/
+            cp -R .opnsense-pkg/fingerprints/OPNsense /usr/local/etc/pkg/fingerprints/
+            pkg-static install -fy -r OPNsense pkg
+            umask 077
+            key=$(mktemp)
+            trap 'rm -f "$key"' EXIT
+            printf '%s' "$RP_PKG_SIGNING_KEY" | base64 -d > "$key"
+            pkg repo feed "$key"
+            pkg -v > .pkg-version
+      - name: Record the pkg version
+        run: echo "Signed with pkg $(cat .pkg-version)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: feed-${{ inputs.series }}-${{ github.run_id }}
@@ -142,7 +189,19 @@ jobs:
           path: ${{ runner.temp }}/feed
       - name: Replace the feed directory in one commit
         working-directory: pages
-        run: echo "::error::Not implemented (stage 05.3)" && exit 1
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -rf "$FEED"
+          mkdir -p "$FEED"
+          cp -R "$RUNNER_TEMP/feed/." "$FEED/"
+          git add -A -- "$FEED"
+          if git diff --cached --quiet; then
+            echo "Nothing to publish: $FEED already matches the staged feed."
+            exit 0
+          fi
+          git commit -q -m "Index $FEED"
+          git push origin HEAD:gh-pages
 
   readback:
     needs: publish
@@ -154,7 +213,18 @@ jobs:
           name: feed-${{ inputs.series }}-${{ github.run_id }}
           path: feed
       - name: Compare the public feed with the staged files
-        run: echo "::error::Not implemented (stage 05.3)" && exit 1
+        run: |
+          url="https://resolver-plugins.github.io/repository/$FEED"
+          for attempt in $(seq 20); do
+            ok=true
+            while read -r f; do
+              curl -fsS --retry 3 "$url/${f#feed/}" | cmp -s - "$f" || { ok=false; break; }
+            done < <(find feed -type f)
+            if $ok; then echo "Public feed matches on attempt $attempt."; exit 0; fi
+            [ "$attempt" -lt 20 ] && sleep 30
+          done
+          echo "::error::The public feed at $url does not match the staged files"
+          exit 1
 
   retain:
     needs: readback
@@ -185,4 +255,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.distribution.outputs.token }}
           SYNC_TOKEN: ${{ steps.sync.outputs.token }}
-        run: echo "::error::Not implemented (stage 05.4)" && exit 1
+        run: |
+          src=resolver-plugins/plugins
+          prev() {
+            [ -n "$1" ] || return 0
+            gh release download "$1" -R "$REPOSITORY" --pattern build-record.json --output - 2>/dev/null |
+              jq -r '.previous_tag // empty' || true
+          }
+          previous=$(prev "$CURRENT_TAG")
+          dropped=$(prev "$previous")
+          if [ -z "$dropped" ] || ! gh release view "$dropped" -R "$REPOSITORY" >/dev/null 2>&1; then
+            echo "Nothing to retire"
+            exit 0
+          fi
+          gh release delete "$dropped" -R "$REPOSITORY" --cleanup-tag --yes
+          source_tag="${SOURCE_TAG//\{series\}/$SERIES}-${dropped#"$CURRENT_TAG"-}"
+          if GH_TOKEN=$SYNC_TOKEN gh release view "$source_tag" -R "$src" >/dev/null 2>&1; then
+            GH_TOKEN=$SYNC_TOKEN gh release delete "$source_tag" -R "$src" --yes
+          fi
