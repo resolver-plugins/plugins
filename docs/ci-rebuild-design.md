@@ -1,7 +1,7 @@
 # CI rebuild design
 
 Structure and contracts for the [specification](ci-rebuild-spec.md). Internals of
-each part belong to its implementation stage in the [plan](ci-plan/README.md).
+each part belong to its implementation stage in the [plan](ci-plan/).
 
 ## Overview
 
