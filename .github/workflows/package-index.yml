@@ -74,7 +74,7 @@ jobs:
               version=$(gh release download "$tag" --repo "$REPOSITORY" --pattern build-record.json --output - | jq -c '.version')
             fi
             comps=$(jq -c --arg n "$name" --arg t "$tag" --argjson v "$version" --argjson a "$assets" \
-              '.[$n] = {current_tag: $t, version: $v, packages: [$a[] | select(endswith(".pkg"))]}' <<<"$comps")
+              '.[$n] = {current_tag: $t, version: $v, packages: [$a[] | select(test("^.+-[0-9][^-]*\\.pkg$"))]}' <<<"$comps")
           done <<<"$tags"
           oldnames=$(jq -c '[(.components // {})[] | (.packages // []) | if type == "object" then keys else . end | .[]] | sort' "$old")
           newnames=$(jq -c '[.[].packages[]] | sort' <<<"$comps")
@@ -115,9 +115,9 @@ jobs:
           path: feed
       - name: Download the current archives
         run: |
-          jq -r '.components[].current_tag' feed/channel.json |
-            while read -r tag; do
-              gh release download "$tag" --repo "$REPOSITORY" --pattern '*.pkg' --dir feed
+          jq -r '.components[] | .current_tag as $t | .packages[] | "\($t) \(.)"' feed/channel.json |
+            while read -r tag archive; do
+              gh release download "$tag" --repo "$REPOSITORY" --pattern "$archive" --dir feed
             done
           cp docs/package-repository/resolver-plugins.pub feed/
       - name: Configure the OPNsense package repository

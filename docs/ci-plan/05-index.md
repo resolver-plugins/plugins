@@ -53,8 +53,11 @@ Context:         Spec: the index rereads the current published records after
 Contracts:       Output changed=true|false. $RUNNER_TEMP/channel/channel.json =
                  {"schema": 4, "series", "package_abi", "components":
                  {<name>: {"current_tag", "version" (from the Release's
-                 build-record.json, else null), "packages": [<.pkg asset
-                 names>]}}}. environment outputs freebsd_release and core_commit
+                 build-record.json, else null), "packages": [<archive asset
+                 names, matching ^.+-[0-9][^-]*\.pkg$>]}}}. Old-pipeline
+                 Releases also hold catalogue files ending in .pkg
+                 (data.pkg, packagesite.pkg); the archive pattern leaves them
+                 out. environment outputs freebsd_release and core_commit
                  from the input component's current Release record.
 Files:           .github/workflows/package-index.yml (bodies of `select` and
                  `environment`)
@@ -95,8 +98,9 @@ Files:           .github/workflows/package-index.yml ("Download the current
                  archives" body, the VM run, and a new "Record the pkg version"
                  step after the VM)
 Work:            Download:
-                 1. For each components[].current_tag in feed/channel.json: gh
-                    release download --pattern '*.pkg' --dir feed.
+                 1. For each component in feed/channel.json, download each listed
+                    archive from its current_tag (gh release download --pattern
+                    <archive> --dir feed).
                  2. cp docs/package-repository/resolver-plugins.pub feed/.
                  VM (sh, set -eu):
                  3. Configure the OPNsense repository from .opnsense-pkg as in
@@ -182,3 +186,7 @@ Out of scope:    Legacy Releases (phase 09).
   stays public; `environment` fails when the published record lacks
   `freebsd_release` or `core_commit`; the phase review replaced retain's local
   repository variable with the workflow's `REPOSITORY` (2026-10-20).
+- Corrected after the build, before activation: old-pipeline current Releases
+  hold `data.pkg` and `packagesite.pkg`, so `select` keeps only
+  `<name>-<version>.pkg` archives and `stage` downloads exactly the listed
+  archives, over every `.pkg` asset (user approval, 2026-10-20).

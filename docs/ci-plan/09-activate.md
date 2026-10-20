@@ -52,9 +52,10 @@ Context:         Spec, "Branches": before cutover, reconcile each existing plugi
                  is the first carried commit; it must stay reachable on master
                  (merge the plan branch without squashing, 09.3).
 Contracts:       Branches release/bind-rp/26.1, release/bind-rp/26.7,
-                 release/dhcp-interface-ha/26.7. Published source: the commit of
-                 each current Release's newest source tag in
-                 resolver-plugins/plugins (26.7_9 for BIND 26.7 is 1c241209d).
+                 release/dhcp-interface-ha/26.7. Published source: the
+                 `source_commit` in each current Release's build-metadata.txt
+                 (the old pipeline's source tags point at control-plane commits
+                 on master, not at plugin source).
                  Trailer commit (active series only): an empty commit "Start
                  carrying plugin changes from master" with trailer
                  "Master-Commit: 8c640b214…" (full sha).
@@ -213,3 +214,7 @@ Out of scope:    Frozen material.
   workflow callers on release branches and 26.1's old `package-release.yml`
   would publish with the signing key on a merged PR; a removal commit is not a
   build, so the lock on 26.1 holds (user decision, 2026-10-20).
+- 09.1 found all three branches already contain their published source
+  (26.1_7 `31b351a47` and 26.7_9 `1c241209d` are the heads; HA 0.2_45
+  `8e29ddd85` is an ancestor of the prepared 26.7_1 head), so only the workflow
+  removal and trailer commits were needed (2026-10-20).
