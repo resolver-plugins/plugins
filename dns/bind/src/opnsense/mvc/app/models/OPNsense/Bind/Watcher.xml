@@ -1,0 +1,86 @@
+<!--
+ Copyright (C) 2026 Bryan Wiegand <inbox@kw-ventures.com>
+ All rights reserved.
+
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+ THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS AND ANY
+ EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE FOR ANY
+ DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-->
+
+<model>
+    <mount>//OPNsense/bind/watcher</mount>
+    <description>BIND DHCP lease watcher configuration</description>
+    <version>1.1.7</version>
+    <items>
+        <mappings>
+            <mapping type="ArrayField">
+                <enabled type="BooleanField">
+                    <Default>1</Default>
+                    <Required>Y</Required>
+                </enabled>
+                <dhcp_source type="OptionField">
+                    <Required>Y</Required>
+                    <Default>isc-dhcp</Default>
+                    <OptionValues>
+                        <isc-dhcp>ISC DHCP</isc-dhcp>
+                        <kea-dhcp4>Kea DHCPv4</kea-dhcp4>
+                        <kea-dhcp6>Kea DHCPv6</kea-dhcp6>
+                    </OptionValues>
+                </dhcp_source>
+                <hostname_suffix type="ModelRelationField">
+                    <Required>Y</Required>
+                    <Model>
+                        <domain>
+                            <source>OPNsense.Bind.Domain</source>
+                            <items>domains.domain</items>
+                            <display>domainname</display>
+                            <filters>
+                                <type>/^primary$/</type>
+                            </filters>
+                        </domain>
+                    </Model>
+                </hostname_suffix>
+                <reverse_zone type="ModelRelationField">
+                    <Required>N</Required>
+                    <Model>
+                        <domain>
+                            <source>OPNsense.Bind.Domain</source>
+                            <items>domains.domain</items>
+                            <display>domainname</display>
+                            <filters>
+                                <type>/^reverse$/</type>
+                            </filters>
+                        </domain>
+                    </Model>
+                </reverse_zone>
+                <tsigkey type="ModelRelationField">
+                    <Required>Y</Required>
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Tsig</source>
+                            <items>keys.key</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </tsigkey>
+            </mapping>
+        </mappings>
+    </items>
+</model>

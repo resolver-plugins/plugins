@@ -1,0 +1,229 @@
+name: HA DHCP Interface plugin
+run-name: >-
+  HA DHCP Interface plugin ${{ github.event_name == 'pull_request_target'
+  && format('PR #{0} {1}', github.event.pull_request.number, github.event.action)
+  || inputs.pr && format('candidate PR #{0}', inputs.pr)
+  || format('production {0}', inputs.series || github.event_name) }}
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      series:
+        description: Series for a production build (default the active series)
+        type: string
+        default: ''
+      pr:
+        description: PR number for a candidate build
+        type: string
+        default: ''
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+    branches: [master]
+
+permissions: {}
+
+env:
+  SOURCE_DIRECTORY: net/dhcp-interface-ha
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  status:
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Write the package build status
+        run: |
+          files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
+          if grep -q "^$SOURCE_DIRECTORY/" <<< "$files"; then
+            state=pending
+            description="Request a package build for this head"
+          else
+            state=success
+            description="Not applicable"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$state" -f context="Package build / $SOURCE_DIRECTORY" -f description="$description"
+
+  discover:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      applies: ${{ steps.discover.outputs.applies }}
+      series: ${{ steps.discover.outputs.series }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SERIES: ${{ inputs.series }}
+      CURRENT_TAG: pkg-dhcp-interface-ha-{series}
+      FOLLOW_UPSTREAM: false
+    steps:
+      - name: Resolve the active series
+        id: active
+        run: |
+          series=$(git ls-remote --tags --refs https://github.com/opnsense/core.git | cut -f2 | sed -nE 's|^refs/tags/([0-9]+\.[0-9]+)(\.[0-9]+)?$|\1|p' | sort -urV)
+          [ -n "$series" ] || { echo "::error::No final X.Y or X.Y.Z tags found in opnsense/core"; exit 1; }
+          tools=$(git ls-remote --tags --refs https://github.com/opnsense/tools.git | cut -f2)
+          active=
+          for s in $series; do
+            tag=$(echo "$tools" | sed -nE "s|^refs/tags/(${s//./[.]}(\.[0-9]+)?)$|\1|p" | sort -V | tail -n 1)
+            [ -n "$tag" ] || continue
+            err=$(gh api "repos/opnsense/tools/contents/config/$s/build.conf?ref=$tag" 2>&1 >/dev/null) && { active=$s; break; }
+            case $err in
+              *"HTTP 404"*) ;;
+              *) echo "::error::Reading config/$s/build.conf at opnsense/tools tag $tag failed: $err"; exit 1 ;;
+            esac
+          done
+          [ -n "$active" ] || { echo "::error::No opnsense/core series has an opnsense/tools tag with config/<series>/build.conf"; exit 1; }
+          echo "series=$active" >> "$GITHUB_OUTPUT"
+
+      - name: Discover work for the active series
+        id: discover
+        env:
+          ACTIVE: ${{ steps.active.outputs.series }}
+        run: |
+          if [ -n "$SERIES" ]; then
+            printf 'applies=true\nseries=%s\n' "$SERIES" >> "$GITHUB_OUTPUT"
+            echo "Production build of $SERIES requested" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! record=$(gh release download "${CURRENT_TAG//\{series\}/$ACTIVE}" --repo resolver-plugins/repository --pattern build-record.json --output - 2>&1); then
+            case $record in
+              *"release not found"*|*"no assets match"*) record='{}' ;;
+              *) echo "::error::Reading the current build record failed: $record"; exit 1 ;;
+            esac
+          fi
+          upstream=
+          if [ "$FOLLOW_UPSTREAM" = true ]; then
+            upstream=$(gh api "repos/opnsense/plugins/commits?sha=stable/$ACTIVE&path=$SOURCE_DIRECTORY&per_page=1" --jq '.[0].sha // empty')
+          fi
+          if [ "$(jq length <<< "$record")" = 0 ]; then
+            applies=true; reason="No build record for $ACTIVE"
+          elif [ "$upstream" != "$(jq -r '.upstream_package_commit // empty' <<< "$record")" ]; then
+            applies=true; reason="Upstream package changed for $ACTIVE"
+          else
+            applies=false; reason="No work for $ACTIVE: build record is current"
+          fi
+          printf 'applies=%s\nseries=%s\n' "$applies" "$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+
+  request:
+    if: (github.event_name == 'workflow_dispatch' && inputs.pr != '') || github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      applies: ${{ steps.request.outputs.applies }}
+      purpose: ${{ steps.request.outputs.purpose }}
+      series: ${{ steps.request.outputs.series }}
+      source_sha: ${{ steps.request.outputs.source_sha }}
+      pr: ${{ steps.request.outputs.pr }}
+      group: ${{ steps.request.outputs.group }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+      MERGED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Resolve the active series
+        id: active
+        run: |
+          series=$(git ls-remote --tags --refs https://github.com/opnsense/core.git | cut -f2 | sed -nE 's|^refs/tags/([0-9]+\.[0-9]+)(\.[0-9]+)?$|\1|p' | sort -urV)
+          [ -n "$series" ] || { echo "::error::No final X.Y or X.Y.Z tags found in opnsense/core"; exit 1; }
+          tools=$(git ls-remote --tags --refs https://github.com/opnsense/tools.git | cut -f2)
+          active=
+          for s in $series; do
+            tag=$(echo "$tools" | sed -nE "s|^refs/tags/(${s//./[.]}(\.[0-9]+)?)$|\1|p" | sort -V | tail -n 1)
+            [ -n "$tag" ] || continue
+            err=$(gh api "repos/opnsense/tools/contents/config/$s/build.conf?ref=$tag" 2>&1 >/dev/null) && { active=$s; break; }
+            case $err in
+              *"HTTP 404"*) ;;
+              *) echo "::error::Reading config/$s/build.conf at opnsense/tools tag $tag failed: $err"; exit 1 ;;
+            esac
+          done
+          [ -n "$active" ] || { echo "::error::No opnsense/core series has an opnsense/tools tag with config/<series>/build.conf"; exit 1; }
+          echo "series=$active" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the request
+        id: request
+        env:
+          ACTIVE: ${{ steps.active.outputs.series }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
+            files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
+            if ! grep -q "^$SOURCE_DIRECTORY/" <<< "$files"; then
+              echo "applies=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            purpose=promote
+            head=$MERGED_HEAD
+            group=plugin-dhcp-$ACTIVE
+          else
+            head=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,headRefOid --jq 'select(.state == "OPEN") | .headRefOid')
+            [ -n "$head" ] || { echo "::error::PR #$PR is not open"; exit 1; }
+            purpose=candidate
+            group=candidate-dhcp-$PR
+          fi
+          printf 'applies=true\npurpose=%s\nseries=%s\nsource_sha=%s\npr=%s\ngroup=%s\n' "$purpose" "$ACTIVE" "$head" "$PR" "$group" >> "$GITHUB_OUTPUT"
+
+  target:
+    needs: [discover, request]
+    if: >-
+      !cancelled() && (needs.discover.outputs.applies == 'true' || needs.request.outputs.applies == 'true')
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: ${{ needs.request.outputs.group || format('plugin-dhcp-{0}', needs.discover.outputs.series) }}
+    uses: ./.github/workflows/plugin-target.yml
+    with:
+      component: dhcp
+      source_directory: net/dhcp-interface-ha
+      branch_prefix: release/dhcp-interface-ha
+      current_tag: pkg-dhcp-interface-ha-{series}
+      source_tag: dhcp-interface-ha-{series}
+      follow_upstream: false
+      prerelease: true
+      series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}
+      purpose: ${{ needs.request.outputs.purpose || 'production' }}
+      source_sha: ${{ needs.request.outputs.source_sha || github.sha }}
+      pr: ${{ needs.request.outputs.pr }}
+    secrets:
+      RP_DISTRIBUTION_APP_PRIVATE_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_DISTRIBUTION_APP_PRIVATE_KEY || '' }}
+      RP_SYNC_APP_PRIVATE_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_SYNC_APP_PRIVATE_KEY || '' }}
+      RP_PKG_SIGNING_KEY: ${{ needs.request.outputs.purpose != 'candidate' && secrets.RP_PKG_SIGNING_KEY || '' }}
+
+  candidate-status:
+    needs: [request, target]
+    if: ${{ !cancelled() && needs.request.outputs.purpose == 'candidate' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ needs.request.outputs.source_sha }}
+      RESULT: ${{ needs.target.result }}
+    steps:
+      - name: Write the package build status on the built head
+        run: |
+          if [ "$RESULT" = success ]; then
+            state=success
+            description="Candidate built and qualified"
+          else
+            state=failure
+            description="Candidate build $RESULT"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$state" -f context="Package build / $SOURCE_DIRECTORY" -f description="$description" -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

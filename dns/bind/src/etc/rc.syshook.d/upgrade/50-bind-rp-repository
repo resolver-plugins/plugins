@@ -1,0 +1,7 @@
+#!/bin/sh
+
+pending_marker=${OS_BIND_RP_PENDING_MARKER:-/var/db/os-bind-rp/repository-reconcile.pending}
+pending_directory=${pending_marker%/*}
+[ "${pending_directory}" = "${pending_marker}" ] || mkdir -p "${pending_directory}" >/dev/null 2>&1 || exit 0
+: > "${pending_marker}" 2>/dev/null || :
+exit 0

@@ -2,8 +2,8 @@
 
 Experimental `os-dhcp-interface-ha` plugin.
 
-The [package repository guide](../../docs/package-repository.md#ha-dhcp-interface) covers the packaging
-workflow and signed `os-dhcp-interface-ha` feed for OPNsense 26.7 amd64.
+The [package repository guide](../../docs/package-repository.md#ha-dhcp-interface) covers the signed
+`os-dhcp-interface-ha` feed for OPNsense 26.7 amd64 and series upgrades.
 
 This plugin implements the experimental carrier controller described in
 [the maintainer guide](../../docs/dhcp-interface-ha.md). It follows native CARP
@@ -238,8 +238,8 @@ readback failures, fencing failures, reservation/collision checks, ownership,
 stop inhibition, local-health recovery, and transition serialization. Hook tests
 require PHP CLI and execute the PHP device-preparation callback against the
 supported OPNsense command-helper boundary, including failed preparation. The
-PHP controller fixtures also require the CLI and SimpleXML extension. The
-GitHub workflow installs `php-cli` and `php-xml` before running the suite.
+PHP controller fixtures also require the CLI and SimpleXML extension. The suite
+runs locally; CI runs no tests.
 Current verification and the unexecuted native MVC/browser/appliance gates are
 recorded in the [maintainer guide](../../docs/dhcp-interface-ha.md#verification-and-remaining-qualification).
 Unit tests do not prove Volt rendering, package boot or external first-frame behavior.

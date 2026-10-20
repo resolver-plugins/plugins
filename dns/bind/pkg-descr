@@ -9,10 +9,11 @@ Plugin Changelog
 
 1.36
 
+* Take BIND from any enabled repository when upgrading the plugin after a series upgrade
+* Prefer signed Resolver packages for fresh plugin dependency installation
 * Check minimum BIND and OPNsense versions and refuse incompatible plugin names
 * Bound BIND shutdown and log forced recovery steps in the General Log
 * Preserve dynamic BIND records while package upgrades regenerate zone files
-* Reconcile the supported BIND package pair after plugin and system upgrades
 * Add DHCP lease watcher and scoped dynamic DNS mappings
 * Add reverse DNS zone management
 * Source DNSBL lists from the Unbound definitions

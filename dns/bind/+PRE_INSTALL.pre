@@ -1,0 +1,56 @@
+# OPNsense ignores ordinary script failures; exit 3 stops the pkg operation.
+set -eu
+
+bind_package_refuse() {
+    printf '%s\n' "$*" >&2 || :
+    exit 3
+}
+
+bind_package_pkg=${BIND_PACKAGE_PKG_COMMAND:-/usr/local/sbin/pkg-static}
+bind_package_minimum_core=$(printf '%s\n' '%%PLUGIN_MANIFEST_DEPENDS%%' |
+    sed -n 's/^opnsense: { version: "\([^"]*\)", origin: "opnsense\/opnsense" }$/\1/p') ||
+    bind_package_refuse 'os-bind-rp cannot read its minimum OPNsense version'
+[ -n "${bind_package_minimum_core}" ] ||
+    bind_package_refuse 'os-bind-rp minimum OPNsense version is missing'
+bind_package_core=$("${bind_package_pkg}" query -e '%n = opnsense' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed OPNsense version'
+[ -n "${bind_package_core}" ] || bind_package_refuse 'os-bind-rp requires installed OPNsense'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_core}" "${bind_package_minimum_core}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed OPNsense version'
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    '<')
+        bind_package_refuse "os-bind-rp requires OPNsense ${bind_package_minimum_core} or later (installed ${bind_package_core})"
+        ;;
+    *) bind_package_refuse 'os-bind-rp OPNsense comparison returned an invalid result' ;;
+esac
+
+bind_package_runtime_formula='%%PLUGIN_DEPEND_FORMULA%%'
+bind_package_minimum_runtime=${bind_package_runtime_formula#'bind920 >= '}
+if [ -z "${bind_package_minimum_runtime}" ] || [ "${bind_package_minimum_runtime}" = "${bind_package_runtime_formula}" ]; then
+    bind_package_refuse 'os-bind-rp minimum BIND version is missing'
+fi
+bind_package_runtime=$("${bind_package_pkg}" query -e '%n = bind920' '%v') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed bind920 version'
+[ -n "${bind_package_runtime}" ] || bind_package_refuse 'os-bind-rp requires installed bind920'
+bind_package_comparison=$("${bind_package_pkg}" version -t "${bind_package_runtime}" "${bind_package_minimum_runtime}") ||
+    bind_package_refuse 'os-bind-rp cannot compare the installed bind920 version'
+case "${bind_package_comparison}" in
+    '='|'>') ;;
+    '<')
+        bind_package_refuse "os-bind-rp requires bind920 ${bind_package_minimum_runtime} or later (installed ${bind_package_runtime})"
+        ;;
+    *) bind_package_refuse 'os-bind-rp bind920 comparison returned an invalid result' ;;
+esac
+
+# Shared-file resolution replaces the official plugin; do not admit name drift.
+bind_package_installed=$("${bind_package_pkg}" query -a '%n') ||
+    bind_package_refuse 'os-bind-rp cannot read the installed package inventory'
+[ -n "${bind_package_installed}" ] || bind_package_refuse 'os-bind-rp installed package inventory is empty'
+for bind_package_conflict in %%PLUGIN_CONFLICTS%%; do
+    for bind_package_name in ${bind_package_installed}; do
+        if [ "${bind_package_name}" = "${bind_package_conflict}" ]; then
+            bind_package_refuse "os-bind-rp cannot coexist with installed ${bind_package_conflict}"
+        fi
+    done
+done
