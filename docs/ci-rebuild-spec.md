@@ -128,8 +128,10 @@ The CI builds these two plugins. It no longer builds BIND runtimes; see
   script cannot do it, and wait for the maintainer. Splitting one operation
   across steps or files, or compressing code, to stay under the limit is
   prohibited. Necessary functionality is not an exception.
-- Use POSIX shell for base-system hooks and thin orchestration, and Python only
-  for nontrivial transformations where it is guaranteed or provisioned.
+- Use POSIX shell for base-system hooks and thin orchestration. Python is
+  approved for an operation that cannot be done in a few lines of shell, where
+  it is guaranteed or provisioned, after the same exploration and written
+  justification as a script file.
 - Run on the Ubuntu runner unless the work actually needs FreeBSD. Start a
   FreeBSD VM only for work that needs one; consecutive steps of one job share
   it. Installation qualification uses its own clean VM.

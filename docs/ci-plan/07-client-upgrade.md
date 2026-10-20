@@ -257,10 +257,11 @@ Out of scope:    docs/package-repository.md (phase 08).
   to `lockf` and the start hook (user direction, 2026-10-20).
 - The start hook pauses 30 seconds between attempts so a slow network at boot
   does not use up all three at once (2026-10-20).
-- Pending user confirmation: the workers become `bindRepositoryReconcile.sh`
-  and `repository_reconcile.sh`, replacing the design's `.py` names, because
-  the spec prescribes POSIX sh for base-system hooks and thin orchestration
-  (2026-10-20).
+- The workers are POSIX sh (`bindRepositoryReconcile.sh`,
+  `repository_reconcile.sh`; the design's table is updated), because relying on
+  pkg leaves thin orchestration that fits in a few lines of shell; Python is
+  approved only for operations that cannot, after written justification (user
+  decision, 2026-10-20).
 - The workers no longer require the repository file's exact managed shape: the
   provider owns that file and rewrites only managed shapes (2026-10-20).
 - Drop `priority: 20`, over keeping it, because it existed to prefer this

@@ -231,7 +231,7 @@ client across a series. Each plugin owns its own set.
 | Pre-upgrade marker | `etc/rc.syshook.d/upgrade/50-bind-rp-repository` | `etc/rc.syshook.d/upgrade/50-dhcp-interface-ha-repository` |
 | Repository provider | `opnsense/scripts/firmware/repos/ResolverPlugins.sh` | `opnsense/scripts/firmware/repos/ResolverPluginsHA.sh` |
 | Start hook | `etc/rc.syshook.d/start/50-bind-rp-repository` | `etc/rc.syshook.d/start/50-dhcp-interface-ha-repository` |
-| Reconcile worker | `opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.py` | `opnsense/scripts/dhcp_interface_ha/repository_reconcile.py` |
+| Reconcile worker | `opnsense/scripts/OPNsense/Bind/bindRepositoryReconcile.sh` | `opnsense/scripts/dhcp_interface_ha/repository_reconcile.sh` |
 | Pending marker | `/var/db/os-bind-rp/repository-reconcile.pending` | `/var/db/os-dhcp-interface-ha/repository-reconcile.pending` |
 
 Shared contract: both providers write the same managed
