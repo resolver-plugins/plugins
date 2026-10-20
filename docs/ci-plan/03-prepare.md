@@ -145,8 +145,23 @@ Context:         Design, "`prepare` outputs": the prepared commit starts from th
                  the newest version commit on the release branch), and one
                  version commit with the trailer `Master-Commit: <source_sha>`.
                  A conflict fails the target. The `merge` step's condition is
-                 already declared (02.1).
-Contracts:       base outputs new_series (true|false) and source_base (sha);
+                 already declared (02.1). Release branches set PLUGIN_VERSION
+                 and PLUGIN_REVISION to <series>/<n>, while upstream and master
+                 keep upstream's values (26.7/9 against 1.34/4 and 1.34/5 at
+                 planning), so upstream revision bumps and master version
+                 changes always conflict on those two lines; upstream bumped
+                 the revision twice in July 2026. Tests are not packaged
+                 (only src/ is) and the release branches lack most of them.
+Contracts:       Version-line rule, used by merge and carry: after a conflict,
+                 if the only unmerged path (git diff --name-only
+                 --diff-filter=U) is "$SOURCE_DIRECTORY/Makefile" and every line
+                 inside each <<<<<<< … >>>>>>> hunk of it, other than the markers
+                 and =======, matches ^PLUGIN_(VERSION|REVISION)= (either side
+                 may be empty), keep the release side of every hunk, git add the
+                 file and continue; otherwise fail with git's message. The
+                 version commit then rewrites both lines. Both steps run git
+                 with -c merge.conflictStyle=merge so hunks have two sides.
+                 base outputs new_series (true|false) and source_base (sha);
                  carry outputs carried (true|false); decide outputs operation
                  (build|skip) and reason; version outputs prepared_sha and
                  writes $RUNNER_TEMP/source/source.bundle containing HEAD with
@@ -165,7 +180,11 @@ Work:            base:
                  3. git checkout --detach the base; output source_base.
                  merge:
                  4. git merge --no-edit -m "Merge upstream stable/$SERIES into
-                    $BRANCH_PREFIX/$SERIES" upstream/stable/$SERIES.
+                    $BRANCH_PREFIX/$SERIES" upstream/stable/$SERIES. On failure,
+                    apply the version-line rule (an awk over the Makefile that
+                    exits non-zero on any other line in a hunk and otherwise
+                    prints the file without markers and the upstream side), then
+                    git commit --no-edit to complete the merge.
                  carry:
                  5. last = `git log -1 --grep='^Master-Commit: '
                     --format='%(trailers:key=Master-Commit,valueonly)' HEAD`;
@@ -175,8 +194,10 @@ Work:            base:
                     be PR heads that only refs/pull/* holds, after a squash
                     merge).
                  7. git diff --binary "$last" "$SOURCE_SHA" --
-                    "$SOURCE_DIRECTORY" > $RUNNER_TEMP/carry.patch; if non-empty,
-                    git apply --3way it and output carried=true, else false.
+                    "$SOURCE_DIRECTORY" ":(exclude)$SOURCE_DIRECTORY/tests" >
+                    $RUNNER_TEMP/carry.patch; if non-empty, git apply --3way it
+                    (on failure, the version-line rule as in step 4, without a
+                    commit) and output carried=true, else false.
                  decide:
                  8. skip only when PURPOSE is production, nothing was carried,
                     HEAD equals SOURCE_BASE, and SOURCE_BASE equals
@@ -192,10 +213,13 @@ Work:            base:
                     <dir> to <version>" -m "Master-Commit: $SOURCE_SHA".
                  11. git bundle create $RUNNER_TEMP/source/source.bundle HEAD
                     "^$SOURCE_BASE"; output prepared_sha.
-External inputs: the release branches (existence and trailer); git merge and
-                 git apply report conflicts themselves.
-Done when:       Candidates never skip; the carry and version change land in
-                 one commit with the trailer; any body over 30 lines is a stop.
+External inputs: the release branches (existence and trailer); upstream and
+                 master content, whose conflicts git reports; the version-line
+                 rule is the only conflict resolved automatically.
+Done when:       Candidates never skip; the carry excludes tests; a conflict
+                 confined to the two version lines continues and any other
+                 conflict fails; the carry and version change land in one
+                 commit with the trailer; any body over 30 lines is a stop.
 Out of scope:    Promotion (03.4); pushing anything (phase 05).
 ```
 
@@ -242,10 +266,11 @@ Out of scope:    Downloading for publish (02.1 already declares run-id).
   day; the skip accepts either (2026-10-20).
 - The carry and the version change share one commit; the design's order (merge,
   carry, version commit) is kept (2026-10-20).
-- Open question for the user (design gap): the merge and the carry will
-  conflict in routine cases. The release branches set `PLUGIN_VERSION` and
-  `PLUGIN_REVISION` to the series values while upstream and `master` keep
-  upstream's, so an upstream revision bump conflicts in `merge` and a `master`
-  version change conflicts in `carry`. The release branches also lack
-  `net/dhcp-interface-ha/tests` and most of `dns/bind/tests`, so a tests change
-  fails the carry. The plan follows the design until decided (2026-10-20).
+- Conflicts confined to the `PLUGIN_VERSION` and `PLUGIN_REVISION` lines of the
+  plugin's Makefile are resolved by keeping the release side, over failing the
+  target or setting the version on the make command line, because the version
+  commit replaces those lines and upstream bumps them with almost every change;
+  every other conflict still fails (user decision, 2026-10-20).
+- The carry excludes `<source_directory>/tests`, so tests stay on `master`
+  only; they are not packaged and the release branches lack most of them (user
+  decision, 2026-10-20).

@@ -70,8 +70,8 @@ External inputs: none added.
 Done when:       The diff is those two lines; the final write, the early
                  "already current" comparison and the managed checks all use the
                  body without priority first.
-Out of scope:    The URL list, warnings, marker handling, the worker, and
-                 dns/bind/tests (left stale on purpose; see Notes).
+Out of scope:    The URL list, warnings, marker handling, the worker,
+                 dns/bind/tests.
 ```
 
 ## 01.2 BIND worker on native dependency resolution
@@ -126,8 +126,7 @@ Done when:       No bind920 or bind-tools candidate lookup, no version
                  comparison helper, no -r on the dry run or install, the restart
                  tied to a changed bind920 record, and the file shorter than
                  before (274 lines).
-Out of scope:    The provider, the hooks, the Makefile, and dns/bind/tests
-                 (left stale on purpose; see Notes).
+Out of scope:    The provider, the hooks, the Makefile, dns/bind/tests.
 ```
 
 ## 01.3 HA upgrade hooks and provider
@@ -261,6 +260,6 @@ Out of scope:    docs/package-repository.md (phase 08) and old CI callers of the
   decide before building 01.2 and 01.4 (2026-10-20).
 - `dns/bind/tests/test_repository_reconciliation.py` and
   `test_repository_migration.py` still assert the old priority and runtime
-  behavior. They stay unchanged in this phase: the release branches lack most of
-  `dns/bind/tests`, so a tests change would make the first carry fail until the
-  carry question in phase 03 is decided (2026-10-20).
+  behavior. Updating plugin tests is not part of this plan; the carry excludes
+  tests (phase 03), so the maintainer can update them on `master` at any time
+  (2026-10-20).
