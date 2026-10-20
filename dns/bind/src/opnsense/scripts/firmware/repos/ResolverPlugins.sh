@@ -20,7 +20,7 @@ repository_body()
     printf '%s\n' '  mirror_type: "none",'
     printf '%s\n' '  signature_type: "pubkey",'
     printf '  pubkey: "%s",\n' "${public_key}"
-    [ "${2:-20}" = none ] || printf '%s\n' '  priority: 20,'
+    [ "${2:-}" != priority ] || printf '%s\n' '  priority: 20,'
     printf '%s\n' '  enabled: yes'
     printf '%s\n' '}'
 }
@@ -31,7 +31,7 @@ managed_body()
     temporary=$2
     repository_body "${url}" > "${temporary}"
     cmp "${repository_config}" "${temporary}" >/dev/null 2>&1 || {
-        repository_body "${url}" none > "${temporary}"
+        repository_body "${url}" priority > "${temporary}"
         cmp "${repository_config}" "${temporary}" >/dev/null 2>&1
     }
 }
