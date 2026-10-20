@@ -1,6 +1,6 @@
 # Phase 09: Activate
 
-Status: in progress (stages done: 09.1)
+Status: in progress (stages done: 09.1, 09.2)
 Before: phases 01–08 are committed locally on the plan branch; GitHub still
 runs the old CI from `master`, and the release branches have no
 `Master-Commit` trailer.
@@ -28,7 +28,7 @@ Shared references: design, "Frozen, never written by the new CI" and
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
 | 09.1 | Reconcile release branches | opus | high | first, on request | done |
-| 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | planned |
+| 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | done |
 | 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | planned |
 | 09.4 | Branch rules | sonnet | medium | after 09.3, on request | planned |
 | 09.5 | First production runs | sonnet | medium | after 09.4, on request | planned |
@@ -223,4 +223,8 @@ Out of scope:    Frozen material.
   `1c241209d..b699b0105`, release/dhcp-interface-ha/26.7
   `5c4888962..d623c501a`. Each branch has no `.github/workflows/`; both 26.7
   heads carry `Master-Commit: 8c640b2141e760ce57f07b386a20559bb3ad9491`
+  (2026-10-20).
+- 09.2: PR #130 merged 2026-10-20 as `1801c02a3` (squash); master has no old
+  CI. The squash is harmless there, but PR 2 must use "Create a merge commit"
+  so 8c640b214 stays on master; the repository allows all three methods
   (2026-10-20).
