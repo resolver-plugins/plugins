@@ -242,7 +242,7 @@ jobs:
           owner: resolver-plugins
           repositories: repository
           permission-contents: write
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: sync
         with:
           client-id: ${{ vars.RP_SYNC_APP_CLIENT_ID }}
