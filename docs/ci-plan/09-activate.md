@@ -5,9 +5,10 @@ Before: phases 01–08 are committed locally on the plan branch; GitHub still
 runs the old CI from `master`, and the release branches have no
 `Master-Commit` trailer.
 After: the release branches hold their published source and the first
-trailer, branch rules enforce the PR and release-branch model, `master` runs
-the new CI, a first production run has published and indexed, and the old
-pipeline's leftover Releases are cleaned up.
+trailer; a first PR removed the old CI from `master` and a second PR brought
+the new CI, client changes, guides and plan; branch rules enforce the PR and
+release-branch model; a first production run per plugin has published and
+indexed; the old pipeline's leftover Releases are cleaned up.
 
 Rules: the new CI lives only in new files (`bind-plugin.yml`,
 `ha-dhcp-interface-plugin.yml`, `plugin-target.yml`, `package-index.yml`). No
@@ -27,9 +28,11 @@ Shared references: design, "Frozen, never written by the new CI" and
 | Stage | Goal | Model | Effort | Order | Status |
 | --- | --- | --- | --- | --- | --- |
 | 09.1 | Reconcile release branches | opus | high | first, on request | planned |
-| 09.2 | Branch rules | sonnet | medium | after 09.1, on request | planned |
-| 09.3 | Activate master | sonnet | medium | after 09.2, on request | planned |
-| 09.4 | Legacy Release cleanup | sonnet | medium | after 09.3, on request | planned |
+| 09.2 | PR 1: remove the old CI from master | sonnet | low | after 09.1, on request | planned |
+| 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | planned |
+| 09.4 | Branch rules | sonnet | medium | after 09.3, on request | planned |
+| 09.5 | First production runs | sonnet | medium | after 09.4, on request | planned |
+| 09.6 | Legacy Release cleanup | sonnet | medium | after 09.5, on request | planned |
 
 ## 09.1 Reconcile release branches
 
@@ -78,19 +81,72 @@ Done when:       The user confirms, for each branch, that the published source
 Out of scope:    26.1 trailer (retired series are locked and never carried).
 ```
 
-## 09.2 Branch rules
+## 09.2 PR 1: remove the old CI from master
+
+```
+Goal:            master holds no old CI, before any new CI arrives.
+Context:         Spec, "Cutover": retire the old production routes before
+                 enabling the replacements; never run both against the same
+                 change. On a PR to master, the old `pull_request` workflows
+                 run from the PR's merge commit (where they are deleted) and the
+                 old entries' `pull_request_target` triggers only cover release
+                 branches; closing runs master's old pr-release-cleanup.yml
+                 once, which has no development Releases to delete. Until
+                 09.3 merges, master has no CI: nothing builds or publishes,
+                 and clients keep the current feed.
+Contracts:       Branch `ci-rebuild/retire-old-ci` from `origin/master` with one
+                 commit "[skip ci] Retire the old CI" deleting exactly the files
+                 08.1 deleted (the ten old workflows, `.github/ci/**`,
+                 `packages/`); nothing else. PR to master, merged with a merge
+                 commit.
+Files:           none in the plan branch.
+Work:            1. Create the branch and commit with git rm of 08.1's paths.
+                 2. Show the push and `gh pr create` commands; push and open the
+                    PR after the request; the user reviews and merges.
+External inputs: the remote master.
+Done when:       The PR is merged and origin/master has no old workflow,
+                 `.github/ci/` or `packages/`.
+Out of scope:    Guides (they change in 09.3), the new CI.
+```
+
+## 09.3 PR 2: the new CI and everything else
+
+```
+Goal:            master holds the new CI, the client changes, the guides and
+                 this plan.
+Context:         The plan branch already deletes the same files as PR 1, so
+                 merging the updated master into it is conflict-free and keeps
+                 history. The new workflows have no push trigger, so the merge
+                 starts nothing; their PR jobs run only from master's copy, so
+                 they do not run on this PR either.
+Contracts:       Merge origin/master (after 09.2) into ci-rebuild/plan with a
+                 merge commit; PR ci-rebuild/plan to master, merged with a merge
+                 commit (never a squash, which would lose 8c640b214 for the
+                 first trailer).
+Files:           none beyond the merge.
+Work:            1. git fetch; git merge origin/master into the plan branch.
+                 2. Show the push and `gh pr create` commands; push and open the
+                    PR after the request; the user reviews and merges.
+External inputs: the remote master.
+Done when:       The PR is merged by merge commit and 8c640b214 is an ancestor
+                 of origin/master.
+Out of scope:    Branch rules (09.4), dispatching runs (09.5).
+```
+
+## 09.4 Branch rules
 
 ```
 Goal:            GitHub enforces the model the new CI assumes.
 Context:         Spec, "PR builds and promotion": master requires the status on
                  the current head and up-to-date PRs; release branches accept
-                 pushes only from the pipeline.
+                 pushes only from the pipeline. Set after 09.3, because the
+                 required statuses only exist once the new entries are on
+                 master.
 Contracts:       Ruleset on master: pull request required; required statuses
                  "Package build / dns/bind" and "Package build /
-                 net/dhcp-interface-ha"; branches must be up to date; repository
-                 admins may bypass (needed by 09.3). Ruleset on release/**:
-                 updates and creation restricted to the sync GitHub App; no
-                 deletion or force push.
+                 net/dhcp-interface-ha"; branches must be up to date. Ruleset
+                 on release/**: updates and creation restricted to the sync
+                 GitHub App; no deletion or force push.
 Files:           none.
 Work:            1. Read the existing rulesets (gh api
                     repos/resolver-plugins/plugins/rulesets).
@@ -98,35 +154,28 @@ Work:            1. Read the existing rulesets (gh api
                     for the request; apply.
 External inputs: the existing rulesets.
 Done when:       The user confirms both rulesets in the repository settings.
-Out of scope:    Activation (09.3).
+Out of scope:    Dispatching runs (09.5).
 ```
 
-## 09.3 Activate master
+## 09.5 First production runs
 
 ```
-Goal:            master runs the new CI after one push, and one production run
-                 publishes and indexes.
-Context:         Spec, "Cutover": retire the old production routes before
-                 enabling the replacements; never run both against the same
-                 change. The plan branch removes the old workflows and adds the
-                 new ones in the same history, so one push switches over.
-Contracts:       master advances to the plan branch by fast-forward or a merge
-                 commit (never a squash, which would lose 8c640b214); pushed by
-                 an admin under the ruleset bypass.
+Goal:            One production run per plugin publishes, syncs and indexes.
+Context:         The first carry starts at the 09.1 trailer, so it brings phase
+                 07's client changes into the 26.7 release branches.
+Contracts:       `gh workflow run bind-plugin.yml` and `gh workflow run
+                 ha-dhcp-interface-plugin.yml`, each without inputs (discovery).
 Files:           none.
-Work:            1. Confirm master has not moved since the plan branch's base,
-                    or merge master into the plan branch locally first.
-                 2. Show the push command; push after the request.
-                 3. On request, dispatch `gh workflow run bind-plugin.yml`
-                    and the HA entry, and report the run URLs and outcomes.
-External inputs: the remote master.
-Done when:       The user confirms a production run published, synced and
-                 indexed for each plugin, carrying phase 07's client changes
-                 into the 26.7 release branches.
-Out of scope:    Release cleanup (09.4).
+Work:            1. On request, dispatch both and report the run URLs.
+                 2. Report each run's outcome job by job; a failure stays failed
+                    and is reported, not repaired.
+External inputs: the run results.
+Done when:       The user confirms each plugin's run published, synced and
+                 indexed.
+Out of scope:    Release cleanup (09.6).
 ```
 
-## 09.4 Legacy Release cleanup
+## 09.6 Legacy Release cleanup
 
 ```
 Goal:            The old pipeline's fingerprinted and development Releases are
@@ -153,8 +202,10 @@ Out of scope:    Frozen material.
 
 ## Notes
 
-- Activation is one push after the branch rules exist, over enabling workflows
-  separately, so old and new never run against the same change (2026-10-19).
+- Activation is two PRs, the first removing the old CI and the second adding
+  the new, with branch rules after the second, over one direct push after the
+  rules, so old and new never run against the same change and each review is
+  focused (user decision, 2026-10-20).
 - The first trailer names master commit 8c640b214, so the first carry brings
   phase 07's client changes into the 26.7 branches (2026-10-20).
 - `.github/workflows/` is removed from all three release branches by a new
