@@ -450,7 +450,7 @@ jobs:
             install -d -m 0750 /conf
             install -m 0640 /usr/local/etc/config.xml /conf/config.xml
             sh /usr/local/etc/rc.subr.d/php
-            service configd onestart
+            service configd onestatus || service configd onestart
             /usr/local/opnsense/service/template_ctl.py OPNsense/WebGui
             pkg repo dist
             printf 'candidate: {\n  url: "file://%s/dist",\n  signature_type: "none",\n  enabled: yes\n}\n' "$PWD" \

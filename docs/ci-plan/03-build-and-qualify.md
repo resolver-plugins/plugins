@@ -172,3 +172,7 @@ Out of scope:    Plugin test suites (spec forbids them in CI).
   skips hidden directories by default, so the build job's `.build/` upload
   found nothing and qualify had no artifact; the upload sets
   `include-hidden-files: true` (2026-10-20).
+- Corrected after the third production run (2026-10-20): installing the
+  `opnsense` package already starts `configd` on the builder, so qualify starts
+  it only when `service configd onestatus` fails, as the old qualification did
+  (2026-10-20).
