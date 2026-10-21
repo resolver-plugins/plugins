@@ -212,6 +212,9 @@ class StandbyRoutingTests(unittest.TestCase):
         self.assertEqual(status['global_role'], 'BACKUP')
         self.assert_fenced()
         self.assertNotEqual(self.host.route['gateway'], '198.51.100.1')
+        reason = status['standby_internet']['reason']
+        self.assertIn('not BACKUP: hn0 vhid 20 MASTER.', reason)
+        self.assertIn('uses the fenced WAN', reason)
 
     def test_role_change_during_route_install_cancels_and_releases_owned_path(self):
         self.enable_standby()

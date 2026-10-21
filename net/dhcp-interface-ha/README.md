@@ -46,7 +46,8 @@ Source implementation does not imply that an appliance was updated.
 - Native CARP service-health integration for local incapacity after fencing.
 - Stop inhibits promotion before fencing; a failed stop leaves the service
   running to retry. Start clears the inhibition.
-- Removal refuses assigned or unverified devices and preserves the lock inode.
+- Removal keeps an assigned device and the running controller, reports
+  unverified devices as a failed script and preserves the lock inode.
 - Settings keeps the shared identity and local assignment/carrier in separate XMLRPC
   scopes while saving them in one local transaction.
 - Status reports backend CARP/attachment state, source-labeled HA context and
@@ -167,8 +168,27 @@ service dhcp_interface_ha onestart
 
 A failed fence is an error, not a successful stop. Inspect the live LAGG and
 member state before further testing. Reassign every logical interface away
-from `dhcpha0lagg` before uninstalling. Package upgrades preserve the device;
-restart the controller after an upgrade to load the new implementation.
+from `dhcpha0lagg` before uninstalling. `pkg` removes the files even when the
+removal script fails, so removal cannot be refused: with the device still
+assigned it is left in place with a warning. Package upgrades preserve the
+device; restart the controller after an upgrade to load the new implementation.
+
+### Switching from `os-dhcp-interface-ha-devel`
+
+The `-devel` and release packages conflict, so `pkg` removes one and installs
+the other instead of upgrading. The removal keeps the assigned device and the
+running controller, as an upgrade does, and settings are shared. Revisions up
+to `0.2_45` print a refusal and `DEINSTALL script failed`; with `dhcpha0lagg`
+assigned they stop before changing anything, and `pkg` continues. Switch the
+BACKUP node first:
+
+```sh
+pkg install os-dhcp-interface-ha
+service dhcp_interface_ha onestop
+service dhcp_interface_ha onestart
+```
+
+Restarting fences the WAN, so restart the MASTER only after a planned failover.
 
 ## Clearing the plugin setup
 
