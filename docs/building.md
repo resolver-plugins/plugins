@@ -126,6 +126,36 @@ make -C net/dhcp-interface-ha PLUGIN_DEVEL= PLUGIN_ABI=<series> package
 
 The plugin test suites also run locally. CI runs none.
 
+`PLUGIN_DEVEL=` is required: `Mk/devel.mk` on `master` otherwise builds the
+`-devel` package, a separate name and origin that conflicts with the release
+package and cannot be promoted. `-devel` packages are retired.
+
+## Testing on an appliance
+
+Test a change on an OPNsense node with its PR's candidate, not a `-devel`
+build. Request the candidate, then download the archive from the
+`qualified-<component>-<series>-<head>` artifact:
+
+```
+gh workflow run <entry> -f pr=N
+gh run download <run> -n qualified-<component>-<series>-<head> -D <dir>
+```
+
+On the node, install it from a temporary local repository, BACKUP node first:
+
+```
+mkdir -p <tmp>/repo <tmp>/repos
+cp <archive> <tmp>/repo/
+pkg repo <tmp>/repo
+echo 'cand: { url: "file://<tmp>/repo", enabled: yes }' > <tmp>/repos/cand.conf
+pkg -o REPOS_DIR=<tmp>/repos install -r cand <package>
+```
+
+Merging publishes that archive unchanged, so a tested node already runs the
+release. The candidate carries the next release version before it is
+published: if the PR head changes or another publication takes that version,
+reinstall the published package on the tested node (`pkg install -f <package>`).
+
 ## Changing the CI
 
 - The CI was built from scratch; do not reintroduce retired helpers.
