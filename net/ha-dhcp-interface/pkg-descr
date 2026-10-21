@@ -8,13 +8,15 @@ stable logical interface, a shared ordinary unicast MAC identity, and
 fail-closed Layer-2 fencing of the local carrier.
 
 This package is experimental.  Production deployment remains gated by
-the prototype tests documented in docs/ha-dhcp-interface.md.
+the open items in the qualification record:
+https://github.com/resolver-plugins/plugins/blob/master/docs/plugins/ha-dhcp-interface/reference.md#qualification-record
 
 Plugin Changelog
 ================
 
 26.7
 
+* Link the description to the qualification record in the plugin documentation
 * Keep an assigned device when switching between the -devel and release packages
 * Report why standby Internet is not selected, including CARP instances that are not BACKUP
 * Build and publish through the rebuilt release pipeline
