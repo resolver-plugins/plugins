@@ -107,6 +107,9 @@ must keep the [expected outcomes](docs/maintainers/reference.md#expected-outcome
   not keep a test for coverage alone, for another example of an
   already-protected case, or to mirror Markdown wording. Preserve uncertain
   tests until their value can be investigated.
+- Tests check the code on `master` as it is. Do not skip or switch
+  expectations on package versions or series; a version gate silently hides
+  the tests of shipped code.
 
 ## Code style
 

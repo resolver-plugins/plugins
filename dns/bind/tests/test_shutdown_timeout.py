@@ -11,14 +11,9 @@ import time
 
 import pytest
 
-from .bounded_shutdown_contract import current_release_requires_bounded_shutdown
-
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 STOP_SCRIPT = BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
-
-if not current_release_requires_bounded_shutdown(BIND_ROOT):
-    pytestmark = pytest.mark.skip(reason="release predates bounded BIND shutdown")
 
 
 @pytest.fixture

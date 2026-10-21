@@ -29,11 +29,8 @@ import sys
 import tempfile
 import unittest
 
-from .bounded_shutdown_contract import current_release_requires_bounded_shutdown
-
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BOUNDED_SHUTDOWN = current_release_requires_bounded_shutdown(BIND_ROOT)
 
 
 class JournalLifecycleTest(unittest.TestCase):
@@ -81,6 +78,9 @@ class JournalLifecycleTest(unittest.TestCase):
                 env=os.environ | {
                     "BIND_STOP_CONFIG": str(config),
                     "BIND_STOP_NAMED_RC": str(named),
+                    "BIND_STOP_NAMED_PIDFILE": str(temporary / "named.pid"),
+                    "BIND_STOP_RNDC": str(temporary / "rndc"),
+                    "BIND_STOP_WATCHER_PIDFILE": str(temporary / "watcher.pid"),
                     "BIND_STOP_WATCHER_CONFIG": str(watcher_config),
                     "BIND_STOP_ZONE_DIR": str(zone_dir),
                     "BIND_STOP_STATE_FILE": str(state),
@@ -92,7 +92,7 @@ class JournalLifecycleTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(events.read_text(), "status\n" if BOUNDED_SHUTDOWN else "stop\n")
+            self.assertEqual(events.read_text(), "status\n")
             self.assertFalse(state.exists())
             for zone in ("forward.example", "watcher.example", "1.168.192.in-addr.arpa"):
                 for suffix in (".jnl", ".jnw", ".jbk"):
@@ -126,6 +126,9 @@ class JournalLifecycleTest(unittest.TestCase):
                 [sys.executable, stop_script],
                 env=os.environ | {
                     "BIND_STOP_NAMED_RC": str(named),
+                    "BIND_STOP_NAMED_PIDFILE": str(temporary / "named.pid"),
+                    "BIND_STOP_RNDC": str(temporary / "rndc"),
+                    "BIND_STOP_WATCHER_PIDFILE": str(temporary / "watcher.pid"),
                     "BIND_STOP_WATCHER_CONFIG": str(watcher_config),
                     "BIND_STOP_ZONE_DIR": str(zone_dir),
                     "BIND_STOP_STATE_FILE": str(state),
@@ -140,7 +143,7 @@ class JournalLifecycleTest(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertEqual(
                 events.read_text(),
-                "status\n" if BOUNDED_SHUTDOWN else "stop\nstatus\n",
+                "status\n",
             )
             self.assertTrue(state.exists())
             self.assertTrue(journal.exists())
@@ -177,6 +180,9 @@ class JournalLifecycleTest(unittest.TestCase):
                 [sys.executable, stop_script],
                 env=os.environ | {
                     "BIND_STOP_NAMED_RC": str(named),
+                    "BIND_STOP_NAMED_PIDFILE": str(temporary / "named.pid"),
+                    "BIND_STOP_RNDC": str(temporary / "rndc"),
+                    "BIND_STOP_WATCHER_PIDFILE": str(temporary / "watcher.pid"),
                     "BIND_STOP_WATCHER_CONFIG": str(watcher_config),
                     "BIND_STOP_ZONE_DIR": str(zone_dir),
                     "BIND_STOP_STATE_FILE": str(state),
@@ -190,7 +196,7 @@ class JournalLifecycleTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 events.read_text(),
-                "status\n" if BOUNDED_SHUTDOWN else "stop\nstatus\n",
+                "status\n",
             )
             self.assertFalse(state.exists())
             self.assertFalse(journal.exists())

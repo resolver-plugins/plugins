@@ -22,11 +22,10 @@ the changelog in `dns/bind/pkg-descr`: in the `Resolver Plugins changes`
 block, under `On upstream <version>` for the upstream version the plugin is
 on, newest first. (HA entries go under the series heading, such as `26.7`.)
 Without the entry, the PR status fails. Run the plugin's tests locally; CI
-runs none. On `master` the BIND suite needs the active series, because the
-Makefile carries upstream's version:
+runs none:
 
 ```sh
-RP_TEST_SERIES=26.7 python3 -m pytest dns/bind/tests
+python3 -m pytest dns/bind/tests
 ```
 
 Commit and push the branch. Do not use `[skip ci]` for a package change.

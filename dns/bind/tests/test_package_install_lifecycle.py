@@ -8,41 +8,11 @@ import tempfile
 
 import pytest
 
-from .package_lifecycle_contract import current_release_requires_lifecycle
-
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PRE_INSTALL = BIND_ROOT / "+POST_INSTALL.pre"
 POST_INSTALL = BIND_ROOT / "+POST_INSTALL.post"
 STOP_SCRIPT = BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindStop.py"
-MAKEFILE = BIND_ROOT / "Makefile"
-
-if MAKEFILE.is_file():
-    version_line = next(
-        line for line in MAKEFILE.read_text().splitlines()
-        if line.startswith("PLUGIN_VERSION=")
-    )
-    revision_line = next(
-        line for line in MAKEFILE.read_text().splitlines()
-        if line.startswith("PLUGIN_REVISION=")
-    )
-    PLUGIN_VERSION = tuple(
-        int(part) for part in version_line.split("=", 1)[1].strip().split(".")
-    )
-    PLUGIN_REVISION = int(revision_line.split("=", 1)[1].strip())
-else:
-    PLUGIN_VERSION = (0,)
-    PLUGIN_REVISION = 0
-
-if current_release_requires_lifecycle(BIND_ROOT, PLUGIN_VERSION, PLUGIN_REVISION):
-    missing = [
-        str(path.relative_to(BIND_ROOT))
-        for path in (PRE_INSTALL, POST_INSTALL, STOP_SCRIPT)
-        if not path.is_file()
-    ]
-    assert not missing, f"release lifecycle implementation is missing: {missing}"
-else:
-    pytestmark = pytest.mark.skip(reason="release version predates package lifecycle hooks")
 
 
 @pytest.fixture

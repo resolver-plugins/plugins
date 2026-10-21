@@ -8,38 +8,11 @@ import tempfile
 
 import pytest
 
-from .bounded_shutdown_contract import current_release_requires_bounded_shutdown
-from .package_lifecycle_contract import current_release_requires_lifecycle
-
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE_HELPER = (
     BIND_ROOT / "src/opnsense/scripts/OPNsense/Bind/bindPackageZones.py"
 )
-MAKEFILE = BIND_ROOT / "Makefile"
-BOUNDED_SHUTDOWN = current_release_requires_bounded_shutdown(BIND_ROOT)
-
-if MAKEFILE.is_file():
-    version_line = next(
-        line for line in MAKEFILE.read_text().splitlines()
-        if line.startswith("PLUGIN_VERSION=")
-    )
-    revision_line = next(
-        line for line in MAKEFILE.read_text().splitlines()
-        if line.startswith("PLUGIN_REVISION=")
-    )
-    PLUGIN_VERSION = tuple(
-        int(part) for part in version_line.split("=", 1)[1].strip().split(".")
-    )
-    PLUGIN_REVISION = int(revision_line.split("=", 1)[1].strip())
-else:
-    PLUGIN_VERSION = (0,)
-    PLUGIN_REVISION = 0
-
-if current_release_requires_lifecycle(BIND_ROOT, PLUGIN_VERSION, PLUGIN_REVISION):
-    assert PACKAGE_HELPER.is_file(), "release package zone helper is missing"
-else:
-    pytestmark = pytest.mark.skip(reason="release version predates package lifecycle hooks")
 
 
 @pytest.fixture
@@ -159,16 +132,11 @@ def test_package_backup_preserves_non_watcher_dynamic_record(executable_tmp_path
     )
     assert discard.returncode == 0, discard.stderr
     assert not backup.exists()
-    stop_event = (
-        "named status"
-        if BOUNDED_SHUTDOWN
-        else "named stop"
-    )
     assert events.read_text().splitlines() == [
         "rndc freeze 1.168.192.in-addr.arpa",
         "rndc freeze dynamic.example",
         "rndc freeze watcher.example",
-        stop_event,
+        "named status",
     ]
 
 
