@@ -151,6 +151,32 @@ New installations share the same default RNDC secret. Replace it:
 2. Paste it into **General Settings → Secret** under **RNDC Key** and click
    **Save**. Saving restarts BIND with the new key.
 
+## Move BIND to OPNsense's package
+
+Systems that installed BIND 9.20.27 from the Resolver Plugins repository keep
+it, because `pkg` upgrades a package only from the repository it came from.
+
+1. Check where BIND came from:
+
+   ```sh
+   pkg query '%n %v %R' bind920 bind-tools
+   ```
+
+2. If either line ends in `resolver-plugins`, reinstall both from OPNsense:
+
+   ```sh
+   pkg install -f -r OPNsense bind920 bind-tools
+   ```
+
+3. Restart BIND to run the new binary, then check it:
+
+   ```sh
+   configctl bind restart
+   named -v
+   ```
+
+On a CARP pair, do the standby node first.
+
 ## Upgrade on a CARP pair
 
 Each node briefly stops answering DNS while its package is replaced.

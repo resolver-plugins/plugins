@@ -7,7 +7,7 @@
 | Package | `os-bind-rp`, origin `opnsense/os-bind-rp` |
 | Source | `dns/bind/` |
 | Replaces | official `os-bind` (`PLUGIN_CONFLICTS=bind`); never installed together |
-| Minimum OPNsense | `26.1.11_10` |
+| Minimum OPNsense | `26.7` |
 | Minimum BIND | `bind920 >= 9.20.26`, from any enabled repository |
 | Version | `<series>.<upstream>_<n>`, such as `26.7.1.34_1`: series, upstream BIND plugin version, local revision |
 | Configuration | `OPNsense/bind` in `config.xml`, the same section as `os-bind` |

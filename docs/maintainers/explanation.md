@@ -234,17 +234,26 @@ Custom repository files are never rewritten.
 ## BIND runtime
 
 The fork once built its own `bind920` and `bind-tools` to avoid a regression
-in OPNsense's BIND. Current OPNsense ships a fixed, newer BIND, so those builds
-were retired on 2026-10-19. `os-bind-rp` declares a minimum BIND version and
-`pkg` installs any provider that meets it, normally OPNsense's own. Runtime
-packages already published stay in the feeds that list them. If no provider
-meets the minimum, installation fails natively; the CI never compiles a
-private dependency.
+in OPNsense 26.1's BIND. OPNsense 26.7 ships a fixed, newer BIND, so those
+builds were retired on 2026-10-19 and the plugin's minimum OPNsense became
+`26.7` on 2026-10-21. `os-bind-rp` declares a minimum BIND version and `pkg`
+installs any provider that meets it: OPNsense's own. If no provider meets the
+minimum, installation fails natively; the CI never compiles a private
+dependency.
+
+`pkg` upgrades a package only from the repository it came from, so a system
+that installed the fork's 9.20.27 stayed on it while OPNsense moved on. The
+26.7 feed no longer serves it, and the plugin's
+[how-to](../plugins/bind/how-to.md#move-bind-to-opnsenses-package) moves such
+a system to OPNsense's package. The runtime build workflow and its scripts
+were removed in commit `f15edf9a0`; start there if a private BIND is ever
+needed again.
 
 ## Decisions
 
 | Date | Decision | Over | Because |
 | --- | --- | --- | --- |
+| 2026-10-21 | Raise the BIND plugin's minimum OPNsense to `26.7` and drop the runtime from the 26.7 feed | Keeping `26.1.11_10` and the frozen runtime | No build targets 26.1, and the frozen runtime held systems back from OPNsense's BIND updates |
 | 2026-10-21 | BIND versions are `<series>.<upstream>_<n>`, dots kept | `<series>_<n>` | Users see the upstream base, and dotted parts order correctly in `pkg` |
 | 2026-10-21 | "Newer" compares whole versions | Comparing the revision alone | Versions within a target no longer share one base |
 | 2026-10-21 | The fork's changelog sits in its own block above upstream's heading | Sections under upstream's heading | Upstream's next section conflicted with the fork's in the automatic merge |

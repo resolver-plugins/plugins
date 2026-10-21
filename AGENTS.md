@@ -34,8 +34,9 @@ them:
   package; the two must never be installed together. Keep
   `PLUGIN_NAME=bind-rp` and `PLUGIN_CONFLICTS=bind` intact unless the
   maintainer explicitly changes the package policy.
-- Preserve the documented minimum OPNsense version of `26.1.11_10`. It is the
-  minimum needed for the BIND/DoT fix used by this fork.
+- Preserve the documented minimum OPNsense version of `26.7` and the minimum
+  BIND in `PLUGIN_DEPEND_FORMULA`. OPNsense's own BIND meets them; do not
+  build or publish a private BIND.
 - Keep fork-specific plugin changes small and isolated under `dns/bind` and
   `net/ha-dhcp-interface`. Do not take unrelated upstream plugin changes into
   this fork.

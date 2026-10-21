@@ -14,7 +14,7 @@ procedures, the [how-to guides](how-to.md).
 - Names and origins are fixed across series; renaming is a maintainer decision.
 - Archives are named `<name>-<version>.pkg`.
 - `os-bind-rp` keeps `PLUGIN_NAME=bind-rp` and `PLUGIN_CONFLICTS=bind`, a
-  minimum OPNsense of `26.1.11_10` and the minimum BIND in
+  minimum OPNsense of `26.7` and the minimum BIND in
   `PLUGIN_DEPEND_FORMULA` (`bind920 >= 9.20.26`).
 - `os-ha-dhcp-interface` was published as `os-dhcp-interface-ha` up to
   `26.7_3`; that name's branch and Releases are frozen.
@@ -246,8 +246,9 @@ Written by the index:
 ```
 
 The index reads `components.*.current_tag` (also present in schema 3) to know
-which current Releases a feed serves, so the frozen `bind_runtime` entry stays
-in the 26.1 and 26.7 feeds.
+which current Releases a feed serves and drops a component whose current
+Release no longer exists. The frozen `bind_runtime` entry stays in the 26.1
+feed; its 26.7 current Release was deleted on 2026-10-21.
 
 ## Feed
 
@@ -264,9 +265,9 @@ Frozen, never written by the current workflows:
 
 - the Pages feed `pkg/${ABI}/latest` and the Release feeds `pkg-26.1` and
   `pkg-26.7`;
-- runtime Releases `pkg-<series>-bind-runtime` and their versioned Releases;
-  runtime packages (`bind920`, `bind-tools`) stay in the feeds that list them,
-  outside retention;
+- the runtime Release `pkg-26.1-bind-runtime` and the versioned
+  `pkg-<series>-bind-runtime-*` Releases, outside retention; the 26.1 feed
+  still lists `bind920` and `bind-tools` 9.20.27;
 - older fingerprinted versioned Releases.
 
 ## Releases

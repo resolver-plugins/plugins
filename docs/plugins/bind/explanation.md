@@ -19,10 +19,10 @@ present.
 
 The plugin does not ship BIND. It declares a minimum `bind920` version and
 lets `pkg` take any provider that meets it, normally OPNsense's own package.
-The fork once built its own BIND to work around a regression; current
-OPNsense ships a fixed, newer BIND, so those builds were retired. The minimum
-OPNsense version, `26.1.11_10`, is the first with the BIND fix that
-DNS-over-TLS forwarding depends on.
+The fork once built its own BIND to work around a regression in OPNsense
+26.1; OPNsense 26.7 ships a fixed, newer BIND, so those builds were retired
+and `26.7` became the minimum OPNsense version. The minimum BIND version
+still guards the fix that DNS-over-TLS forwarding depends on.
 
 ## Forwarding
 
