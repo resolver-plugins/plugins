@@ -1,5 +1,0 @@
-#!/bin/sh
-
-mkdir -p /var/db/os-dhcp-interface-ha >/dev/null 2>&1 || :
-: > /var/db/os-dhcp-interface-ha/repository-reconcile.pending 2>/dev/null || :
-exit 0
