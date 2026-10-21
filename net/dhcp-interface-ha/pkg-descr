@@ -15,6 +15,8 @@ Plugin Changelog
 
 26.7
 
+* Keep an assigned device when switching between the -devel and release packages
+* Report why standby Internet is not selected, including CARP instances that are not BACKUP
 * Build and publish through the rebuilt release pipeline
 * Move the package feed and upgrade the plugin automatically across OPNsense series upgrades
 

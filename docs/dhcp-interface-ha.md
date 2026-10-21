@@ -111,9 +111,11 @@ Saving the Disabled interface selection first disables and verifies fencing, the
 restores the saved native assignment and original receive-mode setting before
 clearing local plugin configuration. A retry with settings already disabled still
 requires fresh verified fencing. Uncertain restoration retains the captured
-carrier for retry. Package removal refuses remaining assignments, foreign devices
-and unverified fencing. Upgrades preserve configuration and skip intentional
-removal. No OPNsense core files are patched.
+carrier for retry. `pkg` ignores a failing removal script, so package removal
+keeps an assigned device and the running controller with a warning. A foreign
+device or unverified fencing fails the script, but `pkg` still removes the files. This also makes a switch between the
+`-devel` and release packages behave as an upgrade. Upgrades preserve
+configuration and skip intentional removal. No OPNsense core files are patched.
 
 Events use native logging. Diagnostics distinguish configured intent, observed
 attachment, route selection and tested reachability; they do not claim peer
@@ -134,9 +136,11 @@ Selection requires a fresh inventory in which every expected CARP instance is
 BACKUP, the VIP is not locally owned, and the managed WAN is verified fenced.
 The controller records ownership intent before changing the default and verifies
 the actual gateway, interface and source address afterward. A selected route is
-not proof of Internet connectivity. Native post-routing callbacks and periodic
-reconciliation maintain the path without creating an always-enabled internal
-gateway or changing gateway priorities.
+not proof of Internet connectivity. When the path is not selected, status names
+the first blocking condition, such as the CARP instances that are not BACKUP,
+and notes a remaining default on the fenced WAN. Native post-routing callbacks
+and periodic reconciliation maintain the path without creating an
+always-enabled internal gateway or changing gateway priorities.
 
 Promotion withdraws the owned standby route before WAN attachment. Demotion
 fences the WAN before selecting the standby path. Mixed/unknown roles, disable,

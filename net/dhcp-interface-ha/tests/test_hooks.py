@@ -114,13 +114,18 @@ class HookTests(unittest.TestCase):
                                             env={**os.environ, 'PATH': directory, 'HEALTH_RESULT': str(status)})
                     self.assertEqual(result.returncode, expected, result.stderr)
 
-    def test_deinstall_assignment_guard_and_upgrade_exception(self):
+    def test_deinstall_keeps_an_assigned_device_without_failing(self):
+        # pkg ignores pre-deinstall failures, and a -devel/release swap is a
+        # removal without PKG_UPGRADE: the assigned device must survive it.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'conf').mkdir()
             (root / 'conf/config.xml').write_text('<opnsense><interfaces><wan><if>dhcpha0lagg</if></wan></interfaces></opnsense>')
             env = {**os.environ, 'PKG_ROOTDIR': directory, 'PKG_UPGRADE': ''}
-            command = ['sh', str(PLUGIN / '+PRE_DEINSTALL.pre')]
-            self.assertNotEqual(subprocess.run(command, env=env, capture_output=True).returncode, 0)
+            command = ['/bin/sh', str(PLUGIN / '+PRE_DEINSTALL.pre')]
+            result = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('leaving the device and controller in place', result.stderr)
             env['PKG_UPGRADE'] = 'yes'
-            self.assertEqual(subprocess.run(command, env=env, capture_output=True).returncode, 0)
+            result = subprocess.run(command, env=env, capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
