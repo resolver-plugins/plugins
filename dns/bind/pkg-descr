@@ -9,6 +9,7 @@ Resolver Plugins changes
 
 On upstream 1.34
 
+* Require OPNsense 26.7 or newer; BIND comes from OPNsense
 * Version packages as <series>.<upstream>_<n>, for example 26.7.1.34_1
 * Accept the new version shape when moving to a new OPNsense series
 * Build and publish through the rebuilt release pipeline
