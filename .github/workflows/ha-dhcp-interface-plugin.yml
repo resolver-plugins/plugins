@@ -196,6 +196,7 @@ jobs:
       source_tag: ha-dhcp-interface-{series}
       follow_upstream: false
       prerelease: true
+      version_scheme: series
       series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}
       purpose: ${{ needs.request.outputs.purpose || 'production' }}
       source_sha: ${{ needs.request.outputs.source_sha || github.sha }}

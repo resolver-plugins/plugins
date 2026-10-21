@@ -196,6 +196,7 @@ jobs:
       source_tag: os-bind-rp-{series}
       follow_upstream: true
       prerelease: false
+      version_scheme: series-upstream
       series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}
       purpose: ${{ needs.request.outputs.purpose || 'production' }}
       source_sha: ${{ needs.request.outputs.source_sha || github.sha }}
