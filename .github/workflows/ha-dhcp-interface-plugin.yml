@@ -19,7 +19,7 @@ on:
         type: string
         default: ''
   pull_request_target:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     branches: [master]
 
 permissions: {}
@@ -43,6 +43,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DRAFT: ${{ github.event.pull_request.draft }}
+      FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       - name: Write the package build status
         run: |
@@ -55,7 +57,9 @@ jobs:
             description="Add a changelog entry to $SOURCE_DIRECTORY/pkg-descr"
           else
             state=pending
-            description="Request a package build for this head"
+            description="Candidate build started"
+            [ "$FORK" = true ] && description="Request a package build for this head"
+            [ "$DRAFT" = true ] && description="Mark the PR ready for review to build"
           fi
           gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$state" -f context="Package build / $SOURCE_DIRECTORY" -f description="$description"
 
@@ -123,7 +127,10 @@ jobs:
           echo "$reason" >> "$GITHUB_STEP_SUMMARY"
 
   request:
-    if: (github.event_name == 'workflow_dispatch' && inputs.pr != '') || github.event.pull_request.merged
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.pr != '') || github.event.pull_request.merged ||
+      (github.event_name == 'pull_request_target' && github.event.action != 'closed' &&
+      !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -138,7 +145,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ inputs.pr || github.event.pull_request.number }}
-      MERGED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      MERGED: ${{ github.event.pull_request.merged }}
     steps:
       - name: Resolve the active series
         id: active
@@ -165,20 +173,27 @@ jobs:
           ACTIVE: ${{ steps.active.outputs.series }}
         run: |
           files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
+          packaged=false missing=false
+          grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|pkg-descr\$|\+)" <<< "$files" && packaged=true
+          grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|\+)" <<< "$files" && ! grep -qx "$SOURCE_DIRECTORY/pkg-descr" <<< "$files" && missing=true
           if [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
-            if ! grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|pkg-descr\$|\+)" <<< "$files"; then
+            # Merges promote; open PR heads build only with packaged files and a changelog.
+            if [ "$packaged" = false ] || { [ "$MERGED" != true ] && [ "$missing" = true ]; }; then
               echo "applies=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            purpose=promote
-            head=$MERGED_HEAD
-            group=plugin-dhcp-$ACTIVE
+            head=$EVENT_HEAD
           else
             head=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,headRefOid --jq 'select(.state == "OPEN") | .headRefOid')
             [ -n "$head" ] || { echo "::error::PR #$PR is not open"; exit 1; }
-            if grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|\+)" <<< "$files" && ! grep -qx "$SOURCE_DIRECTORY/pkg-descr" <<< "$files"; then
+            if [ "$missing" = true ]; then
               echo "::error::Add a changelog entry to $SOURCE_DIRECTORY/pkg-descr"; exit 1
             fi
+          fi
+          if [ "$MERGED" = true ]; then
+            purpose=promote
+            group=plugin-dhcp-$ACTIVE
+          else
             purpose=candidate
             group=candidate-dhcp-$PR
           fi
@@ -192,6 +207,7 @@ jobs:
       contents: read
       actions: read
     concurrency:
+      cancel-in-progress: ${{ needs.request.outputs.purpose == 'candidate' }}
       group: ${{ needs.request.outputs.group || format('plugin-dhcp-{0}', needs.discover.outputs.series) }}
     uses: ./.github/workflows/plugin-target.yml
     with:
