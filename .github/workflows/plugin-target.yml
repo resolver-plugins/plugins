@@ -33,6 +33,9 @@ on:
       prerelease:
         type: boolean
         required: true
+      version_scheme:
+        type: string
+        required: true
       pr:
         type: string
         default: ''
@@ -72,6 +75,7 @@ jobs:
       core_commit: ${{ steps.environment.outputs.core_commit }}
       plugins_commit: ${{ steps.environment.outputs.plugins_commit }}
       upstream_package_commit: ${{ steps.environment.outputs.upstream_package_commit }}
+      upstream_version: ${{ steps.upstream.outputs.upstream_version }}
       abi: ${{ steps.environment.outputs.abi || steps.candidate.outputs.abi }}
       version: ${{ steps.candidate.outputs.version || steps.current.outputs.version }}
       previous_tag: ${{ steps.candidate.outputs.previous_tag || steps.current.outputs.previous_tag }}
@@ -126,24 +130,38 @@ jobs:
             echo "upstream_package_commit=$upstream_package_commit"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Read the upstream version
+        id: upstream
+        if: inputs.purpose != 'promote' && inputs.version_scheme == 'series-upstream'
+        run: |
+          makefile="$SOURCE_DIRECTORY/Makefile"
+          version=$(git show "refs/remotes/upstream/stable/$SERIES:$makefile" | sed -nE 's/^PLUGIN_VERSION=[[:space:]]*([^[:space:]]*).*/\1/p')
+          if ! grep -Eqx '[0-9]+(\.[0-9]+)*' <<< "$version"; then
+            echo "::error::Upstream PLUGIN_VERSION '$version' in $makefile on stable/$SERIES is not a dotted number"
+            exit 1
+          fi
+          echo "upstream_version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Read the current Release
         id: current
         env:
           CURRENT_TAG: ${{ inputs.current_tag }}
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.upstream_version }}
         run: |
           current=${CURRENT_TAG//'{series}'/$SERIES}
+          base=$SERIES${UPSTREAM_VERSION:+.$UPSTREAM_VERSION}
+          emit_version() { [ "$PURPOSE" = promote ] || echo "version=${base}_$1" >> "$GITHUB_OUTPUT"; }
           err=$RUNNER_TEMP/current.err
           if ! assets=$(gh release view "$current" --repo resolver-plugins/repository --json assets --jq '.assets[].name' 2>"$err"); then
             grep -q 'release not found' "$err" || { echo "::error::Reading Release $current failed: $(cat "$err")"; exit 1; }
-            echo "version=${SERIES}_1" >> "$GITHUB_OUTPUT"; exit 0
+            emit_version 1; exit 0
           fi
-          archives=$(grep -E -- "-${SERIES//./[.]}_[0-9]+\.pkg$" <<< "$assets" || true)
-          if [ -z "$archives" ]; then
-            echo "version=${SERIES}_1" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          [ "$(wc -l <<< "$archives")" -eq 1 ] || { echo "::error::Release $current has more than one ${SERIES}_<n> archive: $archives"; exit 1; }
-          revision=${archives%.pkg}; revision=${revision##*_}
-          current_version=${SERIES}_$revision
+          pattern="-(${SERIES//./[.]}(\.[0-9]+)*_[0-9]+)\.pkg$"
+          archives=$(grep -E -- "$pattern" <<< "$assets" || true)
+          [ -n "$archives" ] || { emit_version 1; exit 0; }
+          [ "$(wc -l <<< "$archives")" -eq 1 ] || { echo "::error::Release $current has more than one $SERIES archive: $archives"; exit 1; }
+          current_version=$(sed -E "s/.*$pattern/\1/" <<< "$archives")
+          revision=${current_version##*_}
           if grep -qx 'build-record.json' <<< "$assets"; then
             gh release download "$current" --repo resolver-plugins/repository --pattern build-record.json --dir "$RUNNER_TEMP/current"
             {
@@ -151,10 +169,8 @@ jobs:
               jq -r '"recorded_base=\(.source_base)", "recorded_commit=\(.source_commit)", "recorded_upstream=\(.upstream_package_commit)"' "$RUNNER_TEMP/current/build-record.json"
             } >> "$GITHUB_OUTPUT"
           fi
-          {
-            echo "current_version=$current_version"
-            echo "version=${SERIES}_$((revision + 1))"
-          } >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+          if [ "${current_version%_*}" = "$base" ]; then emit_version $((revision + 1)); else emit_version 1; fi
 
       - name: Find the candidate
         id: candidate
@@ -168,7 +184,11 @@ jobs:
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$NAME" --dir "$RUNNER_TEMP/candidate"
           record=$RUNNER_TEMP/candidate/build-record.json
           version=$(jq -r .version "$record")
-          if [ -n "$CURRENT_VERSION" ] && [ "${version##*_}" -le "${CURRENT_VERSION##*_}" ]; then
+          newer() {  # true when version $1 is newer than version $2
+            [ "${1%_*}" = "${2%_*}" ] && { [ "${1##*_}" -gt "${2##*_}" ]; return; }
+            [ "$(printf '%s\n' "${1%_*}" "${2%_*}" | sort -V | tail -n 1)" = "${1%_*}" ]
+          }
+          if [ -n "$CURRENT_VERSION" ] && ! newer "$version" "$CURRENT_VERSION"; then
             echo "::error::Candidate $version is not newer than current $CURRENT_VERSION; request a production build (-f series=$SERIES)"
             exit 1
           fi
@@ -372,6 +392,7 @@ jobs:
           TOOLS_TAG: ${{ needs.prepare.outputs.tools_tag }}
           PLUGINS_COMMIT: ${{ needs.prepare.outputs.plugins_commit }}
           UPSTREAM_PACKAGE_COMMIT: ${{ needs.prepare.outputs.upstream_package_commit }}
+          UPSTREAM_VERSION: ${{ needs.prepare.outputs.upstream_version }}
           PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -383,6 +404,7 @@ jobs:
             --arg source_commit "$PREPARED_SHA" --arg control_commit "$GITHUB_WORKFLOW_SHA" \
             --arg tools_tag "$TOOLS_TAG" --arg core_commit "$CORE_COMMIT" \
             --arg plugins_commit "$PLUGINS_COMMIT" --arg upstream_package_commit "$UPSTREAM_PACKAGE_COMMIT" \
+            --arg upstream_version "$UPSTREAM_VERSION" \
             --arg pkg_version "$(cat .build/pkg-version)" --arg previous_tag "$PREVIOUS_TAG" \
             --arg run_url "$RUN_URL" '$ARGS.named' > .build/build-record.json
 
@@ -545,9 +567,14 @@ jobs:
             echo "advanced=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          revision=$({ grep -E -- "-${SERIES//./\\.}_[0-9]+\.pkg$" <<<"$assets" || true; } | sed -E 's/.*_([0-9]+)\.pkg$/\1/')
-          if [ "${VERSION##*_}" -le "${revision:-0}" ]; then
-            echo "$tag does not advance: $VERSION is not newer than revision ${revision:-0}." >> "$GITHUB_STEP_SUMMARY"
+          newer() {  # true when version $1 is newer than version $2
+            [ "${1%_*}" = "${2%_*}" ] && { [ "${1##*_}" -gt "${2##*_}" ]; return; }
+            [ "$(printf '%s\n' "${1%_*}" "${2%_*}" | sort -V | tail -n 1)" = "${1%_*}" ]
+          }
+          pattern="-(${SERIES//./[.]}(\.[0-9]+)*_[0-9]+)\.pkg$"
+          current=$({ grep -E -- "$pattern" <<<"$assets" || true; } | sed -E "s/.*$pattern/\1/")
+          if [ -n "$current" ] && ! newer "$VERSION" "$current"; then
+            echo "$tag does not advance: $VERSION is not newer than $current." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           archive=$(basename dist/*.pkg)

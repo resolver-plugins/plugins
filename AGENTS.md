@@ -45,8 +45,9 @@ them:
   workflows and signed release channels. One plugin's pipeline must not
   dispatch, rebuild, block on or require publication by the other's. Preserve
   native installation dependencies.
-- CI runs no test suites. Run plugin suites (such as `dns/bind/tests/`)
-  locally only, and review CI and documentation changes by reading the diff and
+- CI runs no tests, linters or validators by default. Propose any check with
+  its purpose and cost, and add it only after the maintainer approves it. Run
+  plugin suites (such as `dns/bind/tests/`) locally, and review CI and documentation changes by reading the diff and
   `git diff --check`. Publish and merge CI, test and documentation changes
   with `[skip ci]` commit annotations; do not dispatch Actions to validate
   them.
@@ -82,6 +83,8 @@ must keep the [expected outcomes](docs/maintainers/reference.md#expected-outcome
   same run.
 - Keep candidate builds away from signing credentials; merging promotes the
   candidate without rebuilding.
+- A PR that changes a plugin's code (`src/`, `Makefile` or `+*` scripts) must
+  change its `pkg-descr`; the PR status enforces it.
 - Keep package policy in the entry workflows' inputs; shared workflows name
   no package.
 - Make every step safe to rerun: a rerun finishes the work from the job's

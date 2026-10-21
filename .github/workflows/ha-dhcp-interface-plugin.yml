@@ -47,12 +47,15 @@ jobs:
       - name: Write the package build status
         run: |
           files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
-          if grep -q "^$SOURCE_DIRECTORY/" <<< "$files"; then
-            state=pending
-            description="Request a package build for this head"
-          else
+          if ! grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|pkg-descr\$|\+)" <<< "$files"; then
             state=success
             description="Not applicable"
+          elif grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|\+)" <<< "$files" && ! grep -qx "$SOURCE_DIRECTORY/pkg-descr" <<< "$files"; then
+            state=failure
+            description="Add a changelog entry to $SOURCE_DIRECTORY/pkg-descr"
+          else
+            state=pending
+            description="Request a package build for this head"
           fi
           gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$state" -f context="Package build / $SOURCE_DIRECTORY" -f description="$description"
 
@@ -161,9 +164,9 @@ jobs:
         env:
           ACTIVE: ${{ steps.active.outputs.series }}
         run: |
+          files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
           if [ "$GITHUB_EVENT_NAME" = pull_request_target ]; then
-            files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
-            if ! grep -q "^$SOURCE_DIRECTORY/" <<< "$files"; then
+            if ! grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|pkg-descr\$|\+)" <<< "$files"; then
               echo "applies=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -173,6 +176,9 @@ jobs:
           else
             head=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,headRefOid --jq 'select(.state == "OPEN") | .headRefOid')
             [ -n "$head" ] || { echo "::error::PR #$PR is not open"; exit 1; }
+            if grep -Eq "^$SOURCE_DIRECTORY/(src/|Makefile\$|\+)" <<< "$files" && ! grep -qx "$SOURCE_DIRECTORY/pkg-descr" <<< "$files"; then
+              echo "::error::Add a changelog entry to $SOURCE_DIRECTORY/pkg-descr"; exit 1
+            fi
             purpose=candidate
             group=candidate-dhcp-$PR
           fi
@@ -196,6 +202,7 @@ jobs:
       source_tag: ha-dhcp-interface-{series}
       follow_upstream: false
       prerelease: true
+      version_scheme: series
       series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}
       purpose: ${{ needs.request.outputs.purpose || 'production' }}
       source_sha: ${{ needs.request.outputs.source_sha || github.sha }}
