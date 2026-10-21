@@ -338,8 +338,9 @@ copies it into each feed.
    the marker when it changes the file.
 3. **Start hook**, after boot: runs the worker in the background, up to three
    attempts 30 seconds apart. The worker runs the provider, refreshes with
-   `pkg-static update -f -r resolver-plugins`, accepts only its own plugin at
-   `<series>_<n>` with the expected origin and ABI, dry-runs and refuses plans
+   `pkg-static update -f -r resolver-plugins`, accepts only its own plugin for
+   the new series (BIND: `<series>_<n>` or `<series>.<upstream>_<n>`; HA:
+   `<series>_<n>`) with the expected origin and ABI, dry-runs and refuses plans
    that remove or downgrade packages, installs and removes the marker. The
    BIND worker also refuses while `os-bind` is installed and, if `bind920`
    changed, reloads the `OPNsense/Bind` templates and restarts BIND.

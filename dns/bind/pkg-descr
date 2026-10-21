@@ -4,11 +4,13 @@ one computer can find another computer on the basis of its name.
 The BIND software distribution contains all of the software
 necessary for asking and answering name service questions.
 
-Plugin Changelog
-================
+Resolver Plugins changes
+========================
 
-1.36
+On upstream 1.34
 
+* Version packages as <series>.<upstream>_<n>, for example 26.7.1.34_1
+* Accept the new version shape when moving to a new OPNsense series
 * Build and publish through the rebuilt release pipeline
 * Take BIND from any enabled repository when upgrading the plugin after a series upgrade
 * Prefer signed Resolver packages for fresh plugin dependency installation
@@ -19,12 +21,12 @@ Plugin Changelog
 * Add reverse DNS zone management
 * Source DNSBL lists from the Unbound definitions
 * Add Forward First / Forward Only mode
-
-1.35
-
 * Add per-forwarder destination port for plain DNS forwarders
 * Add DNS-over-TLS (DoT) forwarders with TLS hostname verification
 * Migrate legacy DNS Forwarders list to the new DNS Forwarders tab
+
+Plugin Changelog
+================
 
 1.34
 
