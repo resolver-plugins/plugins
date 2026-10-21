@@ -77,11 +77,49 @@ Jobs run on GitHub-hosted `ubuntu-latest` runners. `build`, `qualify` and
 series' FreeBSD release, read from upstream in `prepare`; nothing is kept
 between runs.
 
-The branch `ci/self-hosted-runners` keeps the CI as it ran on the self-hosted
-runner labelled `opnsense-dispatch` with persistent FreeBSD builders
-(`.github/actions/freebsd-builder`, which maps FreeBSD releases to builders by
-hand). It is a reference for a future self-hosted setup, not maintained with
-`master`.
+### Switching to the self-hosted runner
+
+The branch `ci/self-hosted-runners` keeps the CI as it last ran on a
+self-hosted runner. It is a reference, not maintained with `master`. Its
+difference from `master` is two commits, reverted on `master` by
+`Revert "[skip ci] Fix the self-hosted FreeBSD builder in build jobs"` and
+`Revert "[skip ci] Run every CI job on the self-hosted runner"`:
+
+- every job uses `runs-on: [self-hosted, opnsense-dispatch]`;
+- `build`, `qualify` and `stage` use `.github/actions/freebsd-builder` instead
+  of `vmactions/freebsd-vm`, and `qualify` and `stage` check out
+  `.github/actions` to reach it; `build` restores it after checking out the
+  prepared source;
+- the index signing key passes through the runner in a mode 0600 file before it
+  reaches the builder (a signing-boundary change; see
+  [package repository](package-repository.md#signing-and-credentials)).
+
+The runner host must provide:
+
+- a Linux runner registered to `resolver-plugins/plugins` with the label
+  `opnsense-dispatch`, running one job at a time, with a job-start hook that
+  empties the workspace (the repository is public, so restrict the runner
+  group to this repository);
+- `$HOME/builderctl.py` with `reset <series>` (restore the builder's baseline
+  and start it), `exec <series> -- <command>` (run a command in it, stdin and
+  stdout passed through) and `clean <series>` (shut it down and restore the
+  baseline);
+- one persistent FreeBSD builder per series with OPNsense's build prerequisites
+  in its baseline. The action maps FreeBSD releases to series by hand
+  (`14.3` → `26.1`, `15.1` → `26.7`): add the active series' release before
+  switching, or `build` fails at its first step.
+
+To switch, with the maintainer's approval of the signing-boundary change:
+
+1. On a branch from `master`, revert the two revert commits, newest first
+   (`git revert <run-every-job revert> <builder-fix revert>`), and resolve
+   conflicts with workflow changes made since, keeping them.
+2. Update the release map in `.github/actions/freebsd-builder/action.yml`,
+   this section, and the signing note in
+   [package repository](package-repository.md#signing-and-credentials).
+3. Merge with `[skip ci]`, then confirm with one candidate build of an open PR.
+
+Switch back to GitHub-hosted runners by reverting those commits again.
 
 ## Actions policy
 
