@@ -473,8 +473,10 @@ jobs:
             sh /usr/local/etc/rc.subr.d/php
             service configd onestatus || service configd onestart
             /usr/local/opnsense/service/template_ctl.py OPNsense/WebGui
-            pkg repo dist
-            printf 'candidate: {\n  url: "file://%s/dist",\n  signature_type: "none",\n  enabled: yes\n}\n' "$PWD" \
+            mkdir /tmp/candidate
+            cp dist/*.pkg /tmp/candidate/
+            pkg repo /tmp/candidate
+            printf 'candidate: {\n  url: "file:///tmp/candidate",\n  signature_type: "none",\n  enabled: yes\n}\n' \
               > /usr/local/etc/pkg/repos/candidate.conf
             pkg update -f
             name=${EXPECTED%%|*}
