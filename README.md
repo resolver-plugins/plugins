@@ -8,7 +8,7 @@ plugins collection. Published packages share one signed repository.
 | Plugin | Package | Purpose |
 |---|---|---|
 | BIND | `os-bind-rp` | BIND DNS management with DNS-over-TLS, dynamic DHCP mappings, reverse DNS and DNSBL integration. |
-| HA DHCP Interface | `os-dhcp-interface-ha` | Experimental CARP-aware high availability for an IPv4 DHCP client interface. |
+| HA DHCP Interface | `os-ha-dhcp-interface` | Experimental CARP-aware high availability for an IPv4 DHCP client interface. |
 
 ### BIND with DNS-over-TLS, dynamic DHCP mappings and DNSBLs
 
@@ -39,7 +39,7 @@ Supports a shared MAC with node-local interface assignments in an existing
 active/passive CARP pair. OPNsense continues to manage DHCP, addressing,
 routing and firewall services.
 
-See the [HA DHCP Interface guide](net/dhcp-interface-ha/README.md)
+See the [HA DHCP Interface guide](net/ha-dhcp-interface/README.md)
 for requirements, configuration and current limitations.
 
 ## Configure the package repository
@@ -92,14 +92,14 @@ version, normally OPNsense's own, and replaces an installed official `os-bind`.
 ### HA DHCP Interface
 
 ```sh
-pkg install os-dhcp-interface-ha
+pkg install os-ha-dhcp-interface
 ```
 
 ## Documentation
 
 - [Package repository guide](docs/package-repository.md): supported channels,
   installation, upgrades and rollback.
-- [HA DHCP Interface guide](net/dhcp-interface-ha/README.md): setup, operation
+- [HA DHCP Interface guide](net/ha-dhcp-interface/README.md): setup, operation
   and experimental limitations.
 - [Maintainer documentation](docs/README.md): building, release workflows,
   upstream synchronization and implementation details.

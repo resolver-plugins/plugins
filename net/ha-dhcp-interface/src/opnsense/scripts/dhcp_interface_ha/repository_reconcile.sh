@@ -1,7 +1,7 @@
 #!/bin/sh
 set -u
 
-plugin=os-dhcp-interface-ha
+plugin=os-ha-dhcp-interface
 marker=/var/db/os-dhcp-interface-ha/repository-reconcile.pending
 log=/var/log/os-dhcp-interface-ha-reconcile.log
 provider=/usr/local/opnsense/scripts/firmware/repos/ResolverPluginsHA.sh

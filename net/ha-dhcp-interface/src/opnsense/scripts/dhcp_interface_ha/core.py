@@ -1,7 +1,7 @@
 #!/usr/local/bin/python3
 
 """
-Pure decision and command-planning logic for os-dhcp-interface-ha.
+Pure decision and command-planning logic for os-ha-dhcp-interface.
 
 This module deliberately does not read OPNsense configuration and does not
 execute commands.  Runtime integration is kept at the boundary so the

@@ -49,7 +49,7 @@ series and upstream BIND plugin changes are delivered automatically.
 | Package | Name | Origin | Source |
 | --- | --- | --- | --- |
 | BIND plugin | `os-bind-rp` | `opnsense/os-bind-rp` | `dns/bind` on `release/bind-rp/<series>` |
-| HA DHCP interface plugin | `os-dhcp-interface-ha` | `opnsense/os-dhcp-interface-ha` | `net/dhcp-interface-ha` on `release/dhcp-interface-ha/<series>` |
+| HA DHCP interface plugin | `os-ha-dhcp-interface` | `opnsense/os-ha-dhcp-interface` | `net/ha-dhcp-interface` on `release/ha-dhcp-interface/<series>` |
 
 The CI builds these two plugins. It no longer builds BIND runtimes; see
 [BIND runtime](#bind-runtime).
@@ -159,7 +159,8 @@ The CI builds these two plugins. It no longer builds BIND runtimes; see
   entry workflow on `master`. Keep the existing public branch and channel names.
 - Keep `PLUGIN_NAME=bind-rp`, `PLUGIN_CONFLICTS=bind` (replacing the official
   `os-bind`), the minimum OPNsense `26.1.11_10` and the minimum BIND declared by
-  `PLUGIN_DEPEND_FORMULA`. Keep HA's `wan-ha-dhcp` replacement conflict.
+  `PLUGIN_DEPEND_FORMULA`. Keep HA's `wan-ha-dhcp` and `dhcp-interface-ha`
+  replacement conflicts.
 - The two plugins have independent lifecycles. A plugin pipeline never
   dispatches, waits for, rebuilds or requires publication by the other.
 
@@ -195,7 +196,7 @@ The CI builds these two plugins. It no longer builds BIND runtimes; see
 | Upstream core and plugins | `master` (development), `stable/<series>` (releases) |
 | Fork plugin development and CI | `master` |
 | Fork BIND releases | `release/bind-rp/<series>` |
-| Fork HA releases | `release/dhcp-interface-ha/<series>` |
+| Fork HA releases | `release/ha-dhcp-interface/<series>` |
 
 - Plugins are developed on `master`, as upstream does. Each release branch is
   written only by the pipeline: it carries the plugin directory's changes from

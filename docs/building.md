@@ -7,7 +7,7 @@ written only by the pipeline (see [fork model](fork-model.md#branches)).
 | Workflow | Role | Triggers |
 | --- | --- | --- |
 | `bind-plugin.yml` | Entry for `os-bind-rp` (`dns/bind`) | daily schedule, `workflow_dispatch`, `pull_request_target` on `master` |
-| `ha-dhcp-interface-plugin.yml` | Entry for `os-dhcp-interface-ha` (`net/dhcp-interface-ha`) | same |
+| `ha-dhcp-interface-plugin.yml` | Entry for `os-ha-dhcp-interface` (`net/ha-dhcp-interface`) | same |
 | `plugin-target.yml` | Lifecycle for one plugin and one series | called by the entries |
 | `package-index.yml` | Signed feed refresh and retention | called by the lifecycle |
 
@@ -158,7 +158,7 @@ On a FreeBSD host with the series' OPNsense installed:
 
 ```
 make -C dns/bind PLUGIN_DEVEL= PLUGIN_ABI=<series> package
-make -C net/dhcp-interface-ha PLUGIN_DEVEL= PLUGIN_ABI=<series> package
+make -C net/ha-dhcp-interface PLUGIN_DEVEL= PLUGIN_ABI=<series> package
 ```
 
 The plugin test suites also run locally. CI runs none.

@@ -1,14 +1,14 @@
 # HA DHCP Interface maintainer guide
 
-`os-dhcp-interface-ha` is an experimental OPNsense 26.7 / amd64 plugin for
+`os-ha-dhcp-interface` is an experimental OPNsense 26.7 / amd64 plugin for
 one IPv4 DHCP client interface in an existing active/passive CARP pair. The
-[plugin guide](../net/dhcp-interface-ha/README.md) covers configuration and recovery;
+[plugin guide](../net/ha-dhcp-interface/README.md) covers configuration and recovery;
 the [package repository guide](package-repository.md#ha-dhcp-interface) covers the
 independent HA publication and a shared index that consumes published packages. This guide records implemented behavior and
 remaining qualification. Completed implementation plans are retained in Git history.
 
 Development happens on `master`. The CI carries merged changes to the
-`release/dhcp-interface-ha/<series>` release branch and publishes packages
+`release/ha-dhcp-interface/<series>` release branch and publishes packages
 versioned `<series>_<n>`, such as `26.7_1`. See the
 [fork model](fork-model.md#branches) for the branches and the
 [build guide](building.md) for building and releasing. The release workflow does

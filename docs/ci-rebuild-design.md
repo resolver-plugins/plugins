@@ -40,10 +40,10 @@ Each entry passes these to `plugin-target.yml`; no other file names a package.
 | Input | BIND | HA |
 | --- | --- | --- |
 | `component` | `bind_plugin` | `dhcp` |
-| `source_directory` | `dns/bind` | `net/dhcp-interface-ha` |
-| `branch_prefix` | `release/bind-rp` | `release/dhcp-interface-ha` |
-| `current_tag` (with `{series}`) | `pkg-{series}-bind-plugin` | `pkg-dhcp-interface-ha-{series}` |
-| `source_tag` (with `{series}`) | `os-bind-rp-{series}` | `dhcp-interface-ha-{series}` |
+| `source_directory` | `dns/bind` | `net/ha-dhcp-interface` |
+| `branch_prefix` | `release/bind-rp` | `release/ha-dhcp-interface` |
+| `current_tag` (with `{series}`) | `pkg-{series}-bind-plugin` | `pkg-ha-dhcp-interface-{series}` |
+| `source_tag` (with `{series}`) | `os-bind-rp-{series}` | `ha-dhcp-interface-{series}` |
 | `follow_upstream` | `true` | `false` |
 | `prerelease` | `false` | `true` (while experimental) |
 
@@ -227,7 +227,7 @@ to delete.
 The feed path, the `<series>_<n>` versions and these installed files carry a
 client across a series. Each plugin owns its own set.
 
-| Role | BIND (`dns/bind/src/`, exists) | HA (`net/dhcp-interface-ha/src/`, new) |
+| Role | BIND (`dns/bind/src/`, exists) | HA (`net/ha-dhcp-interface/src/`, new) |
 | --- | --- | --- |
 | Pre-upgrade marker | `etc/rc.syshook.d/upgrade/50-bind-rp-repository` | `etc/rc.syshook.d/upgrade/50-dhcp-interface-ha-repository` |
 | Repository provider | `opnsense/scripts/firmware/repos/ResolverPlugins.sh` | `opnsense/scripts/firmware/repos/ResolverPluginsHA.sh` |
