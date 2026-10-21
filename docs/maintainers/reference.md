@@ -99,15 +99,16 @@ Only the active series builds; a request for another series fails.
 | Request | Started by | Jobs | Result |
 | --- | --- | --- | --- |
 | Discovery | daily schedule, or `gh workflow run <entry>` | `discover` → `target` (`production`) | Builds and publishes when the active series has no build record, or (BIND) upstream changed the package; otherwise writes the reason and stops |
-| PR status | PR to `master` opened, updated or reopened | `status` | `Package build / <directory>`: success "Not applicable" when no packaged file changes; failure "Add a changelog entry to `<directory>/pkg-descr`" when code changes without `pkg-descr`; otherwise pending; builds nothing |
-| Candidate | `gh workflow run <entry> -f pr=N` | `target` (`candidate`) → `status` | Unsigned, qualified candidate of the PR head; status success or failure on that head; publishes nothing |
+| PR status | PR to `master` opened, updated, reopened or marked ready for review | `status` | `Package build / <directory>`: success "Not applicable" when no packaged file changes; failure "Add a changelog entry to `<directory>/pkg-descr`" when code changes without `pkg-descr`; otherwise pending with "Candidate build started", "Mark the PR ready for review to build" (draft) or "Request a package build for this head" (fork) |
+| Candidate | the same PR events on a non-draft PR from this repository with packaged files and a changelog, or `gh workflow run <entry> -f pr=N` | `request` → `target` (`candidate`) → `candidate-status` | Unsigned, qualified candidate of the PR head; status success or failure on that head; publishes nothing |
 | Promotion | merging a PR that changes packaged files | `target` (`promote`) | Publishes the candidate of the merged head without rebuilding |
 | Production | `gh workflow run <entry> -f series=X.Y` | `target` (`production`) | Builds, qualifies and publishes the release branch plus `master`'s uncarried changes |
 
 Packaged files are `<directory>/src/`, `Makefile`, `pkg-descr` and the `+*`
-install scripts; code is the same without `pkg-descr`. A candidate request for
-a PR whose code changes lack a `pkg-descr` change fails in `request` before
-anything builds. The `status` job writes with `GITHUB_TOKEN`
+install scripts; code is the same without `pkg-descr`. A PR event whose code
+changes lack a `pkg-descr` change starts no candidate; a manual request for it
+fails in `request` before anything builds. A manual request builds any open
+PR, including drafts and forks. The `status` job writes with `GITHUB_TOKEN`
 (`statuses: write`) and never checks out or runs PR code. Run names show the PR number, candidate,
 production series or event.
 
@@ -189,7 +190,7 @@ archive passed. Promotion looks it up by the merged PR head.
 | Group | Scope |
 | --- | --- |
 | `plugin-<component>-<series>` | Production and promotion; newest pending request wins; a running publication is never cancelled |
-| `candidate-<component>-<pr>` | Candidates per PR |
+| `candidate-<component>-<pr>` | Candidates per PR; a newer request cancels a running candidate |
 | `package-repository-index` | The whole index workflow |
 
 ### Index (`package-index.yml`)
@@ -364,8 +365,10 @@ The behavior any CI change must preserve.
 | --- | --- |
 | Repeated events for the same package, source and target | One expensive run; repeats stop before a VM starts |
 | Several merges queue up | The latest source is built; no backlog of obsolete builds |
-| Package PR opened or updated | Merge blocked for that head until its requested build succeeds; no build starts automatically |
-| Requested build for an older head finishes after a push | Its status stays on the older head; the new head stays blocked |
+| Draft package PR opened or updated | Merge blocked; no build starts |
+| Package PR marked ready, or updated while ready | A candidate of that head builds; merge blocked until it succeeds |
+| Push while a candidate builds | The older candidate is cancelled and fails on its own head; the new head builds |
+| Package PR from a fork | Merge blocked until a maintainer requests its build |
 | CI or documentation-only PR | Status passes without a build |
 | PR changes only unpackaged plugin files, such as tests | Status "Not applicable"; merging publishes nothing |
 | PR changes plugin code without its `pkg-descr` | Status fails with the changelog message; a candidate request fails before building |

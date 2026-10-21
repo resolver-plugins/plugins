@@ -83,6 +83,8 @@ must keep the [expected outcomes](docs/maintainers/reference.md#expected-outcome
   same run.
 - Keep candidate builds away from signing credentials; merging promotes the
   candidate without rebuilding.
+- Open package PRs as drafts while iterating; marking a PR ready for review
+  builds its candidate, and each later push builds again.
 - A PR that changes a plugin's code (`src/`, `Makefile` or `+*` scripts) must
   change its `pkg-descr`; the PR status enforces it.
 - Keep package policy in the entry workflows' inputs; shared workflows name
