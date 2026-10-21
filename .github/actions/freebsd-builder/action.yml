@@ -53,7 +53,7 @@ runs:
           done
           printf 'cd /var/tmp/workspace\n%s\n' "$RP_VM_RUN"
         ) >> "$script"
-        tar -cf - . | guest sh -c 'mkdir /var/tmp/workspace && tar -xf - --no-same-owner -C /var/tmp/workspace'
+        tar -cf - . | guest sh -c 'mkdir /var/tmp/workspace && tar -xf - -C /var/tmp/workspace'
         guest sh -c 'umask 077 && cat > /var/tmp/run.sh' < "$script"
         guest sh /var/tmp/run.sh < /dev/null
         if [ "$RP_VM_COPYBACK" = true ]; then

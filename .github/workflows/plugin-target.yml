@@ -326,10 +326,8 @@ jobs:
 
       - name: Check out the prepared source
         run: |
-          ci=$(git rev-parse HEAD)
           git fetch -q "$RUNNER_TEMP/source/source.bundle" HEAD
           git checkout -q --detach "$PREPARED_SHA"
-          git restore --source="$ci" -- .github/actions
 
       - name: Configure the OPNsense package repository
         run: |
