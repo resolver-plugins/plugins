@@ -34,7 +34,7 @@ defaults:
 jobs:
   status:
     if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
-    runs-on: [self-hosted, opnsense-dispatch]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       statuses: write
@@ -58,7 +58,7 @@ jobs:
 
   discover:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr == '')
-    runs-on: [self-hosted, opnsense-dispatch]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     outputs:
@@ -121,7 +121,7 @@ jobs:
 
   request:
     if: (github.event_name == 'workflow_dispatch' && inputs.pr != '') || github.event.pull_request.merged
-    runs-on: [self-hosted, opnsense-dispatch]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       pull-requests: read
@@ -208,7 +208,7 @@ jobs:
   candidate-status:
     needs: [request, target]
     if: ${{ !cancelled() && needs.request.outputs.purpose == 'candidate' }}
-    runs-on: [self-hosted, opnsense-dispatch]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       statuses: write

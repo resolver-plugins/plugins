@@ -72,17 +72,16 @@ ones; a running publication is never cancelled. The index has its own group
 
 ## Runners
 
-Every job runs on the self-hosted Linux runner labelled `opnsense-dispatch`,
-which runs one job at a time. Before each job a runner hook empties the
-workspace, so jobs start from a clean checkout as on GitHub-hosted runners.
+Jobs run on GitHub-hosted `ubuntu-latest` runners. `build`, `qualify` and
+`stage` run their FreeBSD work in a disposable `vmactions/freebsd-vm` VM of the
+series' FreeBSD release, read from upstream in `prepare`; nothing is kept
+between runs.
 
-`build`, `qualify` and `stage` use `.github/actions/freebsd-builder` instead of
-a disposable cloud VM. It restores the persistent builder for the FreeBSD
-release (14.3 for 26.1, 15.1 for 26.7) to its baseline and starts it, copies the
-workspace in, runs the step's script with the named variables, copies the
-workspace back when `copyback` is set, then shuts the builder down and restores
-the baseline again, even when the step fails. A series whose FreeBSD release has
-no builder fails at the start of `build`.
+The branch `ci/self-hosted-runners` keeps the CI as it ran on the self-hosted
+runner labelled `opnsense-dispatch` with persistent FreeBSD builders
+(`.github/actions/freebsd-builder`, which maps FreeBSD releases to builders by
+hand). It is a reference for a future self-hosted setup, not maintained with
+`master`.
 
 ## Actions policy
 
