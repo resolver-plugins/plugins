@@ -12,7 +12,7 @@ plugins collection. Published packages share one signed repository.
 
 ### BIND with DNS-over-TLS, dynamic DHCP mappings and DNSBLs
 
-Requires OPNsense `26.1.11_10` or newer on a supported repository series.
+Requires OPNsense `26.7` or newer.
 Replaces the official `os-bind` package; the two packages cannot be
 installed together.
 

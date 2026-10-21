@@ -5,7 +5,7 @@ Unbound resolver, publish one local zone and resolve a name from it. At the
 end you will have a working authoritative zone and a recursive resolver with
 encrypted forwarding.
 
-You need an OPNsense `26.1.11_10` or newer system with a root shell and the
+You need an OPNsense `26.7` or newer system with a root shell and the
 Resolver Plugins repository configured, as described in the
 [root README](../../../README.md#configure-the-package-repository). The
 example uses the zone `home.arpa` and the address `192.168.1.10`; substitute
