@@ -1,17 +1,14 @@
-# Maintainer documentation
+# Documentation
 
-These guides describe the Resolver Plugins fork of OPNsense plugins for
-maintainers and contributors. Read the one matching your work.
+Each set follows the [Divio documentation system](https://docs.divio.com/documentation-system/):
+a tutorial to learn, how-to guides for tasks, a reference to look things up and
+an explanation of the design.
 
-- [Fork model](fork-model.md): packages, branches and series.
-- [Building](building.md): the four workflows, build requests, versions and
-  failures.
-- [Upstream synchronization](upstream-sync.md): new series, upstream BIND
-  changes and conflicts.
-- [Package repository](package-repository.md): the signed feed, Releases, host
-  setup and credentials.
-- [HA DHCP Interface maintainer guide](ha-dhcp-interface.md): the HA plugin's
-  implementation and verification.
-- [CI rebuild specification](ci-rebuild-spec.md) and
-  [design](ci-rebuild-design.md): requirements and structure of the CI.
-- [CI rebuild plan](ci-plan/): the phased plan that built it.
+| Set | Tutorial | How-to guides | Reference | Explanation |
+| --- | --- | --- | --- | --- |
+| `os-bind-rp` | [tutorial](plugins/bind/tutorial.md) | [how-to](plugins/bind/how-to.md) | [reference](plugins/bind/reference.md) | [explanation](plugins/bind/explanation.md) |
+| `os-ha-dhcp-interface` | [tutorial](plugins/ha-dhcp-interface/tutorial.md) | [how-to](plugins/ha-dhcp-interface/how-to.md) | [reference](plugins/ha-dhcp-interface/reference.md) | [explanation](plugins/ha-dhcp-interface/explanation.md) |
+| Maintaining the fork: branches, CI, Releases and the signed feed | [tutorial](maintainers/tutorial.md) | [how-to](maintainers/how-to.md) | [reference](maintainers/reference.md) | [explanation](maintainers/explanation.md) |
+
+`package-repository/resolver-plugins.pub` is the public signing key; the index
+workflow copies it into every feed.

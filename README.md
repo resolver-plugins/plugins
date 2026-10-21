@@ -39,8 +39,9 @@ Supports a shared MAC with node-local interface assignments in an existing
 active/passive CARP pair. OPNsense continues to manage DHCP, addressing,
 routing and firewall services.
 
-See the [HA DHCP Interface guide](net/ha-dhcp-interface/README.md)
-for requirements, configuration and current limitations.
+See the [HA DHCP Interface tutorial](docs/plugins/ha-dhcp-interface/tutorial.md)
+for requirements and setup, and its
+[explanation](docs/plugins/ha-dhcp-interface/explanation.md) for current limitations.
 
 ## Configure the package repository
 
@@ -97,12 +98,10 @@ pkg install os-ha-dhcp-interface
 
 ## Documentation
 
-- [Package repository guide](docs/package-repository.md): supported channels,
-  installation, upgrades and rollback.
-- [HA DHCP Interface guide](net/ha-dhcp-interface/README.md): setup, operation
-  and experimental limitations.
-- [Maintainer documentation](docs/README.md): building, release workflows,
-  upstream synchronization and implementation details.
+- [Plugin documentation](docs/plugins/README.md): tutorials, how-to guides,
+  reference and explanation for both plugins.
+- [Maintainer documentation](docs/README.md): the package repository,
+  releases, series upgrades, the CI and upstream synchronization.
 
 ## Upstream
 

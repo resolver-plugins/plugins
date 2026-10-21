@@ -5,6 +5,7 @@
 venv
 /*/*/work
 /.github/ci-local/
-/docs/superpowers/
 /.worktrees/
 /AGENTS-local.md
+/CLAUDE.local.md
+/docs/plans/
