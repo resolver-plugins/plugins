@@ -164,8 +164,9 @@ Each node briefly stops answering DNS while its package is replaced.
 
 ## Upgrade OPNsense to a new series
 
-Nothing to do. The plugin moves its repository to the new series and upgrades
-itself after the first boot. If it cannot, it logs the reason to
-`/var/log/os-bind-rp-reconcile.log` and retries at the next boot. For a
-manual fix, see
+Install pending plugin updates first; OPNsense offers the series upgrade only
+then. After that, nothing to do. The plugin moves its repository to the new
+series and upgrades itself after the first boot. If it cannot, it logs the reason to
+`/var/log/os-bind-rp-reconcile.log` and retries at the next boot. If the log
+shows a refusal, run `pkg install os-bind-rp`. For other manual fixes, see
 [Series upgrades](../../maintainers/reference.md#series-upgrade).

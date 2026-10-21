@@ -22,7 +22,7 @@ pkg-static update -f -r resolver-plugins || fail "catalogue update failed"
 candidate=$(pkg-static rquery -r resolver-plugins '%o %v %q' "${plugin}") || fail "candidate query failed"
 set -- ${candidate}
 [ "$#" -eq 3 ] && [ "$1" = "opnsense/${plugin}" ] || fail "unexpected candidate origin"
-case "$2" in "${series}"_*) ;; *) fail "candidate version $2 is not ${series}" ;; esac
+case "$2" in "${series}"_*|"${series}".*) ;; *) fail "candidate version $2 is not ${series}" ;; esac
 [ "$3" = "$(pkg-static config ABI)" ] || fail "candidate ABI $3 does not match"
 version=$2
 

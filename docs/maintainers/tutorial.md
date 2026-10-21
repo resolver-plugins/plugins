@@ -17,12 +17,15 @@ git pull
 git switch -c bind-example
 ```
 
-Edit a file under `dns/bind/` and add a line describing the change to the
-changelog in `dns/bind/pkg-descr`. Run the plugin's tests locally; CI runs
-none:
+Edit a file under `dns/bind/src/` and add a line describing the change to
+the changelog in `dns/bind/pkg-descr`: in the `Resolver Plugins changes`
+block, under `On upstream <version>` for the upstream version the plugin is
+on, newest first. (HA entries go under the series heading, such as `26.7`.)
+Without the entry, the PR status fails. Run the plugin's tests locally; CI
+runs none:
 
 ```sh
-python3 -m unittest discover -s dns/bind/tests -v
+python3 -m pytest dns/bind/tests
 ```
 
 Commit and push the branch. Do not use `[skip ci]` for a package change.

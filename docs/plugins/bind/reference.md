@@ -9,7 +9,7 @@
 | Replaces | official `os-bind` (`PLUGIN_CONFLICTS=bind`); never installed together |
 | Minimum OPNsense | `26.1.11_10` |
 | Minimum BIND | `bind920 >= 9.20.26`, from any enabled repository |
-| Version | `<series>_<n>`, such as `26.7_1` |
+| Version | `<series>.<upstream>_<n>`, such as `26.7.1.34_1`: series, upstream BIND plugin version, local revision |
 | Configuration | `OPNsense/bind` in `config.xml`, the same section as `os-bind` |
 | XMLRPC sync | **BIND domain name service** syncs all of `OPNsense/bind` and restarts `named` on the peer |
 
