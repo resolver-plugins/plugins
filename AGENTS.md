@@ -1,115 +1,143 @@
-# os-bind-rp Repository Guide for Coding Agents
+# Resolver Plugins Fork Guide for Coding Agents
 
-This repository is an OPNsense plugins fork maintained by Resolver Plugins.
-Treat the upstream OPNsense source as the compatibility baseline and keep this
-fork's changes narrow and reviewable.
+This repository is an OPNsense plugins fork maintained by Resolver Plugins. It
+carries two plugins, `os-bind-rp` (`dns/bind/`) and `os-ha-dhcp-interface`
+(`net/ha-dhcp-interface/`). Treat the upstream OPNsense source as the
+compatibility baseline and keep this fork's changes narrow and reviewable.
+Start with [docs/README.md](docs/README.md) before changing build, upstream or
+package-related code.
 
-## Design at a glance
+## Documentation
 
-The fork exists to maintain `os-bind-rp`, a community-maintained BIND plugin
-that can follow upstream OPNsense plugin releases while carrying a small,
-reviewed feature set, and `os-ha-dhcp-interface`. `os-bind-rp` intentionally
-replaces official `os-bind`: the packages conflict and must never be installed
-together.
+`docs/` holds three [Divio](https://docs.divio.com/documentation-system/)
+sets, each with a tutorial, how-to guides, a reference and an explanation.
+Use them as the record of how things are meant to behave before changing
+them:
 
-`master` is where development and CI both live. Plugin changes are made and
-reviewed on `master`. The `release/*` branches are written only by the build
-pipelines; nobody pushes to them. Each plugin has its own workflow and its own
-build and publication lifecycle, and one plugin's pipeline never depends on
-the other's. Signed package channels are published to
-`resolver-plugins/repository`; see
-[Building and releasing](docs/building.md) and
-[Package repository](docs/package-repository.md).
-
-## Repository map
-
-- `dns/bind/` and `net/ha-dhcp-interface/`: the two plugin directories, with
-  the fork-specific plugin changes.
-- `.github/workflows/`: `bind-plugin.yml`, `ha-dhcp-interface-plugin.yml`,
-  `plugin-target.yml` and `package-index.yml`.
-- `scripts/install-repository.sh`: the end-user repository installer.
-- `docs/`: maintainer reference material. Start with
-  [docs/README.md](docs/README.md) before changing build, upstream or
-  package-related code.
+- `os-bind-rp`: [reference](docs/plugins/bind/reference.md) for settings,
+  configd actions, files and hooks; [explanation](docs/plugins/bind/explanation.md)
+  for design and limits.
+- `os-ha-dhcp-interface`: [reference](docs/plugins/ha-dhcp-interface/reference.md)
+  for settings, commands, hooks and the qualification record;
+  [explanation](docs/plugins/ha-dhcp-interface/explanation.md) for the
+  controller, fencing and standby routing.
+- Maintaining the fork: [reference](docs/maintainers/reference.md) for
+  branches, workflows, jobs, artifacts, Releases, the feed, credentials and the
+  expected CI outcomes; [explanation](docs/maintainers/explanation.md) for the
+  CI design, its decisions and known gaps.
 
 ## Non-negotiable rules
 
-- DO NOT open pr's on the official Opnsense Repos
+- Never open pull requests or issues, or push, against `opnsense/*`
+  repositories. Target `resolver-plugins/*` only.
 - `os-bind-rp` is a replacement for official `os-bind`, not a companion
-  package. Keep `PLUGIN_NAME=bind-rp` and `PLUGIN_CONFLICTS=bind` intact unless
-  the maintainer explicitly changes the package policy.
+  package; the two must never be installed together. Keep
+  `PLUGIN_NAME=bind-rp` and `PLUGIN_CONFLICTS=bind` intact unless the
+  maintainer explicitly changes the package policy.
 - Preserve the documented minimum OPNsense version of `26.1.11_10`. It is the
   minimum needed for the BIND/DoT fix used by this fork.
-- Keep fork-specific plugin changes small and isolated under `dns/bind` and `net/ha-dhcp-interface`.
-  Do not take unrelated upstream plugin changes into this fork.
+- Keep fork-specific plugin changes small and isolated under `dns/bind` and
+  `net/ha-dhcp-interface`. Do not take unrelated upstream plugin changes into
+  this fork.
 - Develop on `master` and never push to `release/*`; the build pipelines own
   those branches.
 - Keep `os-bind-rp` and `os-ha-dhcp-interface` independent, with separate
   workflows and signed release channels. One plugin's pipeline must not
   dispatch, rebuild, block on or require publication by the other's. Preserve
   native installation dependencies.
-- Follow the CI spec ([spec](docs/ci-rebuild-spec.md)). Workflow first: express
-  selection and ordering with workflow features and built-in tools (`git`, `gh`,
-  `jq`, `make`, `pkg`). Hard-code nothing that can be derived. Add no recovery
-  jobs; a failed job stays failed. Stop and ask before creating or growing any
-  CI script or inline workflow script beyond 30 physical lines. A script file
-  needs a written justification and the user's approval first.
 - CI runs no test suites. Run plugin suites (such as `dns/bind/tests/`)
   locally only, and review CI and documentation changes by reading the diff and
   `git diff --check`. Publish and merge CI, test and documentation changes
   with `[skip ci]` commit annotations; do not dispatch Actions to validate
-  them. Use the ignored `.github/ci-local/` directory only for CI discovery
-  reports and investigation harnesses; never stage or commit anything under it.
+  them.
 - The signed package repository is an approved system. Do not alter its
   GitHub Release publication, signing boundary, tokens, secrets, or end-user
   installation contract without explicit maintainer authorization.
-- CI runs on GitHub-hosted runners. The branch `ci/self-hosted-runners` keeps
-  the self-hosted variant; switch only on request, following
-  [Switching to the self-hosted runner](docs/building.md#switching-to-the-self-hosted-runner).
 - Run package workflows manually only when authorized for that operation;
-  report the workflow URL and its actual outcome. See
-  [Building and releasing](docs/building.md).
-- Discovery and troubleshooting tests may remain temporary while investigating
-  uncertainty. Keep them outside the final diff. Create temporary Git fixtures
-  and disposable clones under a unique `/tmp` directory with automatic cleanup
-  (`TemporaryDirectory` or a shell exit trap). Keep CI reports and harnesses in
-  `.github/ci-local/`, but do not retain generated repositories there. Remove
-  generated repositories before finishing; if failure evidence must remain,
-  report its path and cleanup command explicitly. Promote a test into the
-  repository only when it protects a distinct observable behavior, invariant,
-  known regression, security or compatibility risk, integration boundary, or
-  machine-enforced contract.
-- Do not retain a test merely because it was useful during development, raises
-  coverage, or exercises another example of an already-protected equivalence
-  class. Do not add tests that merely mirror ordinary Markdown wording.
-  Preserve uncertain tests until their value can be investigated.
-- Follow the repository's existing language and runtime constraints. Use POSIX
-  `sh` for existing package or service hooks and thin orchestration that must
-  run in the base OPNsense/FreeBSD environment. Prefer Python for non-trivial
-  parsing, branching, state handling, or data transformation when Python is
-  guaranteed or explicitly provisioned. Do not introduce Bash-specific syntax
-  or rewrite working scripts solely because of line count.
-- Prefer small pure functions for transformations and keep state changes,
-  filesystem access, network access, and other side effects explicit at
-  boundaries. Follow existing framework conventions; do not introduce
-  functional abstractions solely for stylistic purity.
+  report the workflow URL and its actual outcome.
+
+## Workflows
+
+The [maintainer reference](docs/maintainers/reference.md) and
+[explanation](docs/maintainers/explanation.md) describe the CI. Every change
+must keep the [expected outcomes](docs/maintainers/reference.md#expected-outcomes). In short:
+
+- Workflow first. Express selection and ordering with triggers and `paths`,
+  `if:`, `needs`, matrices, `concurrency`, reusable workflows, artifacts and
+  job outputs. Do the work with `git`, `gh`, `jq`, `make` and `pkg`.
+- Discover series, ABIs and upstream refs; hard-code nothing that can be
+  derived. A new OPNsense release must need no CI edit.
+- Script files are the last resort, in any language. Before creating one,
+  write down the operation, each simpler alternative and why it fails, and get
+  the maintainer's approval. Stop and ask before any CI script or inline step
+  grows beyond 30 physical lines; do not split or compress code to stay under
+  it. Total custom glue stays in the low hundreds of lines.
+- Add no recovery jobs; a failed job stays failed and stops dependent work.
+- Name runs by package, target and purpose, and use `concurrency` so repeated
+  events cannot start duplicate expensive jobs.
+- Use the Ubuntu runner unless the work needs FreeBSD. CI runs on
+  GitHub-hosted runners; switch to the self-hosted variant only on request
+  (see [the how-to guide](docs/maintainers/how-to.md#switch-to-the-self-hosted-runner)).
+- Validate external inputs once where they enter; trust artifacts from the
+  same run.
+- Keep candidate builds away from signing credentials; merging promotes the
+  candidate without rebuilding.
+- Keep package policy in the entry workflows' inputs; shared workflows name
+  no package.
+- Make every step safe to rerun: a rerun finishes the work from the job's
+  inputs instead of failing on what an earlier attempt left.
+- Build once and publish that archive. Never rename, repackage or relabel an
+  archive for another series.
+
+## Tests
+
+- Keep CI discovery reports and investigation harnesses in the ignored
+  `.github/ci-local/` directory; never stage or commit anything under it, and
+  do not keep generated repositories there.
+- Discovery and troubleshooting tests may stay temporary while investigating
+  and must stay out of the final diff. Promote a test only when it protects a
+  distinct observable behavior, invariant, known regression, security or
+  compatibility risk, integration boundary, or machine-enforced contract. Do
+  not keep a test for coverage alone, for another example of an
+  already-protected case, or to mirror Markdown wording. Preserve uncertain
+  tests until their value can be investigated.
+
+## Code style
+
+- Use POSIX `sh` for package and service hooks that run in the base
+  OPNsense/FreeBSD environment; do not introduce Bash-specific syntax. CI code
+  follows [Workflows](#workflows).
+- Match existing OPNsense style and patterns. Plugin code follows the upstream
+  MVC layout: model XML, API and UI controllers, `configd` actions, Volt
+  templates and service templates. Copy the conventions of nearby upstream
+  code rather than inventing new structure.
+- Prefer immutable, functional-style code where the language and framework
+  allow it: derive new values instead of mutating shared state, and keep side
+  effects such as filesystem, network and service changes at clear boundaries.
+  This is a preference, not a rule; use it where it reduces state bugs, not
+  where it fights the framework.
+- `make style` and `make lint` depend on an `opnsense/core` checkout next to
+  this repository and do nothing without one. Check changed files directly
+  instead: `php -l` and `phpcs --standard=PSR12` for PHP, `pycodestyle` and
+  `python3 -m py_compile` for Python, and `shellcheck` for shell scripts.
 
 ## Local environment
 
 Read `AGENTS-local.md` in the repository root when it exists. It is ignored by
 Git and records the maintainer's environment, such as appliance SSH targets,
-node roles and deployment history. Keep it current when you verify or change
+node roles and deployment procedure. Keep it current when you verify or change
 those facts, keep secrets out of it, and never commit it or copy its contents
 into tracked files.
 
 ## Documentation updates
 
-Update the relevant maintainer guide in the same change when behavior or a
-workflow contract changes. Keep the root README user-oriented; operational
-detail belongs under `docs/`. The focused references are:
-
-- [Fork model](docs/fork-model.md) for package and branch policy.
-- [Building and releasing](docs/building.md) for building, releasing and
-  local verification.
-- [Upstream changes](docs/upstream-sync.md) for how upstream changes arrive.
-- [Package repository](docs/package-repository.md) for the signed repository.
+- Update the affected documents in the same change when behavior or a
+  workflow contract changes. Keep each document to its type: no instructions
+  in a reference, no design discussion in a how-to guide.
+- Keep the root README user-oriented; detail belongs under `docs/`, indexed by
+  [docs/README.md](docs/README.md).
+- Specs, designs, plans and todo lists are working documents, not
+  documentation. Keep them in the ignored `docs/plans/` directory and never
+  commit them. Before finishing the work, move lasting facts into the
+  reference, the reasons and decisions into the explanation, and agent rules
+  into this file.
