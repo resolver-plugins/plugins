@@ -6,14 +6,18 @@ workflow, artifact and Release; the [explanation](explanation.md) covers why.
 
 ## Build a candidate for a PR
 
-1. Open the PR against `master` and keep it up to date with `master`.
-2. Request the build:
+1. Open the PR against `master` as a draft and iterate on it; drafts do not
+   build.
+2. Mark it ready for review (`gh pr ready N`). The candidate builds, and
+   every later push builds the new head. Keep the PR up to date with
+   `master`.
+3. For a draft or a fork PR, request the build instead:
 
    ```sh
    gh workflow run <entry> -f pr=N
    ```
 
-3. Watch it:
+4. Watch it:
 
    ```sh
    gh run list --workflow <entry>

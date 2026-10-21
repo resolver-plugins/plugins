@@ -159,9 +159,12 @@ carry normal integrity.
 
 ### Candidates and promotion
 
-Builds are expensive, so PRs are not built automatically. Opening or updating
-a PR only sets a status; the maintainer requests a candidate build for a
-head. The candidate is built with trusted CI from `master` and carries the
+Builds are expensive, so draft PRs are not built: a PR iterates as a draft,
+and marking it ready for review builds a candidate of its head. Later pushes
+build again and cancel a running older candidate, so a forgotten request
+cannot leave a PR waiting and quick pushes do not pile up. PRs from forks are
+built only on the maintainer's request, because their code is not trusted.
+The candidate is built with trusted CI from `master` and carries the
 final name and version. Merging promotes that candidate without rebuilding,
 so the archive tested on an appliance is the one that ships.
 
@@ -271,6 +274,7 @@ private dependency.
 | 2026-10-19 | Changes reach a release branch as the directory's diff, tracked by `Master-Commit` | Merging `master` into release branches | `master` and release branches follow different upstream lines |
 | 2026-10-19 | PR applicability comes from the PR's changed files | The base branch | `master` holds CI, docs and both plugins |
 | 2026-10-17 | A qualified archive stays valid across environment changes within its series | A reuse-time dry run | Avoids requalification without changed content |
+| 2026-10-21 | Ready-for-review PRs from this repository build candidates automatically; drafts and forks do not | Manual requests per head | Manual requests were forgotten; drafts keep iteration cheap |
 | 2026-10-16 | PR builds are requested manually per head, with up-to-date branches required | Automatic PR builds | Builds are expensive |
 
 ## Known gaps

@@ -34,16 +34,19 @@ Commit and push the branch. Do not use `[skip ci]` for a package change.
 ## 2. Open the PR
 
 ```sh
-gh pr create --base master --fill
+gh pr create --base master --fill --draft
 ```
 
 Within a minute the PR shows the status `Package build / dns/bind` as
-pending: "Request a package build for this head". Nothing has been built yet.
+pending: "Mark the PR ready for review to build". Nothing has been built yet;
+keep pushing while the PR is a draft.
 
 ## 3. Build a candidate
 
+When the change is done, mark the PR ready and watch the build:
+
 ```sh
-gh workflow run bind-plugin.yml -f pr=<number>
+gh pr ready <number>
 gh run list --workflow bind-plugin.yml
 gh run watch <run-id>
 ```
