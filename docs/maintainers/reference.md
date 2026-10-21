@@ -40,15 +40,19 @@ head and an up-to-date branch.
 
 ## Versions
 
+| `version_scheme` | Format | Example | Used by |
+| --- | --- | --- | --- |
+| `series` | `<series>_<n>` | `26.7_1` | `os-ha-dhcp-interface` |
+| `series-upstream` | `<series>.<upstream>_<n>` | `26.7.1.34_1` | `os-bind-rp` |
+
 | Item | Value |
 | --- | --- |
-| Format | `<series>_<n>`, for example `26.7_1` |
-| `n` | Current Release's revision plus one; `1` for a new series |
+| `<upstream>` | `PLUGIN_VERSION` of `dns/bind/Makefile` on upstream `stable/<series>`, without upstream's `PLUGIN_REVISION`; must be a dotted number |
+| `<n>` | `1` when there is no current Release or the part before `_` differs from the current version's; otherwise the current `<n>` plus one |
 | Fixed | In `prepare`, before building; an archive is never renamed |
-| Ordering | By revision within a target |
+| Ordering | Compare the part before `_` as dotted numbers (`sort -V`), then `<n>`; `26.7.1.34_1` is newer than `26.7_11` |
 
-BIND's upstream version is recorded separately in the build record; the
-pipeline never falls back to an upstream `1.x` version.
+The build record keeps the upstream version in `upstream_version`.
 
 ## Workflows
 
@@ -81,6 +85,7 @@ package.
 | `source_tag` | `os-bind-rp-{series}` | `ha-dhcp-interface-{series}` |
 | `follow_upstream` | `true` | `false` |
 | `prerelease` | `false` | `true` |
+| `version_scheme` | `series-upstream` | `series` |
 
 `component` matches the feed's `channel.json` keys. Versioned tags append
 `-<version>`, for example `pkg-26.7-bind-plugin-26.7_10` and
@@ -94,13 +99,16 @@ Only the active series builds; a request for another series fails.
 | Request | Started by | Jobs | Result |
 | --- | --- | --- | --- |
 | Discovery | daily schedule, or `gh workflow run <entry>` | `discover` → `target` (`production`) | Builds and publishes when the active series has no build record, or (BIND) upstream changed the package; otherwise writes the reason and stops |
-| PR status | PR to `master` opened, updated or reopened | `status` | `Package build / <directory>` pending if the PR changes the directory, else success "Not applicable"; builds nothing |
+| PR status | PR to `master` opened, updated or reopened | `status` | `Package build / <directory>`: success "Not applicable" when no packaged file changes; failure "Add a changelog entry to `<directory>/pkg-descr`" when code changes without `pkg-descr`; otherwise pending; builds nothing |
 | Candidate | `gh workflow run <entry> -f pr=N` | `target` (`candidate`) → `status` | Unsigned, qualified candidate of the PR head; status success or failure on that head; publishes nothing |
-| Promotion | merging a PR that changes the directory | `target` (`promote`) | Publishes the candidate of the merged head without rebuilding |
+| Promotion | merging a PR that changes packaged files | `target` (`promote`) | Publishes the candidate of the merged head without rebuilding |
 | Production | `gh workflow run <entry> -f series=X.Y` | `target` (`production`) | Builds, qualifies and publishes the release branch plus `master`'s uncarried changes |
 
-The `status` job writes with `GITHUB_TOKEN` (`statuses: write`) and never
-checks out or runs PR code. Run names show the PR number, candidate,
+Packaged files are `<directory>/src/`, `Makefile`, `pkg-descr` and the `+*`
+install scripts; code is the same without `pkg-descr`. A candidate request for
+a PR whose code changes lack a `pkg-descr` change fails in `request` before
+anything builds. The `status` job writes with `GITHUB_TOKEN`
+(`statuses: write`) and never checks out or runs PR code. Run names show the PR number, candidate,
 production series or event.
 
 ### Lifecycle (`plugin-target.yml`)
@@ -225,8 +233,8 @@ OPNsense repository and target amd64 only.
 Written once by `build`: `package`, `origin`, `version`, `series`, `abi`,
 `freebsd_release`, `source_base` (release branch head used), `master_commit`,
 `source_commit` (prepared), `control_commit` (workflow commit), `tools_tag`,
-`core_commit`, `plugins_commit`, `upstream_package_commit`, `pkg_version`,
-`previous_tag`, `run_url`.
+`core_commit`, `plugins_commit`, `upstream_package_commit`, `upstream_version`
+(empty for `series`), `pkg_version`, `previous_tag`, `run_url`.
 
 ### `channel.json`
 
@@ -358,10 +366,15 @@ The behavior any CI change must preserve.
 | Package PR opened or updated | Merge blocked for that head until its requested build succeeds; no build starts automatically |
 | Requested build for an older head finishes after a push | Its status stays on the older head; the new head stays blocked |
 | CI or documentation-only PR | Status passes without a build |
+| PR changes only unpackaged plugin files, such as tests | Status "Not applicable"; merging publishes nothing |
+| PR changes plugin code without its `pkg-descr` | Status fails with the changelog message; a candidate request fails before building |
 | PR with a successful candidate merges | That archive and qualification are promoted |
 | Candidate expired or overtaken at promotion | Promotion fails with a reason; no automatic rebuild |
 | New final Community series becomes usable | Plugins build and publish without CI edits or a review gate |
-| Upstream BIND change without a version bump | BIND builds with an advanced revision |
+| Upstream BIND change without a version bump | BIND builds with `<n>` + 1 |
+| Upstream BIND version changes, for example `1.34` → `1.35` | BIND builds `<series>.1.35_1` |
+| First BIND build after `<series>_<n>` versions | `<series>.<upstream>_1`, newer than the last `<series>_<n>` |
+| HA build | `<series>_<n>` |
 | Environment, CI, documentation or other-plugin change only | No build, probe or requalification |
 | A job fails | It stays failed; dependents stop; no recovery job starts |
 | Maintainer reruns a failed publication | The rerun completes it |

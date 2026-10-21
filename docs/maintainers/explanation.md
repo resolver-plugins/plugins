@@ -49,6 +49,22 @@ versions. Release history is never rewritten.
 Keeping `master` merged with upstream `master` is maintainer work outside the
 pipeline.
 
+## Versions and changelogs
+
+A version starts with its series, so a newer series always offers a newer
+package. `os-bind-rp` versions also name the upstream BIND plugin version they
+are built on, `<series>.<upstream>_<n>`, so users can see which upstream
+release they run. The upstream version keeps its dots because `pkg` compares
+each dotted part as a number: `1.9`, `1.34` and `2.0` sort correctly, which
+they would not as `19`, `134` and `20`. The local revision `<n>` starts at 1
+for each upstream version and counts every other build. HA has no upstream
+and stays `<series>_<n>`.
+
+The fork's BIND changelog entries live in their own block above upstream's
+changelog heading, grouped by the upstream version they apply to. Upstream
+adds its next section right under its own heading; keeping the fork's entries
+apart lets the automatic upstream merge apply cleanly.
+
 ## Following upstream
 
 ### Series
@@ -165,11 +181,18 @@ App can write to only one repository. Requesting a candidate therefore never
 authorizes publication. The PR status job runs on `pull_request_target`
 without checking out PR code.
 
-### No tests in CI
+### Checks in CI
 
-CI runs no test suites, linters or validators. The production checks are
-package qualification before publication and the public feed readback after
-it. Plugin suites run locally. CI and documentation changes are reviewed by
+CI runs no tests, linters or validators by default: each one costs runner time
+and maintenance, and the old CI collected many. A check is proposed with its
+purpose and cost and added only after the maintainer approves it. The
+production checks are package qualification before publication and the public
+feed readback after it. Plugin suites run locally.
+
+The first approved check is the changelog rule: a PR that changes a plugin's
+code must change its `pkg-descr`. The changelog is the only change record
+users see, and the check costs a few lines in the PR status job, which already
+reads the PR's file list. CI and documentation changes are reviewed by
 reading the diff, and committed with `[skip ci]` instead of dispatching
 Actions to validate them.
 
@@ -222,6 +245,11 @@ private dependency.
 
 | Date | Decision | Over | Because |
 | --- | --- | --- | --- |
+| 2026-10-21 | BIND versions are `<series>.<upstream>_<n>`, dots kept | `<series>_<n>` | Users see the upstream base, and dotted parts order correctly in `pkg` |
+| 2026-10-21 | "Newer" compares whole versions | Comparing the revision alone | Versions within a target no longer share one base |
+| 2026-10-21 | The fork's changelog sits in its own block above upstream's heading | Sections under upstream's heading | Upstream's next section conflicted with the fork's in the automatic merge |
+| 2026-10-21 | PRs need a build only for packaged files | Any file under the plugin directory | Unpackaged files published identical revisions |
+| 2026-10-21 | CI checks are added after maintainer approval | No checks at all | Lets a cheap, useful check such as the changelog rule in |
 | 2026-10-20 | Rebuild the CI from scratch; admit script files only after every direct alternative fails | Adapting the old helpers | The old CI duplicated workflow features in thousands of lines of scripts |
 | 2026-10-19 | An expired or overtaken candidate fails promotion; the maintainer requests a new build | In-pipeline version checks and fallbacks | Removes a whole decision path |
 | 2026-10-19 | Retire the BIND runtime builds | Keeping them | OPNsense ships a fixed, newer BIND; the plugin's minimum covers the gap |
@@ -233,7 +261,7 @@ private dependency.
 | 2026-10-19 | Develop on `master` and carry merged changes automatically | PRs to release branches | Matches upstream's `master` and `stable/<series>` model |
 | 2026-10-19 | Create a new series' branch from the previous one merged with upstream `stable/<series>` | Branching from `master` | Keeps ancestry and every published fix |
 | 2026-10-19 | Retired series are locked; upstream decides retirement | Allowing manual builds | Retired series stop consuming runners |
-| 2026-10-19 | Order versions by revision number | `pkg version` in a VM | Every version in a target is `<series>_<n>` |
+| 2026-10-19 | Order versions by revision number (superseded 2026-10-21) | `pkg version` in a VM | Every version in a target was `<series>_<n>` |
 | 2026-10-19 | PHP and Python come from the installed OPNsense core | Passing tools `build.conf` values | The plugins framework reads them natively |
 | 2026-10-19 | Package policy lives in the entry inputs | A `ci.mk` per package | The entries must know the branch before reading it |
 | 2026-10-19 | Distribution Releases hold the archive and build record only | A signed per-Release catalogue | Clients read only the Pages feed |
@@ -253,5 +281,3 @@ private dependency.
 - Unfamiliar future upstream formats or an unavailable builder fail the
   affected target clearly; discovery cannot make incompatible inputs
   compatible.
-- The PR status treats any file under a plugin directory as a package change,
-  including files that are not packaged.
