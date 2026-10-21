@@ -7,20 +7,12 @@ import subprocess
 
 import pytest
 
-from .repository_contract import (
-    PRIORITY_REQUIRED, SERIES_VERSIONED, repository_config, series_url,
-)
+from .repository_contract import repository_config, series_url
 
 
 BIND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROVIDER = BIND_ROOT / "src/opnsense/scripts/firmware/repos/ResolverPlugins.sh"
 PENDING_MARKER = "repository-reconcile.pending"
-
-
-pytestmark = pytest.mark.skipif(
-    not SERIES_VERSIONED,
-    reason="repository provider contract applies to series-versioned release sources",
-)
 
 
 def write_opnsense_version(path, series):
@@ -64,10 +56,8 @@ def test_repository_provider_source_exists_and_is_executable():
         ("https://github.com/resolver-plugins/repository/releases/download/pkg-26.7", None),
         ("https://resolver-plugins.github.io/repository/pkg/${ABI}/latest", None),
         (series_url("26.1"), None),
-        pytest.param(series_url("26.7"), None, marks=pytest.mark.skipif(
-            not PRIORITY_REQUIRED, reason="source predates repository priority migration")),
-        pytest.param(series_url("26.1"), 20, marks=pytest.mark.skipif(
-            not PRIORITY_REQUIRED, reason="source predates repository priority migration")),
+        (series_url("26.1"), 20),
+        (series_url("26.7"), 20),
     ),
 )
 def test_managed_repository_is_atomically_switched_to_current_series(tmp_path, old_url, priority):
