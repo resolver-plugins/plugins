@@ -94,6 +94,14 @@ the other's. Signed package channels are published to
   boundaries. Follow existing framework conventions; do not introduce
   functional abstractions solely for stylistic purity.
 
+## Local environment
+
+Read `AGENTS-local.md` in the repository root when it exists. It is ignored by
+Git and records the maintainer's environment, such as appliance SSH targets,
+node roles and deployment history. Keep it current when you verify or change
+those facts, keep secrets out of it, and never commit it or copy its contents
+into tracked files.
+
 ## Documentation updates
 
 Update the relevant maintainer guide in the same change when behavior or a

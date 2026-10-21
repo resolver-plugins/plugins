@@ -7,3 +7,4 @@ venv
 /.github/ci-local/
 /docs/superpowers/
 /.worktrees/
+/AGENTS-local.md
