@@ -1,0 +1,6 @@
+#!/bin/sh
+# The event payload is a wakeup hint; the controller reads current CARP state.
+if /bin/pkill -USR1 -F /var/run/dhcp-interface-ha/controller.pid -f '/usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py serve'; then
+    exit 0
+fi
+exec /usr/local/bin/python3 /usr/local/opnsense/scripts/dhcp_interface_ha/dhcp_interface_ha.py fence

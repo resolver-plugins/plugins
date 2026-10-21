@@ -1,0 +1,25 @@
+HA DHCP Interface (os-ha-dhcp-interface) lets an existing active/passive OPNsense CARP pair move one
+IPv4 DHCP client interface between nodes. A WAN is the common use case, but
+any eligible logical interface can be selected.
+
+The plugin does not implement a second HA election protocol and does not
+replace OPNsense DHCP, routing, NAT, PF, pfsync, or CARP.  It provides a
+stable logical interface, a shared ordinary unicast MAC identity, and
+fail-closed Layer-2 fencing of the local carrier.
+
+This package is experimental.  Production deployment remains gated by
+the prototype tests documented in docs/ha-dhcp-interface.md.
+
+Plugin Changelog
+================
+
+26.7
+
+* Keep an assigned device when switching between the -devel and release packages
+* Report why standby Internet is not selected, including CARP instances that are not BACKUP
+* Build and publish through the rebuilt release pipeline
+* Move the package feed and upgrade the plugin automatically across OPNsense series upgrades
+
+0.1
+
+* Experimental carrier controller with native CARP and DHCP integration.

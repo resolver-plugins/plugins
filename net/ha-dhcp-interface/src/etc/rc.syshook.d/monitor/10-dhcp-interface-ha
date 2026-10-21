@@ -1,0 +1,3 @@
+#!/bin/sh
+# Gateway alarms skip monitor configuration; use their native post-route hook.
+exec /usr/local/bin/php -r 'require_once "config.inc"; require_once "util.inc"; require_once "plugins.inc.d/dhcp_interface_ha.inc"; dhcp_interface_ha_routing();'

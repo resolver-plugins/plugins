@@ -1,0 +1,23 @@
+<model>
+    <mount>//OPNsense/DhcpInterfaceHaLocal</mount>
+    <version>1.2.0</version>
+    <description>HA DHCP Interface node-local settings</description>
+    <items>
+        <managed_interface type="TextField">
+            <Required>N</Required>
+        </managed_interface>
+        <carrier type="TextField">
+            <Required>N</Required>
+        </carrier>
+        <standby_enabled type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </standby_enabled>
+        <standby_interface type="TextField">
+            <Required>N</Required>
+        </standby_interface>
+        <standby_vip type="TextField">
+            <Required>N</Required>
+        </standby_vip>
+    </items>
+</model>
