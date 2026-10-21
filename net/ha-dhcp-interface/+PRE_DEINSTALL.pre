@@ -8,13 +8,14 @@ fi
 
 # pkg ignores a failing pre-deinstall script and deletes the files anyway, so
 # a refusal cannot stop removal. Replacing this package with its -devel or
-# release counterpart is a removal without PKG_UPGRADE. While an OPNsense
-# logical interface depends on dhcpha0lagg, keep the device and the running
-# controller as an upgrade does, and tell an uninstalling operator what is left.
+# release counterpart, or os-dhcp-interface-ha with os-ha-dhcp-interface, is a
+# removal without PKG_UPGRADE. While an OPNsense logical interface depends on
+# dhcpha0lagg, keep the device and the running controller as an upgrade does,
+# and tell an uninstalling operator what is left.
 config="${PKG_ROOTDIR:-}/conf/config.xml"
 if [ -r "${config}" ] && grep -Eq '<if>[[:space:]]*dhcpha0lagg[[:space:]]*</if>' "${config}"; then
-    echo "os-dhcp-interface-ha: dhcpha0lagg is still assigned; leaving the device and controller in place." >&2
-    echo "This is expected when switching between os-dhcp-interface-ha and os-dhcp-interface-ha-devel." >&2
+    echo "os-ha-dhcp-interface: dhcpha0lagg is still assigned; leaving the device and controller in place." >&2
+    echo "This is expected when os-ha-dhcp-interface replaces os-dhcp-interface-ha or switches to or from its -devel package." >&2
     echo "To uninstall, reinstall the plugin, reassign the interface away from dhcpha0lagg, apply, then remove it." >&2
     exit 0
 fi

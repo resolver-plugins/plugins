@@ -1,4 +1,4 @@
-// Run with: node net/dhcp-interface-ha/tests/ui/test_configure_lagg.js
+// Run with: node net/ha-dhcp-interface/tests/ui/test_configure_lagg.js
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');

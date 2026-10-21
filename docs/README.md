@@ -10,7 +10,7 @@ maintainers and contributors. Read the one matching your work.
   changes and conflicts.
 - [Package repository](package-repository.md): the signed feed, Releases, host
   setup and credentials.
-- [HA DHCP Interface maintainer guide](dhcp-interface-ha.md): the HA plugin's
+- [HA DHCP Interface maintainer guide](ha-dhcp-interface.md): the HA plugin's
   implementation and verification.
 - [CI rebuild specification](ci-rebuild-spec.md) and
   [design](ci-rebuild-design.md): requirements and structure of the CI.

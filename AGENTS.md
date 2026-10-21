@@ -8,7 +8,7 @@ fork's changes narrow and reviewable.
 
 The fork exists to maintain `os-bind-rp`, a community-maintained BIND plugin
 that can follow upstream OPNsense plugin releases while carrying a small,
-reviewed feature set, and `os-dhcp-interface-ha`. `os-bind-rp` intentionally
+reviewed feature set, and `os-ha-dhcp-interface`. `os-bind-rp` intentionally
 replaces official `os-bind`: the packages conflict and must never be installed
 together.
 
@@ -23,7 +23,7 @@ the other's. Signed package channels are published to
 
 ## Repository map
 
-- `dns/bind/` and `net/dhcp-interface-ha/`: the two plugin directories, with
+- `dns/bind/` and `net/ha-dhcp-interface/`: the two plugin directories, with
   the fork-specific plugin changes.
 - `.github/workflows/`: `bind-plugin.yml`, `ha-dhcp-interface-plugin.yml`,
   `plugin-target.yml` and `package-index.yml`.
@@ -40,11 +40,11 @@ the other's. Signed package channels are published to
   the maintainer explicitly changes the package policy.
 - Preserve the documented minimum OPNsense version of `26.1.11_10`. It is the
   minimum needed for the BIND/DoT fix used by this fork.
-- Keep fork-specific plugin changes small and isolated under `dns/bind` and `net/dhcp-interface-ha`.
+- Keep fork-specific plugin changes small and isolated under `dns/bind` and `net/ha-dhcp-interface`.
   Do not take unrelated upstream plugin changes into this fork.
 - Develop on `master` and never push to `release/*`; the build pipelines own
   those branches.
-- Keep `os-bind-rp` and `os-dhcp-interface-ha` independent, with separate
+- Keep `os-bind-rp` and `os-ha-dhcp-interface` independent, with separate
   workflows and signed release channels. One plugin's pipeline must not
   dispatch, rebuild, block on or require publication by the other's. Preserve
   native installation dependencies.

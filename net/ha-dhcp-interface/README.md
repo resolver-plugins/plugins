@@ -1,12 +1,12 @@
 # HA DHCP Interface
 
-Experimental `os-dhcp-interface-ha` plugin.
+Experimental `os-ha-dhcp-interface` plugin.
 
 The [package repository guide](../../docs/package-repository.md#ha-dhcp-interface) covers the signed
-`os-dhcp-interface-ha` feed for OPNsense 26.7 amd64 and series upgrades.
+`os-ha-dhcp-interface` feed for OPNsense 26.7 amd64 and series upgrades.
 
 This plugin implements the experimental carrier controller described in
-[the maintainer guide](../../docs/dhcp-interface-ha.md). It follows native CARP
+[the maintainer guide](../../docs/ha-dhcp-interface.md). It follows native CARP
 on other interfaces and attaches one dedicated Ethernet adapter to
 `dhcpha0lagg` only while the local node is eligible and MASTER. The selected
 logical interface may be WAN or another IPv4 DHCP client interface. Each node
@@ -33,7 +33,7 @@ Diagnostics keeps observed details, guarded recovery, native configuration links
 and the downloadable snapshot. The Log tab uses OPNsense's native local log
 viewer for operational events and problems.
 
-The [maintainer guide](../../docs/dhcp-interface-ha.md) records the implemented
+The [maintainer guide](../../docs/ha-dhcp-interface.md) records the implemented
 safety boundaries, current verification and remaining native acceptance checks.
 Source implementation does not imply that an appliance was updated.
 
@@ -67,7 +67,7 @@ zero; native CARP preemption policy remains in effect.
 The controller follows native CARP without peer API credentials or acknowledged
 release holds. Ping-based handover checks and passive conflict observations are
 not implemented. Current deployment evidence and the outstanding paired handover
-and boot checks are in the [maintainer guide](../../docs/dhcp-interface-ha.md#verification-and-remaining-qualification).
+and boot checks are in the [maintainer guide](../../docs/ha-dhcp-interface.md#verification-and-remaining-qualification).
 
 ## Initial configuration
 
@@ -173,17 +173,19 @@ removal script fails, so removal cannot be refused: with the device still
 assigned it is left in place with a warning. Package upgrades preserve the
 device; restart the controller after an upgrade to load the new implementation.
 
-### Switching from `os-dhcp-interface-ha-devel`
+### Replacing `os-dhcp-interface-ha`
 
-The `-devel` and release packages conflict, so `pkg` removes one and installs
-the other instead of upgrading. The removal keeps the assigned device and the
-running controller, as an upgrade does, and settings are shared. Revisions up
-to `0.2_45` print a refusal and `DEINSTALL script failed`; with `dhcpha0lagg`
-assigned they stop before changing anything, and `pkg` continues. Switch the
-BACKUP node first:
+The plugin was published as `os-dhcp-interface-ha` (and its `-devel`
+package) up to `26.7_3`. The new name conflicts with the old ones, so `pkg`
+removes the installed package and installs `os-ha-dhcp-interface` instead of
+upgrading, and plain `pkg upgrade` does not switch. The removal keeps the
+assigned device and the running controller, as an upgrade does, and settings
+are shared. Revisions up to `0.2_45` print a refusal and `DEINSTALL script
+failed`; with `dhcpha0lagg` assigned they stop before changing anything, and
+`pkg` continues. Switch the BACKUP node first:
 
 ```sh
-pkg install os-dhcp-interface-ha
+pkg install os-ha-dhcp-interface
 service dhcp_interface_ha onestop
 service dhcp_interface_ha onestart
 ```
@@ -242,15 +244,15 @@ native IPv4 routing recalculation. IPv6 routing and existing firewall/NAT
 policy remain native. Diagnostics distinguish a selected route from Internet
 reachability; a missing optional path does not elect a different CARP owner.
 
-See the [standby routing boundaries](../../docs/dhcp-interface-ha.md#standby-internet)
-and [remaining qualification](../../docs/dhcp-interface-ha.md#verification-and-remaining-qualification).
+See the [standby routing boundaries](../../docs/ha-dhcp-interface.md#standby-internet)
+and [remaining qualification](../../docs/ha-dhcp-interface.md#verification-and-remaining-qualification).
 
 ### Local checks
 
 ```sh
-python3 -m compileall -q net/dhcp-interface-ha/src/opnsense/scripts/dhcp_interface_ha
-python3 -m unittest discover -s net/dhcp-interface-ha/tests -v
-node net/dhcp-interface-ha/tests/ui/test_configure_lagg.js
+python3 -m compileall -q net/ha-dhcp-interface/src/opnsense/scripts/dhcp_interface_ha
+python3 -m unittest discover -s net/ha-dhcp-interface/tests -v
+node net/ha-dhcp-interface/tests/ui/test_configure_lagg.js
 ```
 
 The controller tests simulate kernel side effects and exercise cancellation,
@@ -261,7 +263,7 @@ supported OPNsense command-helper boundary, including failed preparation. The
 PHP controller fixtures also require the CLI and SimpleXML extension. The suite
 runs locally; CI runs no tests.
 Current verification and the unexecuted native MVC/browser/appliance gates are
-recorded in the [maintainer guide](../../docs/dhcp-interface-ha.md#verification-and-remaining-qualification).
+recorded in the [maintainer guide](../../docs/ha-dhcp-interface.md#verification-and-remaining-qualification).
 Unit tests do not prove Volt rendering, package boot or external first-frame behavior.
 
 Native CARP split brain remains possible during a partition. The plugin adds

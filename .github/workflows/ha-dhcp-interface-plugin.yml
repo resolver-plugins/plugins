@@ -25,7 +25,7 @@ on:
 permissions: {}
 
 env:
-  SOURCE_DIRECTORY: net/dhcp-interface-ha
+  SOURCE_DIRECTORY: net/ha-dhcp-interface
 
 defaults:
   run:
@@ -67,7 +67,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       SERIES: ${{ inputs.series }}
-      CURRENT_TAG: pkg-dhcp-interface-ha-{series}
+      CURRENT_TAG: pkg-ha-dhcp-interface-{series}
       FOLLOW_UPSTREAM: false
     steps:
       - name: Resolve the active series
@@ -190,10 +190,10 @@ jobs:
     uses: ./.github/workflows/plugin-target.yml
     with:
       component: dhcp
-      source_directory: net/dhcp-interface-ha
-      branch_prefix: release/dhcp-interface-ha
-      current_tag: pkg-dhcp-interface-ha-{series}
-      source_tag: dhcp-interface-ha-{series}
+      source_directory: net/ha-dhcp-interface
+      branch_prefix: release/ha-dhcp-interface
+      current_tag: pkg-ha-dhcp-interface-{series}
+      source_tag: ha-dhcp-interface-{series}
       follow_upstream: false
       prerelease: true
       series: ${{ needs.discover.outputs.series || needs.request.outputs.series }}

@@ -1,4 +1,4 @@
-HA DHCP Interface (os-dhcp-interface-ha) lets an existing active/passive OPNsense CARP pair move one
+HA DHCP Interface (os-ha-dhcp-interface) lets an existing active/passive OPNsense CARP pair move one
 IPv4 DHCP client interface between nodes. A WAN is the common use case, but
 any eligible logical interface can be selected.
 
@@ -8,7 +8,7 @@ stable logical interface, a shared ordinary unicast MAC identity, and
 fail-closed Layer-2 fencing of the local carrier.
 
 This package is experimental.  Production deployment remains gated by
-the prototype tests documented in docs/dhcp-interface-ha.md.
+the prototype tests documented in docs/ha-dhcp-interface.md.
 
 Plugin Changelog
 ================

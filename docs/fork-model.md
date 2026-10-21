@@ -9,13 +9,15 @@ following upstream OPNsense plugin updates.
 | Package | Origin | Source |
 | --- | --- | --- |
 | `os-bind-rp` | `opnsense/os-bind-rp` | `dns/bind` |
-| `os-dhcp-interface-ha` | `opnsense/os-dhcp-interface-ha` | `net/dhcp-interface-ha` |
+| `os-ha-dhcp-interface` | `opnsense/os-ha-dhcp-interface` | `net/ha-dhcp-interface` |
 
 `os-bind-rp` conflicts with OPNsense's `os-bind`; a system has one or the
-other. `os-dhcp-interface-ha` replaces `wan-ha-dhcp`. Both require OPNsense
+other. `os-ha-dhcp-interface` replaces `wan-ha-dhcp`. Both require OPNsense
 `26.1.11_10` or newer. BIND itself comes from OPNsense's packages and must meet
 the minimum declared by `PLUGIN_DEPEND_FORMULA`. Names and origins stay fixed
-across series.
+across series. `os-ha-dhcp-interface` was renamed from `os-dhcp-interface-ha`,
+which it also replaces; the old `release/dhcp-interface-ha/<series>` branches
+are frozen.
 
 ## Branches
 
@@ -23,7 +25,7 @@ across series.
 | --- | --- |
 | `master` | Development of both plugins, the CI and the documentation |
 | `release/bind-rp/<series>` | Pipeline-written build source of `os-bind-rp` for a series |
-| `release/dhcp-interface-ha/<series>` | Pipeline-written build source of `os-dhcp-interface-ha` for a series |
+| `release/ha-dhcp-interface/<series>` | Pipeline-written build source of `os-ha-dhcp-interface` for a series |
 | upstream `master` and `stable/<series>` | `opnsense/plugins`, read by the pipeline |
 
 Develop on `master` through PRs and never push to a release branch. Release

@@ -79,5 +79,14 @@ namespace {{
             "already carries runtime CARP instances",
         ])
 
+    def test_package_replaces_its_predecessors_and_reconciles_its_own_name(self):
+        makefile = dict(
+            line.split("=", 1) for line in (PLUGIN / "Makefile").read_text().splitlines() if "=" in line
+        )
+        self.assertEqual(makefile["PLUGIN_NAME"].strip(), "ha-dhcp-interface")
+        self.assertEqual(set(makefile["PLUGIN_CONFLICTS"].split()), {"dhcp-interface-ha", "wan-ha-dhcp"})
+        worker = (PLUGIN / "src/opnsense/scripts/dhcp_interface_ha/repository_reconcile.sh").read_text()
+        self.assertIn("\nplugin=os-ha-dhcp-interface\n", worker)
+
 if __name__ == "__main__":
     unittest.main()

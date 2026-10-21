@@ -1,7 +1,7 @@
 # Package repository
 
 Resolver Plugins publishes two OPNsense plugins, `os-bind-rp` and
-`os-dhcp-interface-ha`, as signed `pkg` archives. Clients read one signed feed
+`os-ha-dhcp-interface`, as signed `pkg` archives. Clients read one signed feed
 per OPNsense series from GitHub Pages. The archives themselves are GitHub
 Releases in `resolver-plugins/repository`. How the Releases are built and
 published is described in [Building](building.md).
@@ -62,7 +62,7 @@ Each plugin has a current Release and one versioned Release per revision in
 | Plugin | Current Release | Versioned Release | Source Release and tag |
 | --- | --- | --- | --- |
 | `os-bind-rp` | `pkg-<series>-bind-plugin` | `pkg-<series>-bind-plugin-<series>_<n>` | `os-bind-rp-<series>-<series>_<n>` |
-| `os-dhcp-interface-ha` (pre-release) | `pkg-dhcp-interface-ha-<series>` | `pkg-dhcp-interface-ha-<series>-<series>_<n>` | `dhcp-interface-ha-<series>-<series>_<n>` |
+| `os-ha-dhcp-interface` (pre-release) | `pkg-ha-dhcp-interface-<series>` | `pkg-ha-dhcp-interface-<series>-<series>_<n>` | `ha-dhcp-interface-<series>-<series>_<n>` |
 
 - The current Release holds only the newest archive and its `build-record.json`.
   It advances only when a new version is higher than the one it holds.
@@ -71,7 +71,7 @@ Each plugin has a current Release and one versioned Release per revision in
   fails.
 - The source Release carries the same archive and record. Its tag points at the
   prepared commit on the plugin's release branch (`release/bind-rp/<series>` or
-  `release/dhcp-interface-ha/<series>`; see
+  `release/ha-dhcp-interface/<series>`; see
   [Fork model](fork-model.md#branches)).
 - Retention keeps the current Release, the newest versioned Release and the one
   before it for each plugin and series. When the index finishes, it deletes the
@@ -111,7 +111,7 @@ setup by hand. Install a plugin with `pkg`; see
 
 ```sh
 pkg install os-bind-rp
-pkg install os-dhcp-interface-ha
+pkg install os-ha-dhcp-interface
 ```
 
 `os-bind-rp` uses OPNsense's native BIND. It declares a minimum BIND version
@@ -132,7 +132,7 @@ A plugin installed from this feed moves with the system to the next OPNsense
 series in three steps. Each plugin carries its own files, so the two work
 independently and can be installed together.
 
-| Role | `os-bind-rp` | `os-dhcp-interface-ha` |
+| Role | `os-bind-rp` | `os-ha-dhcp-interface` |
 | --- | --- | --- |
 | Upgrade hook | `/usr/local/etc/rc.syshook.d/upgrade/50-bind-rp-repository` | `/usr/local/etc/rc.syshook.d/upgrade/50-dhcp-interface-ha-repository` |
 | Repository provider | `/usr/local/opnsense/scripts/firmware/repos/ResolverPlugins.sh` | `/usr/local/opnsense/scripts/firmware/repos/ResolverPluginsHA.sh` |
@@ -178,7 +178,7 @@ its URL to the literal `${ABI}` plus series URL shown in [Feed](#feed), and run:
 ```sh
 pkg update -f -r resolver-plugins
 pkg install os-bind-rp
-pkg install os-dhcp-interface-ha
+pkg install os-ha-dhcp-interface
 ```
 
 ## BIND package transactions
@@ -254,16 +254,21 @@ secret. Never replace an App credential with a broader token.
 
 ## HA DHCP Interface
 
-`os-dhcp-interface-ha` is the experimental HA DHCP Interface plugin. It is
+`os-ha-dhcp-interface` is the experimental HA DHCP Interface plugin. It is
 published in the same feed as `os-bind-rp` and uses the same signing key and
 Apps, but it has its own lifecycle: its own entry workflow, Releases, release
-branch (`release/dhcp-interface-ha/<series>`) and version counter. It follows
+branch (`release/ha-dhcp-interface/<series>`) and version counter. It follows
 no upstream plugin, so upstream changes never select a build. Its
 Releases are marked as GitHub pre-releases.
 
-Versions are `<series>_<n>`, starting at `26.7_1`. They sort above the earlier
-`0.2_*` revisions, so `pkg` upgrades those installs to the first series-based
-build. Plugin behavior and limits are in the
-[plugin guide](../net/dhcp-interface-ha/README.md) and the
-[maintainer guide](dhcp-interface-ha.md). Publishing a package does not update
+Versions are `<series>_<n>`, starting at `26.7_1`. The plugin was first
+published as `os-dhcp-interface-ha`, up to `26.7_3`, from
+`release/dhcp-interface-ha/<series>`. Its `pkg-dhcp-interface-ha-*` and
+`dhcp-interface-ha-*` Releases and that branch are frozen. The new name restarts
+the version counter and conflicts with the old package, so installed systems
+switch once by hand; see
+[Replacing `os-dhcp-interface-ha`](../net/ha-dhcp-interface/README.md#replacing-os-dhcp-interface-ha).
+Plugin behavior and limits are in the
+[plugin guide](../net/ha-dhcp-interface/README.md) and the
+[maintainer guide](ha-dhcp-interface.md). Publishing a package does not update
 any appliance.
