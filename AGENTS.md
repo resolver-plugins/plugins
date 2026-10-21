@@ -63,6 +63,9 @@ the other's. Signed package channels are published to
 - The signed package repository is an approved system. Do not alter its
   GitHub Release publication, signing boundary, tokens, secrets, or end-user
   installation contract without explicit maintainer authorization.
+- CI runs on GitHub-hosted runners. The branch `ci/self-hosted-runners` keeps
+  the self-hosted variant; switch only on request, following
+  [Switching to the self-hosted runner](docs/building.md#switching-to-the-self-hosted-runner).
 - Run package workflows manually only when authorized for that operation;
   report the workflow URL and its actual outcome. See
   [Building and releasing](docs/building.md).

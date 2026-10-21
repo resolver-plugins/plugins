@@ -32,7 +32,7 @@ Shared references: design, "Frozen, never written by the new CI" and
 | 09.3 | PR 2: the new CI and everything else | sonnet | medium | after 09.2, on request | done |
 | 09.4 | Branch rules | sonnet | medium | after 09.3, on request | done |
 | 09.5 | First production runs | sonnet | medium | after 09.4, on request | done |
-| 09.6 | Legacy Release cleanup | sonnet | medium | after 09.5, on request | planned |
+| 09.6 | Legacy Release cleanup | sonnet | medium | after 09.5, on request | done |
 
 ## 09.1 Reconcile release branches
 
@@ -266,3 +266,10 @@ Out of scope:    Frozen material.
   `workflow_dispatch`, `pull_request_target` and `workflow_call` for the four CI
   workflows, keeping the PR status and promotion jobs, which never check out PR
   code (user decision, 2026-10-20).
+- 09.6 deleted the old pipeline's superseded versioned Releases and their tags in
+  `resolver-plugins/repository`, and their source Releases in
+  `resolver-plugins/plugins` with the tags kept. Each target keeps its current
+  and one rollback; BIND 26.7 keeps the `26.7_9` source Release as its rollback
+  source because `26.7_10` has none (user decision, 2026-10-21).
+- The self-hosted runner support (#132, #134) is reverted on `master`; the branch
+  `ci/self-hosted-runners` keeps it for future use (user decision, 2026-10-21).
