@@ -1,3 +1,13 @@
+# Sunset
+
+Seems there was not a lot of interest. Even some pushback.
+
+Further, despite having used Opnsense for some years, I've moved on to VyOs.
+
+PR's are welcome, or it can be forked. Othewrwise, I will archive shortly.
+
+---
+
 # Resolver Plugins for OPNsense
 
 Community-maintained OPNsense plugins, based on the upstream OPNsense
